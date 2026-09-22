@@ -15,6 +15,7 @@ Eval: `scripts/eval_act1_runenv.py`.
 | `REST_SITE` | rest-site Choice | heal / smith / relic options; pending `choose`/`confirm_choice` → combat slots (same as EVENT) |
 | `CARD_REWARD` | `card_reward` Choice + `card_fit` Score | potion/relic screens do **not** call CARD Jev (`potion_or_relic_reward_random`) |
 | `EVENT` | **off** | legal random, `jev_event_off_random` |
+| `EVENT` (Neow) | **on** | `neow_boon` @ 0.65 even when `--jev-event off` |
 | `SHOP` | **never** | legal random |
 
 ## MAP `UNKNOWN` (no new phase)
@@ -60,7 +61,9 @@ false Leave-only screen.
 If the EVENT screen is Neow / boon (`event_id==Neow` or id/meta contains
 `boon`), the Choice name is `neow_boon` and the shadow phase may be `NEOW`.
 If Neow is **not** detected, skip `neow_boon` silently and use `event_choice`.
-`--jev-neow off` skips Jev on a detected Neow screen (legal random).
+`--jev-neow` default **on** (independent of `--jev-event`). Explicit
+`--jev-neow off` skips Jev on a detected Neow screen (legal random,
+`jev_neow_off_random`).
 
 **Measure `neow_boon` only with `--start-with-neow`.** Hang tables and this
 round's n=100 omit Neow (`STS2RunEnv.reset` default / eval CLI default off
@@ -98,7 +101,7 @@ python scripts/eval_act1_runenv.py --policy hierarchical --model HUNG.zip --jev 
 ```
 
 `--jev-phases map,rest,card,event` is equivalent to `--jev-event on`.
-`--jev-neow` defaults to follow `--jev-event`.
+`--jev-neow` defaults to **on** (Neow still Jev when `--jev-event off`).
 `--start-with-neow` is **off** unless measuring `neow_boon` (hang / n=100 stay without Neow).
 
 ## Contract
@@ -117,3 +120,13 @@ REST_SITE only:
   - `hp_pressure≤1` + SMITH + `conf≥0.40` → land, `reason=jev_smith_assist`
 - Smoke gate: REST `used≥30%` (denom = REST decisions; split `jev_suggest_live` / `jev_hp_pressure_assist` / `jev_smith_assist` / `low_confidence_random`).
 - If Act1 clear/median regresses vs hang 4%/8 after n=100 → disable assists; keep soft 0.50 or fall back to random.
+
+## Neow exception (`--jev-event off`, Surplus 2026-09-22)
+
+Ordinary EVENT with `--jev-event off` stays legal random (`jev_event_off_random`).
+Detected Neow (`event_id==Neow` / `_is_neow_screen`) still calls Jev: Choice
+`neow_boon`, global land **≥ 0.65**. REST soft 0.50 / heal/smith assists stay
+REST_SITE-only and **do not** apply to Neow.
+
+`--jev-neow` default **on**. Explicit `--jev-neow off` → `jev_neow_off_random`.
+Combat zip and MAP/CARD 0.65 are unchanged.

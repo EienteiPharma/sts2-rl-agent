@@ -3,7 +3,9 @@
 
 Modes: force_random | shadow_only | suggest_live
 Base Jev phases: MAP_CHOICE / REST_SITE / CARD_REWARD.
-EVENT (+ Neow) is gated by jev_event (CLI --jev-event, default off).
+Ordinary EVENT is gated by jev_event (CLI --jev-event, default off).
+Detected Neow still goes through Jev (neow_boon, Choice ≥ 0.65) when
+jev_event is off. REST 0.50 / heal/smith assists stay REST_SITE-only.
 Other noncombat = masked random. Fail-open to legal random on missing key /
 API / parse / timeout. Never prints or logs the API key.
 """
@@ -985,8 +987,15 @@ def decide_noncombat(
         defaults.update(kwargs)
         return DecisionRecord(**defaults)
 
-    # EVENT with switch off: masked random, do not call API.
-    if phase == "EVENT" and not jev_event:
+    # Detect Neow early: with --jev-event off, ordinary EVENT stays random,
+    # but Neow opening boon still goes through Jev (neow_boon @ global 0.65).
+    mgr = getattr(env, "_mgr", None)
+    acts_for_neow = mgr.get_available_actions() if mgr is not None else []
+    is_neow = phase == "EVENT" and _is_neow_screen(env, acts_for_neow)
+    log_phase = "NEOW" if is_neow else phase
+
+    # EVENT with switch off: masked random, do not call API — except Neow.
+    if phase == "EVENT" and not jev_event and not is_neow:
         action = _legal_random(mask, rng)
         rec = _base_rec(
             executed_action_index=action,
@@ -996,7 +1005,8 @@ def decide_noncombat(
         return action
 
     # Non-Jev phases: masked random (caller should not invoke for COMBAT).
-    if phase not in phases:
+    # Neow is EVENT-phase but eligible even when jev_event=False.
+    if phase not in phases and not is_neow:
         action = _legal_random(mask, rng)
         rec = _base_rec(executed_action_index=action, reason="non_jev_phase_random")
         append_shadow_log(shadow_log, rec)
@@ -1014,11 +1024,6 @@ def decide_noncombat(
             )
             append_shadow_log(shadow_log, rec)
             return action
-
-    mgr = getattr(env, "_mgr", None)
-    acts_for_neow = mgr.get_available_actions() if mgr is not None else []
-    is_neow = phase == "EVENT" and _is_neow_screen(env, acts_for_neow)
-    log_phase = "NEOW" if is_neow else phase
 
     options = [o for o in build_options(env, mask, phase) if o.visible]
     # Contract: event_choice / neow_boon only with ≥2 non-Leave options.

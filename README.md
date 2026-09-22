@@ -181,7 +181,7 @@ python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2
 # EVENT stays off (default) so MAP/REST/CARD tables stay comparable.
 python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on
 
-# Optional EVENT (+ Neow) Choice; shop still random. See docs/JEV_NONCOMBAT_WIRE.md
+# Optional ordinary EVENT Choice; Neow still Jev when --jev-event off. Shop random.
 python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on --jev-event on
 ```
 

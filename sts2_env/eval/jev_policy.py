@@ -90,7 +90,11 @@ PENDING_CHOICE_ACTIONS = frozenset({"choose", "confirm_choice"})
 
 @dataclass(frozen=True)
 class JevPolicyFlags:
-    """Which non-combat phases call Jev. Default preserves MAP/REST/CARD tables."""
+    """Which non-combat phases call Jev. Default preserves MAP/REST/CARD tables.
+
+    EVENT is off unless ``event`` / ``--jev-event on``. Neow is on unless
+    ``neow`` is False / ``--jev-neow off`` (independent of EVENT).
+    """
 
     phases: frozenset[str] = DEFAULT_JEV_PHASES
     event: bool = False
@@ -106,8 +110,9 @@ class JevPolicyFlags:
         return "event" in self.resolved_phases()
 
     def allows_neow(self) -> bool:
+        # Surplus exception: Neow stays eligible when --jev-event is off.
         if self.neow is None:
-            return self.allows_event()
+            return True
         return bool(self.neow)
 
 
@@ -871,7 +876,8 @@ def choose_jev_noncombat(
 
     Errors are logged on the returned shadow fields (status=error) and the
     action falls back to legal random. The decision point is never skipped.
-    Default flags keep EVENT off so MAP/REST/CARD tables stay comparable.
+    Default flags keep ordinary EVENT off so MAP/REST/CARD tables stay
+    comparable. Detected Neow still calls ``neow_boon`` (Choice ≥ 0.65).
     """
     flags = flags or DEFAULT_JEV_FLAGS
     mgr = _mgr(env)
@@ -926,10 +932,10 @@ def choose_jev_noncombat(
     skip_reason: str | None = None
     if decision == DECISION_SHOP or mgr.phase == RunManager.PHASE_SHOP:
         skip_reason = SHOP_RANDOM_REASON
-    elif phase_token == "event" and not flags.allows_event():
-        skip_reason = JEV_EVENT_OFF_REASON
     elif is_neow and not flags.allows_neow():
         skip_reason = JEV_NEOW_OFF_REASON
+    elif phase_token == "event" and not is_neow and not flags.allows_event():
+        skip_reason = JEV_EVENT_OFF_REASON
     elif phase_token == "event" and _non_leave_count(cands) < 2:
         skip_reason = NEOW_OPTIONS_EMPTY_REASON if is_neow else EVENT_OPTIONS_EMPTY_REASON
         logger.warning(
@@ -938,7 +944,7 @@ def choose_jev_noncombat(
             _non_leave_count(cands),
             [c.key for c in cands],
         )
-    elif phase_token is None or phase_token not in allowed:
+    elif (not is_neow) and (phase_token is None or phase_token not in allowed):
         skip_reason = NON_JEV_PHASE_REASON
 
     if skip_reason is not None:

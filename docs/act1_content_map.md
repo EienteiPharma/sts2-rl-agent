@@ -64,8 +64,9 @@ Typical options: `HEAL` (rest), `SMITH` (upgrade). Extra options (dig /
 lift / …) only if the corresponding relic enabled them.
 
 ## Events (`event_choice`, optional `--jev-event on`)
-Default eval keeps EVENT **off** (legal random, `jev_event_off_random`) so
-MAP/REST/CARD tables stay comparable. When on: Choice name `event_choice`;
+Default eval keeps ordinary EVENT **off** (legal random, `jev_event_off_random`) so
+MAP/REST/CARD tables stay comparable. Detected Neow still uses `neow_boon`.
+When EVENT is on: Choice name `event_choice`;
 `event_choice` index i → `_EVENT_START+i`; pending `confirm_choice` →
 `_COMBAT_START`; pending `choose` i → `_COMBAT_START+1+i`. Criteria follow
 option label/description (HP, gold, cards, relics). Events marked **待核**:
@@ -75,9 +76,10 @@ option label/description (HP, gold, cards, relics). Events marked **待核**:
 event model is still live and options are empty.
 
 Neow/boon screens (`event_id=Neow` or id/meta contains boon) use Choice
-`neow_boon` (opening tolerance, not a mid-act fixture). If Neow is not
-detected, skip `neow_boon` silently. `--jev-neow off` skips Jev on a
-detected Neow screen.
+`neow_boon` (opening tolerance, not a mid-act fixture) even when
+`--jev-event off`. If Neow is not detected, skip `neow_boon` silently.
+`--jev-neow` default on; `--jev-neow off` skips Jev on a detected Neow
+screen. REST 0.50 / heal/smith assists do not apply to Neow.
 
 Shop stays legal random.
 

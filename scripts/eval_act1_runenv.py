@@ -166,8 +166,9 @@ def choose_hierarchical_action(
     Combat: encode *combat* obs (never ``obs`` / RunEnv) and predict, then map
     the combat action index into the RunEnv combat slice.
     Non-combat: legal random when ``jev_enabled`` is false; Jev Choice/Score
-    when true (errors fall back to legal random). EVENT is off unless
-    ``jev_flags.allows_event()``.
+    when true (errors fall back to legal random). Ordinary EVENT is off unless
+    ``jev_flags.allows_event()``. Detected Neow still uses Jev unless
+    ``jev_flags.allows_neow()`` is false.
     """
     mgr = _run_manager(env)
     phase = mgr.phase
@@ -367,7 +368,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--jev-neow",
         choices=["on", "off"],
         default=None,
-        help="Neow/boon Choice neow_boon (default: follow --jev-event)",
+        help="Neow/boon Choice neow_boon (default on, independent of --jev-event)",
     )
     ap.add_argument(
         "--start-with-neow",
@@ -466,7 +467,7 @@ def build_report(
         "jev": jev,
         "jev_event": jev_event,
         "jev_phases": jev_phases,
-        "jev_neow": jev_neow if jev_neow is not None else ("on" if jev_event == "on" else "off"),
+        "jev_neow": jev_neow if jev_neow is not None else "on",
         "start_with_neow": bool(start_with_neow),
         "character": "Ironclad",
         "ascension": 0,

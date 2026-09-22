@@ -50,12 +50,12 @@ pending choose index i     →  _COMBAT_START + 1 + i
 - 不可见 / `enabled=False`：不建 option
 - Choice 名：`event_choice`（非 Neow）
 - state 带 `content_map`、血/金/牌库；criteria 按选项字面效果。标「待核」的事件 **只写字面风险，勿写死规则**。
-- `--jev-event off`：EVENT 合法随机，reason `jev_event_off_random`
+- `--jev-event off`：普通 EVENT 合法随机，reason `jev_event_off_random`；检出的 Neow 仍走 `neow_boon`（≥0.65）
 - 药水/遗物奖励屏仍走 CARD 既有规则，**不**进 `event_choice`
 
 ## C) Neow → `neow_boon`
 
-检出 Neow/boon 屏（`event_id==Neow` 或 meta/id 含 boon）时 Choice 名为 `neow_boon`。未检出则静默跳过该 Choice 名。`--jev-neow off` 时对 Neow 屏静默跳过 Jev（合法随机）。shadow 可选 `phase=NEOW`。
+检出 Neow/boon 屏（`event_id==Neow` 或 meta/id 含 boon）时 Choice 名为 `neow_boon`。未检出则静默跳过该 Choice 名。`--jev-neow` 默认 **on**（不跟 `--jev-event`）。`--jev-neow off` 时对 Neow 屏静默跳过 Jev（合法随机，`jev_neow_off_random`）。REST 0.50 / heal/smith assist **不**套到 Neow。shadow 可选 `phase=NEOW`。
 
 **测 `neow_boon` 必须 `--start-with-neow`（默认关；hang / 本轮 n=100 不加）。** Gym：`reset(..., options={"start_with_neow": True})` → `RunManager(..., start_with_neow=True)`。`RunEnv` 与 `_enter_neow` 在 `get_event("Neow")` **之前** `import sts2_env.events`。`docs/CARDS_REFERENCE.md` 从 package root 解析（不靠 cwd）。
 
@@ -73,9 +73,9 @@ SHOP **仍合法随机**，本刀不扩。
 
 ```
 --jev-phases map,rest,card          # 现默认等价
---jev-phases map,rest,card,event    # 打开 EVENT（含 Neow，受 --jev-neow）
+--jev-phases map,rest,card,event    # 打开普通 EVENT（Neow 默认已开）
 --jev-event on|off   (default off)
---jev-neow on|off    (default: follow --jev-event)
+--jev-neow on|off    (default on, independent of --jev-event)
 --start-with-neow    (default off; hang / n=100 表不含 Neow)
 ```
 
@@ -86,7 +86,7 @@ SHOP **仍合法随机**，本刀不扩。
 既有字段外：
 
 - `phase=EVENT`（Neow 步可 `NEOW`）
-- `reason` 例：`jev_suggest_live` | `low_confidence_random` | `no_jev_options_random` | `unknown_deferred` | `jev_event_off_random` | `neow_options_empty` | `event_options_empty`
+- `reason` 例：`jev_suggest_live` | `low_confidence_random` | `no_jev_options_random` | `unknown_deferred` | `jev_event_off_random` | `jev_neow_off_random` | `neow_options_empty` | `event_options_empty`
 - `legal_ids` / `executed_id` / `jev_choice_id` / `jev_confidence`
 - meta：`event_id`, `is_neow`
 

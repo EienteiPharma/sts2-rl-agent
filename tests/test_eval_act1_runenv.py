@@ -268,6 +268,7 @@ def test_cli_jev_default_off_and_strategic_alias():
     assert off.jev_phases == "map,rest,card"
     assert off.jev_neow is None
     assert off.jev_flags.allows_event() is False
+    assert off.jev_flags.allows_neow() is True
     on = eval_mod.parse_args(
         ["--policy", "hierarchical", "--combat-model", "c.zip", "--jev", "on"]
     )
@@ -275,6 +276,7 @@ def test_cli_jev_default_off_and_strategic_alias():
     assert on.jev == "on"
     assert on.jev_event == "off"
     assert on.jev_flags.allows_event() is False
+    assert on.jev_flags.allows_neow() is True
     alias = eval_mod.parse_args(
         ["--policy", "hierarchical", "--combat-model", "c.zip", "--strategic", "jev"]
     )
@@ -394,6 +396,7 @@ def test_write_report_jev_on_fields(tmp_path):
         jev="on",
     )
     assert report["jev"] == "on"
+    assert report["jev_neow"] == "on"
     assert report["jev_shadow"]["mode"] == "on"
     out = tmp_path / "act1_runenv.json"
     summary_path = eval_mod.write_report(report, out)
