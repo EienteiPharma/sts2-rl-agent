@@ -4,6 +4,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 from sts2_env.core.constants import IRONCLAD_STARTING_HP
 from sts2_env.core.enums import CardId
 from sts2_env.gym_env.combat_env import STS2CombatEnv
@@ -117,6 +119,42 @@ def test_loadout_v1_materializes():
     assert env.combat is not None
     assert env.combat.player.current_hp > 0
     env.close()
+
+
+def test_materialize_hold_fixtures_and_id_key_upgraded():
+    from sts2_env.core.enums import CardId
+
+    root = Path(__file__).resolve().parents[1] / "scripts" / "fixtures" / "loadout_v1"
+    for stem in ("loadout_v1_01", "loadout_v1_02", "loadout_v1_03"):
+        fx = train_mod.load_json_fixtures([root / f"{stem}.json"])[0]
+        spec = train_mod.materialize_fixture(fx, suite="loadout_v1")
+        assert spec["suite"] == "loadout_v1"
+        assert spec["deck"]
+        assert spec["hp"] > 0
+        assert all(c.card_id in CardId for c in spec["deck"])
+    spec = train_mod.materialize_fixture(
+        {
+            "hp": 50,
+            "max_hp": 80,
+            "deck": [
+                {"id": "BASH", "upgraded": True},
+                {"card_id": "STRIKE_IRONCLAD", "upgraded": False},
+                "DEFEND_IRONCLAD",
+            ],
+        },
+        suite="loadout_v1",
+    )
+    assert spec["deck"][0].card_id == CardId.BASH
+    assert spec["deck"][0].upgraded is True
+    assert spec["deck"][1].card_id == CardId.STRIKE_IRONCLAD
+    assert spec["deck"][1].upgraded is False
+    assert spec["deck"][2].card_id == CardId.DEFEND_IRONCLAD
+    with pytest.raises(SystemExit, match="null entry"):
+        train_mod.materialize_fixture({"hp": 50, "max_hp": 80, "deck": [None]})
+    with pytest.raises(SystemExit, match="unknown card_id"):
+        train_mod.materialize_fixture(
+            {"hp": 50, "max_hp": 80, "deck": [{"upgraded": True}]}
+        )
 
 
 def test_jev_noncombat_script_surface():

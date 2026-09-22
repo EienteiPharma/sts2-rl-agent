@@ -138,8 +138,17 @@ def materialize_fixture(fixture: dict[str, Any], *, suite: str | None = None) ->
         hp = stored_hp
     deck = []
     for entry in fixture.get("deck") or []:
-        raw = entry.get("card_id") if isinstance(entry, dict) else entry
-        upgraded = bool(entry.get("upgraded")) if isinstance(entry, dict) else False
+        if entry is None:
+            raise SystemExit("fixture deck contains null entry")
+        if isinstance(entry, dict):
+            # loadout_v1 JSON uses {"id": CARD, "upgraded": bool}; also accept card_id
+            raw = entry.get("card_id", entry.get("id"))
+            upgraded = bool(entry.get("upgraded"))
+        else:
+            raw = entry
+            upgraded = False
+        if raw is None:
+            raise SystemExit(f"unknown card_id in fixture: {raw!r}")
         name = str(raw)
         if name not in CardId.__members__:
             raise SystemExit(f"unknown card_id in fixture: {name}")
