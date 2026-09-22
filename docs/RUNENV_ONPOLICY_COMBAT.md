@@ -1,5 +1,7 @@
 # RunEnv on-policy combat micro
 
+**Frozen recipe:** `combat_runenv_onpolicy_v1` (500k **pure** hang-protocol RunEnv from `bh_v1`) hit Act1 **4%/med7** but loadout_v1 HOLD **FAIL**. Do not rerun that pure 500k. Hang zip stays `bh_v1`. Next knife: `docs/RUNENV_ONPOLICY_ANTIFORGET.md`.
+
 Fine-tune the hung combat zip on **hang-protocol `STS2RunEnv` rollouts**, learning **combat-phase transitions only**.
 
 This is **not** another loadout-fixture train (`train_combat.py` / `loadout_v*` / `mix_neow_v1`). Those already HOLD the combat suite and did **not** move Act1 RunEnv clear. This is **not** `train_full_run.py` (full RunEnv action space / RunEnv obs).
@@ -79,3 +81,5 @@ python scripts/train_combat_runenv_onpolicy.py \
 ```
 
 Bump `--n-envs` only if the box wants more CPU. Write a **new** outdir. After train, eval with the locked hang command on that zip; 评测哨兵 owns the ≥5% gate. Do not edit hang bars or swap `bh_v1` in eval docs from this trainer.
+
+The 500k command above is the **frozen** pure recipe (`combat_runenv_onpolicy_v1`). Surplus should not launch it again; use the anti-forgetting mix instead.
