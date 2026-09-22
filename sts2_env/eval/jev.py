@@ -14,6 +14,8 @@ Lab-hung thresholds (do not retune in this eval):
   non-Unknown legal node exists and Choice picked Unknown with
   confidence < 0.80 → defer (legal random among non-Unknown,
   reason ``unknown_deferred``). 0.80 is defer-only; land threshold stays 0.65
+* EVENT / Neow Choice only when ≥2 non-Leave options; else
+  ``event_options_empty`` / ``neow_options_empty`` (not land-rate)
 * EVENT Choice is behind ``--jev-event on`` (default off). Pending
   ``choose`` / ``confirm_choice`` map to combat slots, not fail-open random
 * Neow/boon screens use Choice ``neow_boon``; otherwise skip that name
@@ -52,6 +54,7 @@ UNKNOWN_DEFERRED_REASON = "unknown_deferred"
 JEV_EVENT_OFF_REASON = "jev_event_off_random"
 JEV_NEOW_OFF_REASON = "jev_neow_off_random"
 NEOW_OPTIONS_EMPTY_REASON = "neow_options_empty"
+EVENT_OPTIONS_EMPTY_REASON = "event_options_empty"
 SHOP_RANDOM_REASON = "shop_random"
 NON_JEV_PHASE_REASON = "non_jev_phase_random"
 

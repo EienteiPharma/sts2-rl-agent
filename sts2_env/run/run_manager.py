@@ -1178,7 +1178,11 @@ class RunManager:
                 })
             return actions
         if not self._event_options:
-            return [{"action": "event_choice", "option_id": "leave", "label": "Leave"}]
+            if self._event_model is None:
+                return [{"action": "event_choice", "option_id": "leave", "label": "Leave"}]
+            # Reward / pending gap: model still lives, options not restored yet.
+            # Do not invent Leave (that would exit the event).
+            return []
         return [
             {
                 "action": "event_choice",

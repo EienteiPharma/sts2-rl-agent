@@ -5,6 +5,8 @@ correctness per phase, multi-episode stress testing, and
 observation invariants.
 """
 
+from types import SimpleNamespace
+
 import pytest
 import numpy as np
 
@@ -775,3 +777,24 @@ class TestMultiCharacter:
         env = STS2RunEnv(character_id=char_id, ascension_level=0, max_steps=DEFAULT_MAX_STEPS)
         done, steps, reward, info = _run_random_episode(env, seed=42)
         assert done, f"{char_id} episode did not complete"
+
+
+class TestActionsEventEmptyOptions:
+    def test_leave_only_when_event_model_is_none(self):
+        mgr = RunManager(seed=1)
+        mgr._phase = RunManager.PHASE_EVENT
+        mgr._event_model = None
+        mgr._event_options = []
+        actions = mgr._actions_event()
+        assert actions == [
+            {"action": "event_choice", "option_id": "leave", "label": "Leave"}
+        ]
+        assert mgr.get_available_actions() == actions
+
+    def test_no_invented_leave_when_model_set_and_options_empty(self):
+        mgr = RunManager(seed=1)
+        mgr._phase = RunManager.PHASE_EVENT
+        mgr._event_model = SimpleNamespace(pending_choice=None)
+        mgr._event_options = []
+        assert mgr._actions_event() == []
+        assert mgr.get_available_actions() == []

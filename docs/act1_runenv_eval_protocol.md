@@ -58,7 +58,7 @@ python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2
 - `--combat-model`：hierarchical `--model` 的别名（同一 combat zip）。
 - `--jev off|on`（默认 `off`；`--strategic jev` 等同 `--jev on`）。仅 hierarchical。首表用 `--jev off`（非战斗合法随机，Jev 仅影子、不改动作）。
 - `--jev-event off|on`（默认 **`off`**）。仅 hierarchical + `--jev on`。默认 EVENT 合法随机（`jev_event_off_random`），**不改**既有 MAP/REST/CARD 表。`--jev-phases map,rest,card,event` 等价于 `--jev-event on`。`--jev-neow` 默认跟随 `--jev-event`。契约：`docs/JEV_EVENT_NEOW_CONTRACT.md`。
-- `--start-with-neow`（默认 **关**）。开局 Neow 屏才能测 `neow_boon`。hang / 本轮 n=100 **不加**。Gym：`reset(..., options={"start_with_neow": True})`。`get_event("Neow")` 前注册 events；`CARDS_REFERENCE.md` 走 package root。非 Leave 选项 < 2 时不调 Jev（`neow_options_empty`）。
+- `--start-with-neow`（默认 **关**）。开局 Neow 屏才能测 `neow_boon`。hang / 本轮 n=100 **不加**。Gym：`reset(..., options={"start_with_neow": True})`。`get_event("Neow")` 前注册 events；`CARDS_REFERENCE.md` 走 package root。EVENT / Neow 合法非 Leave **< 2** 时不调 Jev（`event_options_empty` / `neow_options_empty`，不算落地率）。`_actions_event` 仅在 `event_model is None` 时给 Leave；model 仍在、options 空（reward/pending 间隙）**不得**伪造 Leave。n=100 Leave-only 是 import 修前的表。REST 落地 0% / 空 `legal_ids` 是另一刀，EVENT 冒烟后再查。
 - 战斗步：从 `RunManager.get_combat_state()` 取 `CombatState`，`encode_observation(combat)` + combat `get_action_mask`，`MaskablePPO.predict`，再把 combat action index 映射到 RunEnv combat slice（layout offset 0）。**Jev 不进战斗。**
 - 非战斗步：
   - `--jev off`：`action_masks()==1` 合法随机；日志 `shadow_status=stub`。

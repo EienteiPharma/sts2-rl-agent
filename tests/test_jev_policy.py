@@ -15,6 +15,7 @@ from sts2_env.eval.jev import (
     CHOICE_NEOW_BOON,
     CONTENT_MAP_REF,
     DEFAULT_JEV_PHASES,
+    EVENT_OPTIONS_EMPTY_REASON,
     JEV_EVENT_OFF_REASON,
     JEV_NEOW_OFF_REASON,
     NEOW_EARLY_CARD_INSTRUCTIONS,
@@ -456,6 +457,7 @@ def test_content_map_ref_is_the_stub_doc():
     assert "待核" in text
     assert "neow_boon" in text
     assert "event_choice" in text
+    assert "event_options_empty" in text
     assert CHOICE_CONFIDENCE_MIN == 0.65
     assert UNKNOWN_DEFER_CONF == 0.80
     assert "event" not in DEFAULT_JEV_PHASES
@@ -666,8 +668,8 @@ def test_jev_event_on_uses_event_choice_name():
         {
             "action": "event_choice",
             "option_id": "B",
-            "label": "Leave",
-            "description": "nothing",
+            "label": "Take relic",
+            "description": "a relic",
             "enabled": True,
         },
     ]
@@ -764,6 +766,7 @@ def test_neow_leave_only_does_not_call_jev():
     )
     assert adapter.calls == []
     assert log["shadow_fallback_reason"] == NEOW_OPTIONS_EMPTY_REASON
+    assert log["shadow_status"] == "skipped"
     assert log["is_neow"] is True
     assert mask[action] == 1
     assert CHOICE_CONFIDENCE_MIN == 0.65
@@ -792,7 +795,98 @@ def test_neow_one_boon_does_not_call_jev():
     )
     assert adapter.calls == []
     assert log["shadow_fallback_reason"] == NEOW_OPTIONS_EMPTY_REASON
+    assert log["shadow_status"] == "skipped"
     assert mask[action] == 1
+
+
+def test_neow_empty_options_does_not_call_jev():
+    env = _event_env([], event_id="Neow")
+    mask = _event_mask(1)
+    adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "leave", "confidence": 0.99}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+    )
+    assert adapter.calls == []
+    assert log["shadow_fallback_reason"] == NEOW_OPTIONS_EMPTY_REASON
+    assert log["shadow_status"] == "skipped"
+    assert log["is_neow"] is True
+    assert mask[action] == 1
+
+
+def _event_choice(option_id, label, description=""):
+    return {
+        "action": "event_choice",
+        "option_id": option_id,
+        "label": label,
+        "description": description,
+        "enabled": True,
+    }
+
+
+def test_event_leave_only_does_not_call_jev():
+    actions = [_event_choice("leave", "Leave", "Leave")]
+    env = _event_env(actions, event_id="BrainLeech")
+    mask = _event_mask(1)
+    adapter = ScriptedJev([{CHOICE_EVENT: {"choice": "leave", "confidence": 0.99}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+    )
+    assert adapter.calls == []
+    assert log["shadow_fallback_reason"] == EVENT_OPTIONS_EMPTY_REASON
+    assert log["shadow_status"] == "skipped"
+    assert log["is_neow"] is False
+    assert log["phase"] == "EVENT"
+    assert mask[action] == 1
+
+
+def test_event_one_non_leave_does_not_call_jev():
+    actions = [
+        _event_choice("leave", "Leave"),
+        _event_choice("GOLD", "Take gold", "+50 gold"),
+    ]
+    env = _event_env(actions)
+    mask = _event_mask(2)
+    adapter = ScriptedJev([{CHOICE_EVENT: {"choice": "GOLD", "confidence": 0.99}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+    )
+    assert adapter.calls == []
+    assert log["shadow_fallback_reason"] == EVENT_OPTIONS_EMPTY_REASON
+    assert log["shadow_status"] == "skipped"
+    assert mask[action] == 1
+
+
+def test_event_empty_options_does_not_call_jev():
+    env = _event_env([])
+    mask = _event_mask(1)
+    adapter = ScriptedJev([{CHOICE_EVENT: {"choice": "A", "confidence": 0.99}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+    )
+    assert adapter.calls == []
+    assert log["shadow_fallback_reason"] == EVENT_OPTIONS_EMPTY_REASON
+    assert log["shadow_status"] == "skipped"
+    assert log["shadow_decision"] == "event_choice"
+    assert mask[action] == 1
+
+
+def test_event_two_non_leave_still_calls_jev():
+    actions = [
+        _event_choice("GOLD", "Take gold", "+50"),
+        _event_choice("RELIC", "Take relic", "a relic"),
+        _event_choice("leave", "Leave", "nothing"),
+    ]
+    env = _event_env(actions, event_id="TeaMaster")
+    mask = _event_mask(3)
+    adapter = ScriptedJev([{CHOICE_EVENT: {"choice": "GOLD", "confidence": 0.9}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+    )
+    assert adapter.calls, "≥2 non-Leave EVENT options must call Choice"
+    assert CHOICE_EVENT in adapter.calls[0]["questions"]
+    assert action == _EVENT_START
+    assert log["jev_choice_id"] == CHOICE_EVENT
+    assert log["shadow_status"] == "ok"
 
 
 def test_shop_does_not_call_jev():

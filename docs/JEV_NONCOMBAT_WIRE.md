@@ -46,6 +46,15 @@ deck size, `event_id`. Criteria follow option label/description; events marked
 
 Pending choose/confirm on EVENT is **wired** (not fail-open random).
 
+Call Choice only when there are **≥ 2 non-Leave** legal options. Otherwise
+skip (status `skipped`, **not** land-rate): reason `event_options_empty`
+(non-Neow) or `neow_options_empty` (Neow). Same gate as Neow.
+
+`RunManager._actions_event` must **not** invent Leave when `_event_model` is
+set but `_event_options` is empty (reward / pending gap). Leave is only
+emitted when `event_model is None`. Invented Leave on that gap was a
+false Leave-only screen.
+
 ## Neow (`neow_boon`)
 
 If the EVENT screen is Neow / boon (`event_id==Neow` or id/meta contains
@@ -68,9 +77,19 @@ package/repo root (not process cwd), so Neow from `cwd=/tmp` still yields
 three `event_choice` boons.
 
 If the Neow screen has **fewer than 2 non-Leave** legal options (Leave-only
-stub), do **not** call Jev; reason `neow_options_empty`.
+stub), do **not** call Jev; reason `neow_options_empty` (not land-rate).
+
+n=100 Leave-only was **pre** `import sts2_env.events` / package-rooted
+`CARDS_REFERENCE`. Surplus re-smokes after that fix.
 
 Neow is an opening boon, not a mid-act fixture.
+
+## REST follow-up (after EVENT smoke)
+
+n=100 REST land **0%** with 35× `no_jev_options_random` and empty
+`legal_ids` is a **separate** bug (empty rest legal_ids; code today may
+log `no_legal_visible_candidates`). Investigate **after** EVENT smoke.
+Do not retune Choice 0.65 or the combat zip in this knife.
 
 ## CLI
 

@@ -69,7 +69,10 @@ MAP/REST/CARD tables stay comparable. When on: Choice name `event_choice`;
 `event_choice` index i → `_EVENT_START+i`; pending `confirm_choice` →
 `_COMBAT_START`; pending `choose` i → `_COMBAT_START+1+i`. Criteria follow
 option label/description (HP, gold, cards, relics). Events marked **待核**:
-**literal risks only** — do not invent hard rules.
+**literal risks only** — do not invent hard rules. Call Choice only with
+**≥ 2 non-Leave** options; else skip (not land-rate) with
+`event_options_empty` / `neow_options_empty`. Do not invent Leave when the
+event model is still live and options are empty.
 
 Neow/boon screens (`event_id=Neow` or id/meta contains boon) use Choice
 `neow_boon` (opening tolerance, not a mid-act fixture). If Neow is not

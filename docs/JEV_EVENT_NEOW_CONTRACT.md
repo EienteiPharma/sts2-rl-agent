@@ -61,6 +61,8 @@ pending choose index i     →  _COMBAT_START + 1 + i
 
 若 Neow 屏合法非 Leave 选项 **< 2**（Leave-only / 空祝福）：**不调 Jev**，reason `neow_options_empty`，合法随机。正常开局为 3 个 `event_choice` 祝福。
 
+EVENT 同样：合法非 Leave **< 2** 时不调 Choice，reason `event_options_empty`（不算落地率）。`_actions_event` **不得**在 `_event_model` 仍在、`_event_options` 空（reward/pending 间隙）时伪造 Leave；Leave 仅当 `event_model is None`。
+
 禁止把 Neow 当 mid fixture 选。开局容错（血/金/牌/遗物）。
 
 ## D) Shop
@@ -84,7 +86,7 @@ SHOP **仍合法随机**，本刀不扩。
 既有字段外：
 
 - `phase=EVENT`（Neow 步可 `NEOW`）
-- `reason` 例：`jev_suggest_live` | `low_confidence_random` | `no_jev_options_random` | `unknown_deferred` | `jev_event_off_random` | `neow_options_empty`
+- `reason` 例：`jev_suggest_live` | `low_confidence_random` | `no_jev_options_random` | `unknown_deferred` | `jev_event_off_random` | `neow_options_empty` | `event_options_empty`
 - `legal_ids` / `executed_id` / `jev_choice_id` / `jev_confidence`
 - meta：`event_id`, `is_neow`
 
@@ -92,7 +94,7 @@ SHOP **仍合法随机**，本刀不扩。
 
 ## Surplus 冒烟
 
-n=2 `suggest_live` + `--jev-event on`（不在本 PR 跑 live TypeSafe）。测 `neow_boon` 另加 `--start-with-neow`。**本轮 n=100 / hang 表不加 Neow。**
+n=2 `suggest_live` + `--jev-event on`（不在本 PR 跑 live TypeSafe）。测 `neow_boon` 另加 `--start-with-neow`。**本轮 n=100 / hang 表不加 Neow。** n=100 Leave-only 是 events import / package-rooted `CARDS_REFERENCE` **之前**的表；Surplus 再冒烟。REST 落地 0%（空 `legal_ids` / `no_jev_options_random`）另刀，EVENT 冒烟后再查。
 
 ## Done when
 

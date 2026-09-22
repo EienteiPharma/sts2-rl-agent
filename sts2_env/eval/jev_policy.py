@@ -16,6 +16,7 @@ from sts2_env.eval.jev import (
     CONTENT_MAP_REF,
     DEFAULT_JEV_PHASES,
     EVENT_CHOICE_INSTRUCTIONS,
+    EVENT_OPTIONS_EMPTY_REASON,
     HP_PRESSURE_REST,
     HP_PRESSURE_SCORE_CRITERIA,
     JEV_EVENT_OFF_REASON,
@@ -653,6 +654,17 @@ def _legal_random_from(cands: list[Candidate], rng: np.random.RandomState) -> in
     return pick.run_action
 
 
+def _fallback_legal_action(
+    cands: list[Candidate],
+    mask: np.ndarray,
+    rng: np.random.RandomState,
+) -> int:
+    if cands:
+        return _legal_random_from(cands, rng)
+    valid = np.flatnonzero(np.asarray(mask) == 1)
+    return int(rng.choice(valid)) if valid.size else 0
+
+
 def _hp_pressure_question() -> dict[str, Any]:
     return {
         "type": "score",
@@ -764,7 +776,10 @@ def choose_jev_noncombat(
 
     all_cands = collect_candidates(env, mask)
     cands = strip_illegal_invisible(all_cands)
-    if not cands:
+    event_phase = mgr.phase == RunManager.PHASE_EVENT
+    event_id = _event_id_from_mgr(mgr) if event_phase else ""
+    is_neow = event_phase and is_neow_or_boon_screen(event_id, actions)
+    if not cands and not event_phase:
         valid = np.flatnonzero(np.asarray(mask) == 1)
         action = int(rng.choice(valid)) if valid.size else 0
         logger.error("Jev status=error fallback=no_legal_visible_candidates; action=%s", action)
@@ -775,13 +790,10 @@ def choose_jev_noncombat(
         return action, log
 
     decision = classify_decision(mgr.phase, cands)
-    event_id = _event_id_from_mgr(mgr) if mgr.phase == RunManager.PHASE_EVENT else ""
-    is_neow = (
-        mgr.phase == RunManager.PHASE_EVENT
-        and is_neow_or_boon_screen(event_id, actions)
-    )
     if is_neow:
         decision = DECISION_NEOW
+    elif event_phase and not cands:
+        decision = DECISION_EVENT
     state = _run_state_blob(mgr)
     state["decision"] = decision
     state["event_id"] = event_id
@@ -806,10 +818,11 @@ def choose_jev_noncombat(
         skip_reason = JEV_EVENT_OFF_REASON
     elif is_neow and not flags.allows_neow():
         skip_reason = JEV_NEOW_OFF_REASON
-    elif is_neow and _non_leave_count(cands) < 2:
-        skip_reason = NEOW_OPTIONS_EMPTY_REASON
+    elif phase_token == "event" and _non_leave_count(cands) < 2:
+        skip_reason = NEOW_OPTIONS_EMPTY_REASON if is_neow else EVENT_OPTIONS_EMPTY_REASON
         logger.warning(
-            "Jev neow_options_empty non_leave=%s legal=%s; skipping Choice",
+            "Jev %s non_leave=%s legal=%s; skipping Choice (not land-rate)",
+            skip_reason,
             _non_leave_count(cands),
             [c.key for c in cands],
         )
@@ -817,7 +830,7 @@ def choose_jev_noncombat(
         skip_reason = NON_JEV_PHASE_REASON
 
     if skip_reason is not None:
-        action = _legal_random_from(cands, rng)
+        action = _fallback_legal_action(cands, mask, rng)
         log = JevAnswer(status="skipped", fallback_reason=skip_reason).as_log()
         log_phase = None
         if phase_token == "event":
