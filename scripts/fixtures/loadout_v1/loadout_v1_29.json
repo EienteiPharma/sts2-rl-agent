@@ -1,0 +1,82 @@
+{
+  "locked": true,
+  "id": 29,
+  "label": "loadout_v1 mid-act combat deck (not Neow+early)",
+  "source": "loadout_v1 combat suite",
+  "max_hp": 80,
+  "snapshot_hp": 68,
+  "hp": 68,
+  "hp_synth": false,
+  "deck": [
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "BASH",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "HEMOKINESIS",
+      "upgraded": false,
+      "rarity": "UNCOMMON"
+    },
+    {
+      "card_id": "BLOODLETTING",
+      "upgraded": false,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "BODY_SLAM",
+      "upgraded": false,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "ARMAMENTS",
+      "upgraded": true,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "GRAPPLE",
+      "upgraded": false,
+      "rarity": "UNCOMMON"
+    },
+    {
+      "card_id": "POMMEL_STRIKE",
+      "upgraded": false,
+      "rarity": "COMMON"
+    }
+  ]
+}

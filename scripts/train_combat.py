@@ -4,13 +4,21 @@ Usage:
     pip install "sts2-rl-agent[train]"
     python scripts/train_combat.py
     python scripts/train_combat.py --loadout neow_early
+    python scripts/train_combat.py --loadout mix_neow_v1
 
 Requires: stable-baselines3, sb3-contrib, torch
 
-``--loadout neow_early`` rotates LOCKED JSON fixtures under
-``scripts/fixtures/neow_early/`` sampled from RunEnv death snapshots
-(Neow+early natural Act1 decks, NOT bare starter). This script does not
-start a training run unless invoked as main.
+Loadouts (``LOADOUT_SUITES``):
+
+* ``bare`` — Ironclad starter
+* ``neow_early`` — glob ``scripts/fixtures/neow_early/neow_early_*.json``
+* ``loadout_v1`` — glob ``scripts/fixtures/loadout_v1/loadout_v1_*.json``
+* ``mix_neow_v1`` — 50% neow_early + 50% loadout_v1 interleaved each reset
+
+Aliases of mix_neow_v1: ``mix`` | ``mix_neow`` | ``mid_early`` | ``early_mid``.
+
+This script does not start a training run unless invoked as main.
+Do not change the hung combat eval zip from here.
 """
 
 from __future__ import annotations
@@ -24,9 +32,32 @@ from typing import Any, Callable
 
 import numpy as np
 
-NEOW_EARLY_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "neow_early"
+SCRIPTS_DIR = Path(__file__).resolve().parent
+NEOW_EARLY_FIXTURE_DIR = SCRIPTS_DIR / "fixtures" / "neow_early"
+LOADOUT_V1_FIXTURE_DIR = SCRIPTS_DIR / "fixtures" / "loadout_v1"
 NEOW_EARLY_LABEL_NEEDLE = "Neow+early"
 SYNTH_ENTRY_HP_RATIO = 0.55
+
+LOADOUT_SUITES: dict[str, dict[str, Any]] = {
+    "bare": {},
+    "neow_early": {"glob": "fixtures/neow_early/neow_early_*.json"},
+    "loadout_v1": {"glob": "fixtures/loadout_v1/loadout_v1_*.json"},
+    "mix_neow_v1": {"mix": ("neow_early", "loadout_v1")},
+}
+
+LOADOUT_ALIASES: dict[str, str] = {
+    "mix": "mix_neow_v1",
+    "mix_neow": "mix_neow_v1",
+    "mid_early": "mix_neow_v1",
+    "early_mid": "mix_neow_v1",
+}
+
+
+def resolve_loadout(name: str) -> str:
+    resolved = LOADOUT_ALIASES.get(name, name)
+    if resolved not in LOADOUT_SUITES:
+        raise SystemExit(f"unknown loadout: {name}")
+    return resolved
 
 
 def synth_entry_hp(snapshot_hp: int, max_hp: int) -> tuple[int, bool]:
@@ -37,18 +68,52 @@ def synth_entry_hp(snapshot_hp: int, max_hp: int) -> tuple[int, bool]:
     return int(snapshot_hp), False
 
 
-def load_neow_early_fixtures(fixture_dir: Path | None = None) -> list[dict[str, Any]]:
-    root = Path(fixture_dir) if fixture_dir is not None else NEOW_EARLY_FIXTURE_DIR
-    paths = sorted(root.glob("*.json"))
+def fixture_glob_paths(suite: str, *, neow_early_dir: Path | None = None) -> list[Path]:
+    spec = LOADOUT_SUITES[suite]
+    pattern = spec.get("glob")
+    if not pattern:
+        return []
+    if suite == "neow_early":
+        root = Path(neow_early_dir) if neow_early_dir is not None else NEOW_EARLY_FIXTURE_DIR
+        return sorted(root.glob("neow_early_*.json"))
+    return sorted((SCRIPTS_DIR / pattern).parent.glob(Path(pattern).name))
+
+
+def load_json_fixtures(paths: list[Path]) -> list[dict[str, Any]]:
     fixtures: list[dict[str, Any]] = []
     for path in paths:
         data = json.loads(path.read_text())
         if not isinstance(data, dict):
-            raise SystemExit(f"neow_early fixture is not an object: {path}")
+            raise SystemExit(f"fixture is not an object: {path}")
         fixtures.append(data)
-    if not fixtures:
-        raise SystemExit(f"no neow_early fixtures under {root}")
     return fixtures
+
+
+def load_neow_early_fixtures(fixture_dir: Path | None = None) -> list[dict[str, Any]]:
+    root = Path(fixture_dir) if fixture_dir is not None else NEOW_EARLY_FIXTURE_DIR
+    paths = sorted(root.glob("neow_early_*.json"))
+    fixtures = load_json_fixtures(paths)
+    if not fixtures:
+        raise SystemExit(f"no neow_early fixtures matching {root / 'neow_early_*.json'}")
+    return fixtures
+
+
+def load_loadout_v1_fixtures() -> list[dict[str, Any]]:
+    paths = fixture_glob_paths("loadout_v1")
+    fixtures = load_json_fixtures(paths)
+    if not fixtures:
+        raise SystemExit(f"no loadout_v1 fixtures matching {LOADOUT_V1_FIXTURE_DIR / 'loadout_v1_*.json'}")
+    return fixtures
+
+
+def load_suite_fixtures(suite: str, *, neow_early_dir: Path | None = None) -> list[dict[str, Any]]:
+    if suite == "neow_early":
+        fixtures = load_neow_early_fixtures(neow_early_dir)
+        assert_neow_early_labels(fixtures)
+        return fixtures
+    if suite == "loadout_v1":
+        return load_loadout_v1_fixtures()
+    raise SystemExit(f"suite {suite!r} has no fixture glob")
 
 
 def assert_neow_early_labels(fixtures: list[dict[str, Any]]) -> None:
@@ -58,11 +123,9 @@ def assert_neow_early_labels(fixtures: list[dict[str, Any]]) -> None:
             raise SystemExit(
                 f"neow_early fixture {i} label must say Neow+early, not bare: {label!r}"
             )
-        if "bare" in label.lower() and NEOW_EARLY_LABEL_NEEDLE not in label:
-            raise SystemExit(f"neow_early fixture {i} labelled bare: {label!r}")
 
 
-def materialize_neow_early_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
+def materialize_fixture(fixture: dict[str, Any], *, suite: str | None = None) -> dict[str, Any]:
     from sts2_env.cards.factory import create_card
     from sts2_env.core.enums import CardId
 
@@ -79,16 +142,21 @@ def materialize_neow_early_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         upgraded = bool(entry.get("upgraded")) if isinstance(entry, dict) else False
         name = str(raw)
         if name not in CardId.__members__:
-            raise SystemExit(f"unknown card_id in neow_early fixture: {name}")
+            raise SystemExit(f"unknown card_id in fixture: {name}")
         deck.append(create_card(CardId[name], upgraded=upgraded))
     if not deck:
-        raise SystemExit("neow_early fixture has empty deck")
+        raise SystemExit("fixture has empty deck")
     return {
         "deck": deck,
         "hp": hp,
         "max_hp": max_hp,
         "label": fixture.get("label"),
+        "suite": suite or fixture.get("suite"),
     }
+
+
+def materialize_neow_early_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
+    return materialize_fixture(fixture, suite="neow_early")
 
 
 class RotatingNeowEarlyProvider:
@@ -102,7 +170,45 @@ class RotatingNeowEarlyProvider:
     def __call__(self) -> dict[str, Any]:
         fx = self.fixtures[(self.offset + self.i) % len(self.fixtures)]
         self.i += 1
-        return materialize_neow_early_fixture(fx)
+        return materialize_fixture(fx, suite="neow_early")
+
+
+class RotatingSuiteProvider:
+    """Rotate one fixture suite on each combat reset."""
+
+    def __init__(self, fixtures: list[dict[str, Any]], suite: str, offset: int = 0):
+        self.fixtures = fixtures
+        self.suite = suite
+        self.offset = int(offset)
+        self.i = 0
+
+    def __call__(self) -> dict[str, Any]:
+        fx = self.fixtures[(self.offset + self.i) % len(self.fixtures)]
+        self.i += 1
+        return materialize_fixture(fx, suite=self.suite)
+
+
+class InterleavedMixProvider:
+    """50/50 interleave of named suites each reset (even/odd)."""
+
+    def __init__(
+        self,
+        named_suites: list[tuple[str, list[dict[str, Any]]]],
+        offset: int = 0,
+    ):
+        if len(named_suites) < 2:
+            raise SystemExit("mix loadout needs at least two suites")
+        self.named_suites = named_suites
+        self.offset = int(offset)
+        self.i = 0
+
+    def __call__(self) -> dict[str, Any]:
+        n = len(self.named_suites)
+        suite_i = (self.offset + self.i) % n
+        name, fixtures = self.named_suites[suite_i]
+        fx = fixtures[((self.offset + self.i) // n) % len(fixtures)]
+        self.i += 1
+        return materialize_fixture(fx, suite=name)
 
 
 def make_loadout_provider(
@@ -111,13 +217,21 @@ def make_loadout_provider(
     offset: int = 0,
     fixture_dir: Path | None = None,
 ) -> Callable[[], dict[str, Any]] | None:
-    if loadout == "bare":
+    loadout = resolve_loadout(loadout)
+    spec = LOADOUT_SUITES[loadout]
+    if loadout == "bare" or not spec:
         return None
+    mix = spec.get("mix")
+    if mix:
+        named = []
+        for name in mix:
+            named.append((name, load_suite_fixtures(name, neow_early_dir=fixture_dir)))
+        return InterleavedMixProvider(named, offset=offset)
     if loadout == "neow_early":
-        fixtures = load_neow_early_fixtures(fixture_dir)
-        assert_neow_early_labels(fixtures)
+        fixtures = load_suite_fixtures("neow_early", neow_early_dir=fixture_dir)
         return RotatingNeowEarlyProvider(fixtures, offset=offset)
-    raise SystemExit(f"unknown loadout: {loadout}")
+    fixtures = load_suite_fixtures(loadout, neow_early_dir=fixture_dir)
+    return RotatingSuiteProvider(fixtures, suite=loadout, offset=offset)
 
 
 def make_env(seed: int = 0, loadout: str = "bare"):
@@ -145,19 +259,37 @@ def train(args):
 
     from sts2_env.gym_env.combat_env import STS2CombatEnv
 
-    loadout = getattr(args, "loadout", "bare")
+    loadout = resolve_loadout(getattr(args, "loadout", "bare"))
+    args.loadout = loadout
     fixture_dir = Path(getattr(args, "loadout_dir", NEOW_EARLY_FIXTURE_DIR))
     n_fixtures = 0
+    mix_note = ""
+    spec = LOADOUT_SUITES[loadout]
     if loadout == "neow_early":
         fixtures = load_neow_early_fixtures(fixture_dir)
         assert_neow_early_labels(fixtures)
         n_fixtures = len(fixtures)
+    elif loadout == "loadout_v1":
+        n_fixtures = len(load_loadout_v1_fixtures())
+    elif spec.get("mix"):
+        parts = []
+        for name in spec["mix"]:
+            n = len(load_suite_fixtures(name, neow_early_dir=fixture_dir))
+            parts.append(f"{name}={n}")
+        mix_note = "50/50 interleave " + " + ".join(parts)
 
     print(f"Training MaskablePPO on STS2 combat")
     if loadout == "neow_early":
         print(
             f"  loadout:         neow_early "
             f"(Neow+early natural Act1 decks; NOT bare starter; {n_fixtures} fixtures)"
+        )
+    elif loadout == "loadout_v1":
+        print(f"  loadout:         loadout_v1 (mid-act combat suite; {n_fixtures} fixtures)")
+    elif spec.get("mix"):
+        print(
+            f"  loadout:         mix_neow_v1 "
+            f"(50% neow_early + 50% loadout_v1 interleaved; {mix_note})"
         )
     else:
         print(f"  loadout:         bare (Ironclad starter deck)")
@@ -178,7 +310,9 @@ def train(args):
     def make_masked_env(seed: int):
         def _init():
             provider = make_loadout_provider(
-                loadout, offset=seed, fixture_dir=fixture_dir if loadout == "neow_early" else None
+                loadout,
+                offset=seed,
+                fixture_dir=fixture_dir if loadout in {"neow_early", "mix_neow_v1"} else None,
             )
             env = STS2CombatEnv(loadout_provider=provider)
             env = ActionMasker(env, mask_fn)
@@ -302,12 +436,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Output directory (default: output/combat_ppo)")
     parser.add_argument(
         "--loadout",
-        choices=["bare", "neow_early"],
+        choices=sorted(set(LOADOUT_SUITES) | set(LOADOUT_ALIASES)),
         default="bare",
         help=(
             "Combat start deck. bare=Ironclad starter. "
-            "neow_early=rotating Neow+early natural Act1 death snapshots "
-            "(NOT bare)."
+            "neow_early=Neow+early natural Act1 death snapshots (NOT bare). "
+            "loadout_v1=mid-act combat suite. "
+            "mix_neow_v1=50%% neow_early + 50%% loadout_v1 interleaved "
+            "(aliases: mix, mix_neow, mid_early, early_mid)."
         ),
     )
     parser.add_argument(
@@ -316,7 +452,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=str(NEOW_EARLY_FIXTURE_DIR),
         help="Directory of neow_early LOCKED JSON fixtures",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.loadout = resolve_loadout(args.loadout)
+    return args
 
 
 def main(argv: list[str] | None = None):

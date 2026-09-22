@@ -30,10 +30,19 @@ def test_cli_loadout_neow_early_parses():
     assert bare.loadout == "bare"
 
 
+def test_cli_loadout_mix_neow_v1_aliases():
+    assert train_mod.LOADOUT_SUITES["mix_neow_v1"] == {"mix": ("neow_early", "loadout_v1")}
+    for alias in ("mix", "mix_neow", "mid_early", "early_mid", "mix_neow_v1"):
+        args = train_mod.parse_args(["--loadout", alias])
+        assert args.loadout == "mix_neow_v1"
+
+
 def test_neow_early_fixtures_locked_and_labelled():
     fixtures = train_mod.load_neow_early_fixtures(_FIXTURE_DIR)
     assert len(fixtures) == 50
     train_mod.assert_neow_early_labels(fixtures)
+    paths = list(_FIXTURE_DIR.glob("neow_early_*.json"))
+    assert len(paths) == 50
     for fx in fixtures:
         assert fx.get("locked") is True
         label = str(fx["label"])
@@ -84,6 +93,30 @@ def test_make_loadout_provider_bare_is_none():
     assert spec["deck"]
     assert spec["deck"][0].card_id in CardId
     assert IRONCLAD_STARTING_HP == 80
+
+
+def test_mix_neow_v1_interleaves_fifty_fifty():
+    provider = train_mod.make_loadout_provider("mix_neow_v1", offset=0, fixture_dir=_FIXTURE_DIR)
+    suites = [provider()["suite"] for _ in range(20)]
+    assert suites[0::2] == ["neow_early"] * 10
+    assert suites[1::2] == ["loadout_v1"] * 10
+    v1 = train_mod.load_loadout_v1_fixtures()
+    assert len(v1) == 50
+    assert all("loadout_v1" in str(fx["label"]) for fx in v1)
+    assert all(not str(fx["label"]).startswith("Neow+early") for fx in v1)
+
+
+def test_loadout_v1_materializes():
+    provider = train_mod.make_loadout_provider("loadout_v1")
+    spec = provider()
+    assert spec["suite"] == "loadout_v1"
+    assert spec["hp"] > 0
+    assert spec["deck"]
+    env = STS2CombatEnv(loadout_provider=provider)
+    env.reset(seed=1)
+    assert env.combat is not None
+    assert env.combat.player.current_hp > 0
+    env.close()
 
 
 def test_jev_noncombat_script_surface():

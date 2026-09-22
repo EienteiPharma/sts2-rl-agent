@@ -132,6 +132,9 @@ python scripts/train_combat.py \
 # Neow+early natural Act1 decks (RunEnv death snapshots), NOT bare starter.
 # Does not start training by itself; this is the CLI loadout switch.
 python scripts/train_combat.py --loadout neow_early --output-dir output/combat_ppo_neow_early
+
+# 50% neow_early + 50% loadout_v1 interleaved (aliases: mix, mix_neow, mid_early, early_mid).
+python scripts/train_combat.py --loadout mix_neow_v1 --output-dir output/combat_ppo_mix_neow_v1
 ```
 
 Key flags:
@@ -144,7 +147,7 @@ Key flags:
 | `--batch-size` | 256 | Minibatch size |
 | `--n-steps` | 2048 | Steps per rollout per env |
 | `--output-dir` | output/combat_ppo | Where to save models and logs |
-| `--loadout` | `bare` | `bare` = Ironclad starter; `neow_early` = rotating Neow+early natural Act1 death snapshots (NOT bare) |
+| `--loadout` | `bare` | `bare` / `neow_early` / `loadout_v1` / `mix_neow_v1` (50% neow_early + 50% loadout_v1 interleaved; aliases mix, mix_neow, mid_early, early_mid) |
 
 ### Train a Full-Run Agent
 
@@ -205,8 +208,9 @@ sts2-rl-agent/
 |   |-- benchmark.py               # Throughput benchmark
 |   |-- eval_act1_runenv.py        # Frozen Act1 RunEnv eval (random/model/hierarchical)
 |   |-- jev_noncombat.py           # CARD_REWARD Jev wiring (potion/relic skip, card_fit)
-|   |-- train_combat.py            # Combat-only training (`--loadout bare|neow_early`)
-|   |-- fixtures/neow_early/       # LOCKED Neow+early RunEnv death-snapshot decks
+|   |-- train_combat.py            # Combat-only training (`--loadout bare|neow_early|loadout_v1|mix_neow_v1`)
+|   |-- fixtures/neow_early/       # LOCKED Neow+early (`neow_early_*.json`)
+|   |-- fixtures/loadout_v1/       # LOCKED loadout_v1 mid-act decks
 |   +-- train_full_run.py          # Full-run training
 |
 |-- sts2_env/                      # Python package (headless simulator)
