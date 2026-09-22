@@ -240,6 +240,7 @@ def test_write_report_summary_omits_rows(tmp_path):
     assert slim["summary"]["n"] == 1
     assert slim["summary"]["trunc_rate"] == 1.0
     assert slim["jev_shadow"]["mode"] == "stub"
+    assert slim["start_with_neow"] is False
 
 
 def test_jev_shadow_does_not_change_noncombat_action():
@@ -317,6 +318,46 @@ def test_cli_jev_event_on_and_phases():
     assert via.jev_flags.allows_neow() is False
 
 
+def test_cli_start_with_neow_default_off():
+    off = eval_mod.parse_args(["--policy", "hierarchical", "--combat-model", "c.zip"])
+    eval_mod.validate_policy_args(off)
+    assert off.start_with_neow is False
+    on = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--start-with-neow",
+        ]
+    )
+    eval_mod.validate_policy_args(on)
+    assert on.start_with_neow is True
+    report = eval_mod.build_report(
+        policy="hierarchical",
+        model_path="",
+        combat_model_path="/tmp/combat.zip",
+        rows=[
+            {
+                "seed": 200000,
+                "act1_clear": False,
+                "full_run_win": False,
+                "truncated": True,
+                "max_act": 0,
+                "floor": 1,
+                "hp": 40,
+                "max_hp": 80,
+                "gold": 99,
+                "steps": 1,
+                "reward": -1.0,
+            }
+        ],
+        elapsed_s=0.1,
+        start_with_neow=True,
+    )
+    assert report["start_with_neow"] is True
+
+
 def test_cli_jev_on_requires_hierarchical():
     args = eval_mod.parse_args(["--policy", "random", "--jev", "on"])
     with pytest.raises(SystemExit, match="hierarchical"):
@@ -359,6 +400,7 @@ def test_write_report_jev_on_fields(tmp_path):
     slim = json.loads(summary_path.read_text())
     assert slim["jev"] == "on"
     assert slim["combat_obs_size"] == OBS_SIZE
+    assert slim["start_with_neow"] is False
 
 
 class _BoomIfCalled:

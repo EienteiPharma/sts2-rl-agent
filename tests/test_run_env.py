@@ -159,6 +159,16 @@ class TestResetReturnsValidObs:
         env.reset(seed=42)
         assert _get_phase(env) == RunManager.PHASE_MAP_CHOICE
 
+    def test_reset_start_with_neow_opens_neow_event(self, env):
+        _, info = env.reset(seed=42, options={"start_with_neow": True})
+        assert _get_phase(env) == RunManager.PHASE_EVENT
+        assert info.get("phase") == RunManager.PHASE_EVENT
+        event = env._mgr._event_model
+        assert event is not None
+        assert event.event_id == "Neow"
+        env.reset(seed=42)
+        assert _get_phase(env) == RunManager.PHASE_MAP_CHOICE
+
     def test_reset_deterministic_same_seed(self, env):
         obs1, _ = env.reset(seed=123)
         obs2, _ = env.reset(seed=123)

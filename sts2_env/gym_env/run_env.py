@@ -291,11 +291,17 @@ class STS2RunEnv(gymnasium.Env):
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
 
+        options = options or {}
+        start_with_neow = bool(options.get("start_with_neow", False))
+        if start_with_neow:
+            import sts2_env.events  # noqa: F401 — register Neow for this reset only
+
         run_seed = int(self.np_random.integers(0, INT_MAX_EXCLUSIVE))
         self._mgr = RunManager(
             seed=run_seed,
             character_id=self._character_id,
             ascension_level=self._ascension_level,
+            start_with_neow=start_with_neow,
         )
         self._step_count = 0
 

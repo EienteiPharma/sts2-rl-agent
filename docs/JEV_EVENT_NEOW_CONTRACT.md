@@ -57,6 +57,8 @@ pending choose index i     →  _COMBAT_START + 1 + i
 
 检出 Neow/boon 屏（`event_id==Neow` 或 meta/id 含 boon）时 Choice 名为 `neow_boon`。未检出则静默跳过该 Choice 名。`--jev-neow off` 时对 Neow 屏静默跳过 Jev（合法随机）。shadow 可选 `phase=NEOW`。
 
+**测 `neow_boon` 必须 `--start-with-neow`。** 现表 / hang / 本轮 n=100 **省略 Neow**（eval 默认 `start_with_neow=False`，开局走地图）。Gym：`STS2RunEnv.reset(..., options={"start_with_neow": True})` → `RunManager(..., start_with_neow=True)`。
+
 禁止把 Neow 当 mid fixture 选。开局容错（血/金/牌/遗物）。
 
 ## D) Shop
@@ -70,6 +72,7 @@ SHOP **仍合法随机**，本刀不扩。
 --jev-phases map,rest,card,event    # 打开 EVENT（含 Neow，受 --jev-neow）
 --jev-event on|off   (default off)
 --jev-neow on|off    (default: follow --jev-event)
+--start-with-neow    (default off; hang / n=100 表不含 Neow)
 ```
 
 `--jev off` 时 EVENT 仍 masked random。阈值：Choice ≥0.65；事件不用 rest Score 覆写选项；错误 → `error` + 合法随机。
@@ -87,7 +90,7 @@ SHOP **仍合法随机**，本刀不扩。
 
 ## Surplus 冒烟
 
-n=2 `suggest_live` + `--jev-event on`（不在本 PR 跑 live TypeSafe）。
+n=2 `suggest_live` + `--jev-event on`（不在本 PR 跑 live TypeSafe）。测 `neow_boon` 另加 `--start-with-neow`。**本轮 n=100 / hang 表不加 Neow。**
 
 ## Done when
 

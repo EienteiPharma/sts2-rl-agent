@@ -255,8 +255,9 @@ def _run_episode(
     jev_enabled: bool = False,
     jev_adapter: Any = None,
     jev_flags: JevPolicyFlags | None = None,
+    start_with_neow: bool = False,
 ) -> dict:
-    obs, info = env.reset(seed=seed)
+    obs, info = env.reset(seed=seed, options={"start_with_neow": start_with_neow})
     done = False
     ep_rew = 0.0
     steps = 0
@@ -369,6 +370,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Neow/boon Choice neow_boon (default: follow --jev-event)",
     )
     ap.add_argument(
+        "--start-with-neow",
+        action="store_true",
+        default=False,
+        help=(
+            "Start each episode on the Neow boon screen so neow_boon can be "
+            "measured. Default off: hang / n=100 tables omit Neow"
+        ),
+    )
+    ap.add_argument(
         "--out",
         default="/workspace/sts2-sim/evals/act1_runenv_latest.json",
     )
@@ -443,6 +453,7 @@ def build_report(
     jev_event: str = "off",
     jev_phases: str = "map,rest,card",
     jev_neow: str | None = None,
+    start_with_neow: bool = False,
 ) -> dict:
     summary = _summarize(rows)
     return {
@@ -456,6 +467,7 @@ def build_report(
         "jev_event": jev_event,
         "jev_phases": jev_phases,
         "jev_neow": jev_neow if jev_neow is not None else ("on" if jev_event == "on" else "off"),
+        "start_with_neow": bool(start_with_neow),
         "character": "Ironclad",
         "ascension": 0,
         "seeds": {
@@ -519,6 +531,7 @@ def main(argv: list[str] | None = None) -> None:
                 jev_enabled=jev_enabled,
                 jev_adapter=jev_adapter,
                 jev_flags=jev_flags,
+                start_with_neow=bool(getattr(args, "start_with_neow", False)),
             )
         )
     env.close()
@@ -534,6 +547,7 @@ def main(argv: list[str] | None = None) -> None:
         jev_event=args.jev_event if args.policy == "hierarchical" else "off",
         jev_phases=args.jev_phases if args.policy == "hierarchical" else "map,rest,card",
         jev_neow=args.jev_neow if args.policy == "hierarchical" else "off",
+        start_with_neow=bool(getattr(args, "start_with_neow", False)),
     )
     out = Path(args.out)
     write_report(report, out)

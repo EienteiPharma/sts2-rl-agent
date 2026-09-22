@@ -58,6 +58,7 @@ python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2
 - `--combat-model`：hierarchical `--model` 的别名（同一 combat zip）。
 - `--jev off|on`（默认 `off`；`--strategic jev` 等同 `--jev on`）。仅 hierarchical。首表用 `--jev off`（非战斗合法随机，Jev 仅影子、不改动作）。
 - `--jev-event off|on`（默认 **`off`**）。仅 hierarchical + `--jev on`。默认 EVENT 合法随机（`jev_event_off_random`），**不改**既有 MAP/REST/CARD 表。`--jev-phases map,rest,card,event` 等价于 `--jev-event on`。`--jev-neow` 默认跟随 `--jev-event`。契约：`docs/JEV_EVENT_NEOW_CONTRACT.md`。
+- `--start-with-neow`（默认 **关**）。开局 Neow 屏才能测 `neow_boon`。hang / 本轮 n=100 **不加**。Gym：`reset(..., options={"start_with_neow": True})`。
 - 战斗步：从 `RunManager.get_combat_state()` 取 `CombatState`，`encode_observation(combat)` + combat `get_action_mask`，`MaskablePPO.predict`，再把 combat action index 映射到 RunEnv combat slice（layout offset 0）。**Jev 不进战斗。**
 - 非战斗步：
   - `--jev off`：`action_masks()==1` 合法随机；日志 `shadow_status=stub`。

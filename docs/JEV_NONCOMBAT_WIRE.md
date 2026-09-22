@@ -53,6 +53,15 @@ If the EVENT screen is Neow / boon (`event_id==Neow` or id/meta contains
 If Neow is **not** detected, skip `neow_boon` silently and use `event_choice`.
 `--jev-neow off` skips Jev on a detected Neow screen (legal random).
 
+**Measure `neow_boon` only with `--start-with-neow`.** Hang tables and this
+round's n=100 omit Neow (`STS2RunEnv.reset` default / eval CLI default off
+→ map start). Gym pass-through:
+
+```python
+env.reset(seed=seed, options={"start_with_neow": True})
+# → RunManager(..., start_with_neow=True)
+```
+
 Neow is an opening boon, not a mid-act fixture.
 
 ## CLI
@@ -61,12 +70,16 @@ Neow is an opening boon, not a mid-act fixture.
 # prior tables (EVENT off)
 python scripts/eval_act1_runenv.py --policy hierarchical --model HUNG.zip --jev on --jev-event off
 
-# EVENT(+Neow) smoke (Surplus: n=2 suggest_live)
+# EVENT(+Neow Choice names; still no opening Neow unless --start-with-neow)
 python scripts/eval_act1_runenv.py --policy hierarchical --model HUNG.zip --jev on --jev-event on
+
+# Measure neow_boon (hang / n=100 tables stay without this flag)
+python scripts/eval_act1_runenv.py --policy hierarchical --model HUNG.zip --jev on --jev-event on --start-with-neow
 ```
 
 `--jev-phases map,rest,card,event` is equivalent to `--jev-event on`.
 `--jev-neow` defaults to follow `--jev-event`.
+`--start-with-neow` is **off** unless measuring `neow_boon` (hang / n=100 stay without Neow).
 
 ## Contract
 
