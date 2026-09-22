@@ -32,6 +32,7 @@ REST_SMITH_ASSIST_CONF = 0.40
 UNKNOWN_DEFER_CONFIDENCE = 0.80  # MAP Unknown defer when hp_pressure high; threshold 0.65 unchanged
 CARD_FIT_ASSIST_MIN = 2.0  # Score assist; Choice threshold unchanged
 DEFAULT_TIMEOUT_S = 8.0
+TYPESAFE_HTTP_USER_AGENT = "sts2-rl-agent-jev/1.0"
 # Base phases always eligible; EVENT is added at runtime when jev_event=True.
 BASE_JEV_PHASES = frozenset({"MAP_CHOICE", "REST_SITE", "CARD_REWARD"})
 JEV_PHASES = BASE_JEV_PHASES  # backward-compat alias (EVENT gated separately)
@@ -652,7 +653,7 @@ def _post_system_one(body: dict[str, Any], timeout: float, api_key: str) -> dict
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "sts2-jev-noncombat/1",
+            "User-Agent": TYPESAFE_HTTP_USER_AGENT,
         },
         method="POST",
     )

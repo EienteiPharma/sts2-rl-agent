@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -78,6 +79,9 @@ CHOICE_NEOW_BOON = "neow_boon"
 TYPESAFE_API_URL = "https://api.typesafe.ai/v1/systemone"
 TYPESAFE_MODEL = "jev-1.13.0"
 TYPESAFE_API_KEY_ENV = "TYPESAFE_API_KEY"
+# Cloudflare error 1010 blocks the default Python-urllib User-Agent.
+TYPESAFE_HTTP_USER_AGENT = "sts2-rl-agent-jev/1.0"
+CLOUDFLARE_1010_MIN_INTERVAL_S = 1.0
 CONTENT_MAP_REF = "docs/act1_content_map.md"
 HTTP_TIMEOUT_S = 20.0
 
@@ -191,6 +195,19 @@ class StubJevClient:
         }
 
 
+def typesafe_http_headers(api_key: str) -> dict[str, str]:
+    """Headers for the TypeSafe HTTP fallback (not the SDK path)."""
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "User-Agent": TYPESAFE_HTTP_USER_AGENT,
+    }
+
+
+def is_cloudflare_1010(http_code: int, body: str) -> bool:
+    return int(http_code) == 403 and "1010" in (body or "")
+
+
 class LiveJevClient:
     """Live TypeSafe System One call.
 
@@ -243,19 +260,29 @@ class LiveJevClient:
             TYPESAFE_API_URL,
             data=body,
             method="POST",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=typesafe_http_headers(self.api_key),
         )
-        try:
-            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="replace")[:400]
-            raise JevError(f"typesafe HTTP {e.code}: {detail}") from e
-        except urllib.error.URLError as e:
-            raise JevError(f"typesafe network error: {e}") from e
+        last_http: JevError | None = None
+        for attempt in range(2):
+            try:
+                with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", errors="replace")[:400]
+                last_http = JevError(f"typesafe HTTP {e.code}: {detail}")
+                if attempt == 0 and is_cloudflare_1010(e.code, detail):
+                    logger.warning(
+                        "TypeSafe HTTP 403 Cloudflare 1010; retry in %.1ss",
+                        CLOUDFLARE_1010_MIN_INTERVAL_S,
+                    )
+                    time.sleep(CLOUDFLARE_1010_MIN_INTERVAL_S)
+                    continue
+                raise last_http from e
+            except urllib.error.URLError as e:
+                raise JevError(f"typesafe network error: {e}") from e
+        else:
+            raise last_http or JevError("typesafe HTTP failed")
         if not isinstance(payload, dict):
             raise JevError("typesafe response is not a JSON object")
         return payload

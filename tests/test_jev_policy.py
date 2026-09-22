@@ -28,6 +28,7 @@ from sts2_env.eval.jev import (
     REST_SMITH_ASSIST_CONF,
     SHOP_RANDOM_REASON,
     SMITH_ASSIST_REASON,
+    TYPESAFE_HTTP_USER_AGENT,
     UNKNOWN_DEFER_CONF,
     UNKNOWN_DEFERRED_REASON,
     JevAnswer,
@@ -35,8 +36,10 @@ from sts2_env.eval.jev import (
     LiveJevClient,
     apply_choice_confidence,
     build_jev_adapter,
+    is_cloudflare_1010,
     local_hp_pressure,
     rest_or_continue_override,
+    typesafe_http_headers,
 )
 from sts2_env.eval.jev_policy import (
     JevPolicyFlags,
@@ -448,6 +451,88 @@ def test_build_adapter_stub_vs_live():
     assert answers["pick"].status == "stub"
     live = build_jev_adapter(enabled=True)
     assert isinstance(live, LiveJevClient)
+
+
+def test_typesafe_http_headers_include_jev_user_agent():
+    headers = typesafe_http_headers("secret")
+    assert headers["User-Agent"] == "sts2-rl-agent-jev/1.0"
+    assert headers["User-Agent"] == TYPESAFE_HTTP_USER_AGENT
+    assert "Python-urllib" not in headers["User-Agent"]
+    assert headers["Content-Type"] == "application/json"
+    assert headers["Authorization"] == "Bearer secret"
+
+
+def test_live_jev_http_request_sets_user_agent(monkeypatch):
+    import urllib.request
+
+    captured: dict = {}
+
+    class FakeResp:
+        def read(self):
+            return b'{"answers": {}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        captured["timeout"] = timeout
+        return FakeResp()
+
+    client = LiveJevClient(api_key="k")
+    monkeypatch.setattr(client, "_try_sdk", lambda *a, **k: None)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    payload = client._call({}, {"pick": {"type": "choice"}})
+    assert payload == {"answers": {}}
+    req = captured["req"]
+    ua = req.get_header("User-agent")
+    assert ua == TYPESAFE_HTTP_USER_AGENT
+    assert ua == "sts2-rl-agent-jev/1.0"
+
+
+def test_cloudflare_1010_retries_once(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+    from email.message import Message
+
+    calls = {"n": 0}
+
+    class FakeResp:
+        def read(self):
+            return b'{"answers": {"pick": {"choice": "a"}}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError(
+                req.full_url,
+                403,
+                "Forbidden",
+                Message(),
+                io.BytesIO(b'error code: 1010'),
+            )
+        return FakeResp()
+
+    client = LiveJevClient(api_key="k")
+    monkeypatch.setattr(client, "_try_sdk", lambda *a, **k: None)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("sts2_env.eval.jev.time.sleep", lambda s: None)
+    payload = client._call({}, {"pick": {"type": "choice"}})
+    assert calls["n"] == 2
+    assert payload["answers"]["pick"]["choice"] == "a"
+    assert is_cloudflare_1010(403, "error code: 1010")
+    assert not is_cloudflare_1010(403, "nope")
+    assert not is_cloudflare_1010(500, "1010")
 
 
 def test_content_map_ref_is_the_stub_doc():
