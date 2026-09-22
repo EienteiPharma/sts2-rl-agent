@@ -62,6 +62,14 @@ env.reset(seed=seed, options={"start_with_neow": True})
 # → RunManager(..., start_with_neow=True)
 ```
 
+`RunEnv.reset` and `_enter_neow` import `sts2_env.events` **before**
+`get_event("Neow")`. Card factory reads `docs/CARDS_REFERENCE.md` from the
+package/repo root (not process cwd), so Neow from `cwd=/tmp` still yields
+three `event_choice` boons.
+
+If the Neow screen has **fewer than 2 non-Leave** legal options (Leave-only
+stub), do **not** call Jev; reason `neow_options_empty`.
+
 Neow is an opening boon, not a mid-act fixture.
 
 ## CLI

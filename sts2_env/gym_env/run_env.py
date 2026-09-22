@@ -73,7 +73,7 @@ from sts2_env.gym_env.action_space import (
 )
 from sts2_env.gym_env.observation import OBS_SIZE as COMBAT_OBS_SIZE, encode_observation
 from sts2_env.core.rng import INT_MAX_EXCLUSIVE
-from sts2_env.run.run_manager import RunManager
+from sts2_env.run.run_manager import RunManager, ensure_event_models_registered
 
 @dataclass(frozen=True)
 class _ActionLayout:
@@ -294,7 +294,7 @@ class STS2RunEnv(gymnasium.Env):
         options = options or {}
         start_with_neow = bool(options.get("start_with_neow", False))
         if start_with_neow:
-            import sts2_env.events  # noqa: F401 — register Neow for this reset only
+            ensure_event_models_registered()
 
         run_seed = int(self.np_random.integers(0, INT_MAX_EXCLUSIVE))
         self._mgr = RunManager(

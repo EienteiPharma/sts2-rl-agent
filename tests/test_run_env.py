@@ -166,8 +166,39 @@ class TestResetReturnsValidObs:
         event = env._mgr._event_model
         assert event is not None
         assert event.event_id == "Neow"
+        actions = env._mgr.get_available_actions()
+        event_choices = [a for a in actions if a.get("action") == "event_choice"]
+        non_leave = [
+            a
+            for a in event_choices
+            if str(a.get("option_id", "")).lower() != "leave"
+            and str(a.get("label", "")).lower() != "leave"
+        ]
+        assert len(event_choices) >= 3
+        assert len(non_leave) >= 2
         env.reset(seed=42)
         assert _get_phase(env) == RunManager.PHASE_MAP_CHOICE
+
+    def test_neow_from_tmp_cwd_still_has_boons(self, env, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from sts2_env.cards.factory import _reference_cards
+        from sts2_env.run.events import get_event
+
+        _reference_cards.cache_clear()
+        refs = _reference_cards()
+        assert "STRIKE_IRONCLAD" in refs
+        _, info = env.reset(seed=42, options={"start_with_neow": True})
+        assert info.get("phase") == RunManager.PHASE_EVENT
+        assert get_event("Neow") is not None
+        actions = env._mgr.get_available_actions()
+        event_choices = [a for a in actions if a.get("action") == "event_choice"]
+        non_leave = [
+            a
+            for a in event_choices
+            if str(a.get("option_id", "")).lower() != "leave"
+        ]
+        assert len(event_choices) == 3
+        assert len(non_leave) == 3
 
     def test_reset_deterministic_same_seed(self, env):
         obs1, _ = env.reset(seed=123)

@@ -18,6 +18,7 @@ from sts2_env.eval.jev import (
     JEV_EVENT_OFF_REASON,
     JEV_NEOW_OFF_REASON,
     NEOW_EARLY_CARD_INSTRUCTIONS,
+    NEOW_OPTIONS_EMPTY_REASON,
     PLUS_CARD_CRITERION,
     POTION_OR_RELIC_REASON,
     SHOP_RANDOM_REASON,
@@ -742,6 +743,55 @@ def test_neow_off_skips_jev_silently():
     assert adapter.calls == []
     assert log["shadow_fallback_reason"] == JEV_NEOW_OFF_REASON
     assert log["is_neow"] is True
+    assert mask[action] == 1
+
+
+def test_neow_leave_only_does_not_call_jev():
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "leave",
+            "label": "Leave",
+            "description": "Leave",
+            "enabled": True,
+        }
+    ]
+    env = _event_env(actions, event_id="Neow")
+    mask = _event_mask(1)
+    adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "leave", "confidence": 0.99}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+    )
+    assert adapter.calls == []
+    assert log["shadow_fallback_reason"] == NEOW_OPTIONS_EMPTY_REASON
+    assert log["is_neow"] is True
+    assert mask[action] == 1
+    assert CHOICE_CONFIDENCE_MIN == 0.65
+
+
+def test_neow_one_boon_does_not_call_jev():
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "leave",
+            "label": "Leave",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "MAX_HP",
+            "label": "Max HP",
+            "enabled": True,
+        },
+    ]
+    env = _event_env(actions, event_id="Neow")
+    mask = _event_mask(2)
+    adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "MAX_HP", "confidence": 0.99}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+    )
+    assert adapter.calls == []
+    assert log["shadow_fallback_reason"] == NEOW_OPTIONS_EMPTY_REASON
     assert mask[action] == 1
 
 

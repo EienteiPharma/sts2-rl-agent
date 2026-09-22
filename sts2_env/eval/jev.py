@@ -51,6 +51,7 @@ CARD_FIT_ASSIST_REASON = "jev_card_fit_assist"
 UNKNOWN_DEFERRED_REASON = "unknown_deferred"
 JEV_EVENT_OFF_REASON = "jev_event_off_random"
 JEV_NEOW_OFF_REASON = "jev_neow_off_random"
+NEOW_OPTIONS_EMPTY_REASON = "neow_options_empty"
 SHOP_RANDOM_REASON = "shop_random"
 NON_JEV_PHASE_REASON = "non_jev_phase_random"
 

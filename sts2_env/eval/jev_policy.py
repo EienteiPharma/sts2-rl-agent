@@ -20,6 +20,7 @@ from sts2_env.eval.jev import (
     HP_PRESSURE_SCORE_CRITERIA,
     JEV_EVENT_OFF_REASON,
     JEV_NEOW_OFF_REASON,
+    NEOW_OPTIONS_EMPTY_REASON,
     JEV_PHASE_TOKENS,
     NEOW_BOON_INSTRUCTIONS,
     NEOW_EARLY_CARD_INSTRUCTIONS,
@@ -583,6 +584,20 @@ def _jev_phase_token(phase: str) -> str | None:
     return None
 
 
+def _is_leave_option(cand: Candidate) -> bool:
+    oid = str(cand.payload.get("option_id") or cand.key or "").strip().lower()
+    label = str(cand.payload.get("label") or "").strip().lower()
+    if oid in {"leave", "leave_event"}:
+        return True
+    if label == "leave":
+        return True
+    return cand.key.strip().lower() == "leave"
+
+
+def _non_leave_count(cands: list[Candidate]) -> int:
+    return sum(1 for c in cands if not _is_leave_option(c))
+
+
 def _is_unknown_node(cand: Candidate) -> bool:
     if cand.is_unknown:
         return True
@@ -791,6 +806,13 @@ def choose_jev_noncombat(
         skip_reason = JEV_EVENT_OFF_REASON
     elif is_neow and not flags.allows_neow():
         skip_reason = JEV_NEOW_OFF_REASON
+    elif is_neow and _non_leave_count(cands) < 2:
+        skip_reason = NEOW_OPTIONS_EMPTY_REASON
+        logger.warning(
+            "Jev neow_options_empty non_leave=%s legal=%s; skipping Choice",
+            _non_leave_count(cands),
+            [c.key for c in cands],
+        )
     elif phase_token is None or phase_token not in allowed:
         skip_reason = NON_JEV_PHASE_REASON
 
