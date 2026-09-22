@@ -9,13 +9,17 @@ Policies
 * ``random``: legal random among ``action_masks()==1``.
 * ``model``: RunEnv-sized MaskablePPO only (obs == RUN_OBS_SIZE). Combat zips
   are rejected.
-* ``hierarchical``: combat steps use ``--combat-model`` (combat OBS_SIZE /
-  obs_v1) via ``encode_observation(CombatState)`` + combat ``get_action_mask``.
-  Non-combat: ``--jev off`` (default) is legal random; ``--jev on`` calls
-  TypeSafe/Jev Choice (and Score for rest_or_continue). Jev never runs in
-  combat. Failures log ``error`` and fall back to legal random.
+* ``hierarchical``: combat steps use the hung combat zip on ``--model``
+  (alias ``--combat-model``; obs_v1 / OBS_SIZE=181) via
+  ``encode_observation(CombatState)`` + combat ``get_action_mask``.
+  Non-combat default (``--jev off``): legal random, Jev shadow only (no
+  action change). ``--jev on`` calls TypeSafe/Jev Choice. Jev never runs
+  in combat.
 
 Never feed RunEnv observations into the combat model.
+
+Hung Surplus zip:
+``/workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip``
 """
 from __future__ import annotations
 
@@ -43,6 +47,9 @@ SEED_START = 200000
 SEED_COUNT = 50
 SEEDS = list(range(SEED_START, SEED_START + SEED_COUNT))
 PROTOCOL_ID = "act1_runenv_eval_protocol.md LOCKED 2026-09-22"
+HUNG_COMBAT_ZIP = (
+    "/workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip"
+)
 
 JEV_SHADOW_SKIPPED = "skipped"
 JEV_SHADOW_STUB = "stub"
@@ -308,12 +315,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument(
         "--model",
         default="",
-        help="MaskablePPO zip with RUN_OBS_SIZE input (not a combat zip)",
+        help=(
+            "Zip path. --policy model: RunEnv MaskablePPO (obs=RUN_OBS_SIZE). "
+            "--policy hierarchical: hung combat zip (obs_v1 / OBS_SIZE=181), "
+            f"e.g. {HUNG_COMBAT_ZIP}"
+        ),
     )
     ap.add_argument(
         "--combat-model",
         default="",
-        help="Combat MaskablePPO zip with OBS_SIZE/obs_v1 input (hierarchical only)",
+        help="Alias of hierarchical --model (combat obs_v1 zip)",
     )
     ap.add_argument(
         "--jev",
@@ -344,12 +355,18 @@ def validate_policy_args(args: argparse.Namespace) -> None:
         if args.combat_model:
             raise SystemExit("--combat-model is only valid with --policy hierarchical")
     elif args.policy == "hierarchical":
-        if not args.combat_model:
-            raise SystemExit("--combat-model required for --policy hierarchical")
-        if args.model:
+        if args.model and args.combat_model and args.model != args.combat_model:
             raise SystemExit(
-                "--model is the RunEnv path; hierarchical combat zips go on --combat-model"
+                "hierarchical: --model and --combat-model are the same combat "
+                "zip; pass one path (Surplus: --model)"
             )
+        zip_path = args.combat_model or args.model
+        if not zip_path:
+            raise SystemExit(
+                "--model (hung combat zip, obs_v1=181) required for "
+                "--policy hierarchical; --combat-model is an alias"
+            )
+        args.combat_model = zip_path
     elif args.combat_model or args.model:
         raise SystemExit("--model/--combat-model require --policy model or hierarchical")
     if args.jev == "on" and args.policy != "hierarchical":
@@ -357,15 +374,21 @@ def validate_policy_args(args: argparse.Namespace) -> None:
 
 
 def load_policy_models(args: argparse.Namespace) -> tuple[Any, Any]:
-    """Load and type-check zips. Combat zips must not be used as --model."""
+    """Load and type-check zips.
+
+    ``--policy model`` requires RunEnv obs (201); combat zips are rejected.
+    ``--policy hierarchical`` loads the hung combat zip (obs_v1=181) from
+    ``--model`` or alias ``--combat-model``. Never feed RunEnv obs to it.
+    """
     model = None
     combat_model = None
     if args.policy == "model":
         model = load_maskable_ppo(args.model)
         require_obs_dim(model, RUN_OBS_SIZE, "RunEnv --model")
     elif args.policy == "hierarchical":
-        combat_model = load_maskable_ppo(args.combat_model)
-        require_obs_dim(combat_model, OBS_SIZE, "hierarchical --combat-model")
+        combat_path = args.combat_model or args.model
+        combat_model = load_maskable_ppo(combat_path)
+        require_obs_dim(combat_model, OBS_SIZE, "hierarchical combat zip (--model)")
     return model, combat_model
 
 

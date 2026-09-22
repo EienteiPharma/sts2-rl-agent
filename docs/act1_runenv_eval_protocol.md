@@ -38,20 +38,25 @@
 # random 基线
 python scripts/eval_act1_runenv.py --policy random --out /workspace/sts2-sim/evals/act1_runenv_random_s200000.json
 
-# RunEnv 兼容 MaskablePPO（obs=RUN_OBS_SIZE，非 combat zip）
+# RunEnv 兼容 MaskablePPO（obs=RUN_OBS_SIZE=201；combat zip 在此路径拒评）
 python scripts/eval_act1_runenv.py --policy model --model path/to/run_model.zip --out ...
 
-# hierarchical：战斗步用 combat zip（obs=OBS_SIZE / obs_v1=181）；非战斗默认合法随机
-python scripts/eval_act1_runenv.py --policy hierarchical --combat-model path/to/combat_ppo_obs_v1.zip --jev off
+# hierarchical（评测哨兵首表）：战斗步用 hung combat zip（obs_v1=181）；非战斗合法随机（Jev 仅影子）
+python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev off --out /workspace/sts2-sim/evals/act1_runenv_hierarchical_s200000.json
 
-# hierarchical + Jev（非战斗 Choice / rest_or_continue Score）；combat zip 不变
-python scripts/eval_act1_runenv.py --policy hierarchical --combat-model path/to/combat_ppo_obs_v1.zip --jev on
+# 同上；`--combat-model` 是 `--model` 的别名
+python scripts/eval_act1_runenv.py --policy hierarchical --combat-model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev off
+
+# hierarchical + Jev（非战斗 Choice）；combat zip 不变。不等于 Act1 通关完成
+python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on
 ```
 
 - `--policy random|model|hierarchical`
-- `--model`：仅 `--policy model`。必须 `obs_dim == RUN_OBS_SIZE`（当前 201）。combat-only zip **拒评**并明文报错，不静默。
-- `--combat-model`：仅 `--policy hierarchical`。必须 `obs_dim == OBS_SIZE`（obs_v1 = 181）。**禁止**把 RunEnv obs 喂给 combat zip。
-- `--jev off|on`（默认 `off`；`--strategic jev` 等同 `--jev on`）。仅 hierarchical。
+- `--model`：
+  - `--policy model`：必须 `obs_dim == RUN_OBS_SIZE`（当前 201）。combat-only zip **拒评**并明文报错，不静默。
+  - `--policy hierarchical`：hung combat zip，必须 `obs_dim == OBS_SIZE`（obs_v1 = **181**）。Surplus 箱路径：`/workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip`。**禁止**把 RunEnv obs 喂给该 zip。
+- `--combat-model`：hierarchical `--model` 的别名（同一 combat zip）。
+- `--jev off|on`（默认 `off`；`--strategic jev` 等同 `--jev on`）。仅 hierarchical。首表用 `--jev off`（非战斗合法随机，Jev 仅影子、不改动作）。
 - 战斗步：从 `RunManager.get_combat_state()` 取 `CombatState`，`encode_observation(combat)` + combat `get_action_mask`，`MaskablePPO.predict`，再把 combat action index 映射到 RunEnv combat slice（layout offset 0）。**Jev 不进战斗。**
 - 非战斗步：
   - `--jev off`：`action_masks()==1` 合法随机；日志 `shadow_status=stub`。

@@ -103,10 +103,25 @@ def test_encode_observation_width_matches_obs_v1():
     pytest.skip("No combat phase reached")
 
 
-def test_cli_hierarchical_requires_combat_model():
+def test_cli_hierarchical_requires_combat_zip():
     args = eval_mod.parse_args(["--policy", "hierarchical"])
-    with pytest.raises(SystemExit, match="combat-model"):
+    with pytest.raises(SystemExit, match="--model"):
         eval_mod.validate_policy_args(args)
+
+
+def test_cli_hierarchical_accepts_model_as_combat_zip():
+    args = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--model",
+            eval_mod.HUNG_COMBAT_ZIP,
+        ]
+    )
+    eval_mod.validate_policy_args(args)
+    assert args.combat_model == eval_mod.HUNG_COMBAT_ZIP
+    assert args.jev == "off"
+    assert eval_mod.OBS_SIZE == 181
 
 
 def test_cli_model_rejects_combat_model_flag():
@@ -117,11 +132,11 @@ def test_cli_model_rejects_combat_model_flag():
         eval_mod.validate_policy_args(args)
 
 
-def test_cli_hierarchical_rejects_runenv_model_flag():
+def test_cli_hierarchical_rejects_mismatched_model_paths():
     args = eval_mod.parse_args(
-        ["--policy", "hierarchical", "--combat-model", "combat.zip", "--model", "run.zip"]
+        ["--policy", "hierarchical", "--combat-model", "combat.zip", "--model", "other.zip"]
     )
-    with pytest.raises(SystemExit, match="--model"):
+    with pytest.raises(SystemExit, match="same combat"):
         eval_mod.validate_policy_args(args)
 
 
