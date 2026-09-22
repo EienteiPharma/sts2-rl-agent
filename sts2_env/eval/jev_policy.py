@@ -92,8 +92,8 @@ PENDING_CHOICE_ACTIONS = frozenset({"choose", "confirm_choice"})
 class JevPolicyFlags:
     """Which non-combat phases call Jev. Default preserves MAP/REST/CARD tables.
 
-    EVENT is off unless ``event`` / ``--jev-event on``. Neow is on unless
-    ``neow`` is False / ``--jev-neow off`` (independent of EVENT).
+    EVENT is off unless ``event`` / ``--jev-event on``. Neow is off unless
+    ``neow`` is True / ``--jev-neow on`` (independent of EVENT; hang default).
     """
 
     phases: frozenset[str] = DEFAULT_JEV_PHASES
@@ -110,9 +110,9 @@ class JevPolicyFlags:
         return "event" in self.resolved_phases()
 
     def allows_neow(self) -> bool:
-        # Surplus exception: Neow stays eligible when --jev-event is off.
+        # Hang default: Neow random unless --jev-neow on.
         if self.neow is None:
-            return True
+            return False
         return bool(self.neow)
 
 
@@ -877,7 +877,7 @@ def choose_jev_noncombat(
     Errors are logged on the returned shadow fields (status=error) and the
     action falls back to legal random. The decision point is never skipped.
     Default flags keep ordinary EVENT off so MAP/REST/CARD tables stay
-    comparable. Detected Neow still calls ``neow_boon`` (Choice ≥ 0.65).
+    comparable. Detected Neow is random unless ``--jev-neow on``.
     """
     flags = flags or DEFAULT_JEV_FLAGS
     mgr = _mgr(env)

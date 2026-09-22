@@ -22,10 +22,10 @@ Lab-hung thresholds (do not retune in this eval):
   ``event_options_empty`` / ``neow_options_empty`` (not land-rate)
 * EVENT Choice is behind ``--jev-event on`` (default off). Pending
   ``choose`` / ``confirm_choice`` map to combat slots, not fail-open random
-* Detected Neow still uses Choice ``neow_boon`` when EVENT is off
-  (global ≥ 0.65). ``--jev-neow off`` skips Neow Jev
-  (``neow_jev_off_random``). REST 0.50 / heal/smith assists do not
-  apply to Neow. Otherwise skip that name
+* Detected Neow uses Choice ``neow_boon`` only with ``--jev-neow on``
+  (global ≥ 0.65, even when EVENT is off). Default ``--jev-neow off``
+  is random (``neow_jev_off_random``). REST 0.50 / heal/smith assists
+  do not apply to Neow. Otherwise skip that name
 * Shop stays legal random (not in default ``JEV_PHASES``)
 * Strip invisible / illegal candidates before Choice
 * Act1 reward ``+`` cards are not natural drops (Smith / Neow only)

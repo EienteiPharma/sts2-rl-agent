@@ -167,8 +167,8 @@ def choose_hierarchical_action(
     the combat action index into the RunEnv combat slice.
     Non-combat: legal random when ``jev_enabled`` is false; Jev Choice/Score
     when true (errors fall back to legal random). Ordinary EVENT is off unless
-    ``jev_flags.allows_event()``. Detected Neow still uses Jev unless
-    ``jev_flags.allows_neow()`` is false.
+    ``jev_flags.allows_event()``. Detected Neow uses Jev only when
+    ``jev_flags.allows_neow()`` is true (hang default: random boon).
     """
     mgr = _run_manager(env)
     phase = mgr.phase
@@ -367,11 +367,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument(
         "--jev-neow",
         choices=["on", "off"],
-        default="on",
+        default="off",
         help=(
-            "When --jev-event off: still route Neow opening boon through Jev "
-            "(neow_boon @ 0.65) if on (default). Set off for random Neow boon "
-            "(A/B: --start-with-neow without neow_boon Jev; reason neow_jev_off_random)"
+            "Neow opening boon via Jev (neow_boon @ 0.65). Default off = random "
+            "boon (hang: --start-with-neow + --jev-neow off, reason "
+            "neow_jev_off_random). Set on for optional A/B even when "
+            "--jev-event off"
         ),
     )
     ap.add_argument(
@@ -379,8 +380,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         default=False,
         help=(
-            "Start each episode on the Neow boon screen so neow_boon can be "
-            "measured. Default off: hang / n=100 tables omit Neow"
+            "Start each episode on the Neow boon screen. Hang protocol includes "
+            "this flag with --jev-neow off (random boon). Default off omits Neow"
         ),
     )
     ap.add_argument(
@@ -419,8 +420,8 @@ def validate_policy_args(args: argparse.Namespace) -> None:
     if args.policy != "hierarchical":
         if args.jev_event == "on":
             raise SystemExit("--jev-event on is only valid with --policy hierarchical")
-        if args.jev_neow == "off":
-            raise SystemExit("--jev-neow off is only valid with --policy hierarchical")
+        if args.jev_neow == "on":
+            raise SystemExit("--jev-neow on is only valid with --policy hierarchical")
     args.jev_flags = resolve_jev_flags(
         jev_event=args.jev_event,
         jev_phases=args.jev_phases,
@@ -471,7 +472,7 @@ def build_report(
         "jev": jev,
         "jev_event": jev_event,
         "jev_phases": jev_phases,
-        "jev_neow": jev_neow if jev_neow is not None else "on",
+        "jev_neow": jev_neow if jev_neow is not None else "off",
         "start_with_neow": bool(start_with_neow),
         "character": "Ironclad",
         "ascension": 0,

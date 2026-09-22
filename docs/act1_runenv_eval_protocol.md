@@ -47,8 +47,8 @@ python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2
 # 同上；`--combat-model` 是 `--model` 的别名
 python scripts/eval_act1_runenv.py --policy hierarchical --combat-model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev off
 
-# hierarchical + Jev（非战斗 Choice）；combat zip 不变。不等于 Act1 通关完成
-python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on
+# hierarchical + Jev hang (MAP/REST/CARD; EVENT off; random Neow boon)
+python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on --jev-event off --jev-neow off --start-with-neow
 ```
 
 - `--policy random|model|hierarchical`
@@ -57,12 +57,12 @@ python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2
   - `--policy hierarchical`：hung combat zip，必须 `obs_dim == OBS_SIZE`（obs_v1 = **181**）。Surplus 箱路径：`/workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip`。**禁止**把 RunEnv obs 喂给该 zip。
 - `--combat-model`：hierarchical `--model` 的别名（同一 combat zip）。
 - `--jev off|on`（默认 `off`；`--strategic jev` 等同 `--jev on`）。仅 hierarchical。首表用 `--jev off`（非战斗合法随机，Jev 仅影子、不改动作）。
-- `--jev-event off|on`（默认 **`off`**）。仅 hierarchical + `--jev on`。默认普通 EVENT 合法随机（`jev_event_off_random`），**不改**既有 MAP/REST/CARD 表。检出的 Neow 仍走 `neow_boon`（Choice ≥0.65；REST 0.50 / assist 不套 Neow）。`--jev-phases map,rest,card,event` 等价于 `--jev-event on`。`--jev-neow` 默认 **on**（不跟 `--jev-event`）。`--jev-neow off` + `--start-with-neow` 为 A/B 臂，reason `neow_jev_off_random`。契约：`docs/JEV_EVENT_NEOW_CONTRACT.md`。
-- `--start-with-neow`（默认 **关**）。开局 Neow 屏才能测 `neow_boon`。hang / 本轮 n=100 **不加**。Gym：`reset(..., options={"start_with_neow": True})`。`get_event("Neow")` 前注册 events；`CARDS_REFERENCE.md` 走 package root。EVENT / Neow 合法非 Leave **< 2** 时不调 Jev（`event_options_empty` / `neow_options_empty`，不算落地率）。`_actions_event` 仅在 `event_model is None` 时给 Leave；model 仍在、options 空（reward/pending 间隙）**不得**伪造 Leave。n=100 Leave-only 是 import 修前的表。REST 落地 0% / 空 `legal_ids` 是另一刀，EVENT 冒烟后再查。
+- `--jev-event off|on`（默认 **`off`**）。仅 hierarchical + `--jev on`。默认普通 EVENT 合法随机（`jev_event_off_random`），**不改**既有 MAP/REST/CARD 表。`--jev-phases map,rest,card,event` 等价于 `--jev-event on`。`--jev-neow` 默认 **off**（随机祝福，reason `neow_jev_off_random`）。`--jev-neow on` 为可选 A/B：`neow_boon` @ Choice ≥0.65，即使 `--jev-event off`。契约：`docs/JEV_EVENT_NEOW_CONTRACT.md`。
+- `--start-with-neow`（CLI 默认 **关**；**hang 协议带上**）。开局 Neow 屏 + `--jev-neow off` = 随机祝福。Gym：`reset(..., options={"start_with_neow": True})`。`get_event("Neow")` 前注册 events；`CARDS_REFERENCE.md` 走 package root。EVENT / Neow 合法非 Leave **< 2** 时不调 Jev（`event_options_empty` / `neow_options_empty`，不算落地率）。`_actions_event` 仅在 `event_model is None` 时给 Leave；model 仍在、options 空（reward/pending 间隙）**不得**伪造 Leave。n=100 Leave-only 是 import 修前的表。
 - 战斗步：从 `RunManager.get_combat_state()` 取 `CombatState`，`encode_observation(combat)` + combat `get_action_mask`，`MaskablePPO.predict`，再把 combat action index 映射到 RunEnv combat slice（layout offset 0）。**Jev 不进战斗。**
 - 非战斗步：
   - `--jev off`：`action_masks()==1` 合法随机；日志 `shadow_status=stub`。
-  - `--jev on`：TypeSafe/Jev Choice（`map_fork` / `card_reward` / 同类决策）与 rest_or_continue 的 hp_pressure Score。Choice confidence **≥ 0.65** 否则 uncertain → 合法随机。hp_pressure **≥ 2.0** 优先 rest，**≤ 1.0** 优先 continue，中间信 Choice。MAP 含 `UNKNOWN` 时仍打 hp_pressure；pressure≥2 且存在非 Unknown 且 Choice 选 Unknown 且 conf **< 0.80** → `unknown_deferred`（0.80 只用于 defer，主阈值仍 0.65）。先剥 invisible/illegal。Act1 reward `+` 卡不是自然掉落（仅 Smith/Neow）——criteria 见 `docs/act1_content_map.md`。真 `pick_card` 另打 4 档 Score `card_fit`：**不改** Choice 0.65；confidence < 0.65 但 `card_fit >= 2.0` 且 choice ≠ skip 时落地，原因 `jev_card_fit_assist`。`PHASE_CARD_REWARD` 上的 `pick_potion` / `pick_relic_reward` **不**走 card_reward Jev，合法随机原因 `potion_or_relic_reward_random`（不进 CARD 落地率分母）。`--jev-event on` 时普通 EVENT 走 `event_choice`（pending choose/confirm 接 combat 槽）。`--jev-event off` 时普通 EVENT 合法随机；检出的 Neow 仍走 `neow_boon`（≥0.65）。SHOP **仍合法随机**。API/模型错误记 `shadow_status=error` 并回退合法随机，**不吞决策点**。
+  - `--jev on`：TypeSafe/Jev Choice（`map_fork` / `card_reward` / 同类决策）与 rest_or_continue 的 hp_pressure Score。Choice confidence **≥ 0.65** 否则 uncertain → 合法随机。hp_pressure **≥ 2.0** 优先 rest，**≤ 1.0** 优先 continue，中间信 Choice。MAP 含 `UNKNOWN` 时仍打 hp_pressure；pressure≥2 且存在非 Unknown 且 Choice 选 Unknown 且 conf **< 0.80** → `unknown_deferred`（0.80 只用于 defer，主阈值仍 0.65）。先剥 invisible/illegal。Act1 reward `+` 卡不是自然掉落（仅 Smith/Neow）——criteria 见 `docs/act1_content_map.md`。真 `pick_card` 另打 4 档 Score `card_fit`：**不改** Choice 0.65；confidence < 0.65 但 `card_fit >= 2.0` 且 choice ≠ skip 时落地，原因 `jev_card_fit_assist`。`PHASE_CARD_REWARD` 上的 `pick_potion` / `pick_relic_reward` **不**走 card_reward Jev，合法随机原因 `potion_or_relic_reward_random`（不进 CARD 落地率分母）。`--jev-event on` 时普通 EVENT 走 `event_choice`（pending choose/confirm 接 combat 槽）。`--jev-event off` 时普通 EVENT 合法随机。`--jev-neow` 默认 off：检出的 Neow 合法随机（`neow_jev_off_random`）；`--jev-neow on` 才走 `neow_boon`（≥0.65）。SHOP **仍合法随机**。API/模型错误记 `shadow_status=error` 并回退合法随机，**不吞决策点**。
   - `--jev on` 时日志含 `shadow_suggestion`、`shadow_confidence`、`shadow_fallback_reason`（及 `shadow_hp_pressure`）；真卡屏可选 `jev_card_fit`。EVENT 可含 `event_id` / `is_neow` / `phase=EVENT|NEOW`。
 - 输出：完整 JSON + 同名 `.summary.json`（无逐局 rows 的精简版）。
 - Live 调用读 `TYPESAFE_API_KEY`（`sts2_env/eval/jev.py` LiveJevClient）。密钥缺失时按 error 回退，不改 combat 路径。TODO(Surplus/Jev) 可替换该 adapter，不必改 eval 脚本。
@@ -80,3 +80,15 @@ python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2
 
 本表门禁由实验室另挂；冻结时门禁为空。未出通关数字前不谈「落地完成」。
 hierarchical 评测通过 **不等于** Act1 通关达标。
+
+## Hang protocol LOCKED 2026-09-22 (post Neow A/B)
+
+详见 `docs/HANG_PROTOCOL_2026-09-22.md`。
+
+- Combat zip: `combat_ppo_obs_v1_bh_v1` until swapped by gate.
+- Hierarchical: `--jev on --jev-event off --jev-neow off --start-with-neow`
+- Hang metrics (n=100): **clear 3% / median 6.5** (A random-Neow arm).
+- Prior n50 4%/8 kept as history only.
+- REST calibrate may remain in code; no win claim from it.
+- Strategic claim freeze until lab unfreezes (EVENT off, neow Jev off).
+

@@ -55,9 +55,9 @@ pending choose index i     →  _COMBAT_START + 1 + i
 
 ## C) Neow → `neow_boon`
 
-检出 Neow/boon 屏（`event_id==Neow` 或 meta/id 含 boon）时 Choice 名为 `neow_boon`。未检出则静默跳过该 Choice 名。`--jev-neow` 默认 **on**（不跟 `--jev-event`）。`--jev-neow off` 时对 Neow 屏静默跳过 Jev（合法随机，`neow_jev_off_random`；A/B 臂加 `--start-with-neow`）。REST 0.50 / heal/smith assist **不**套到 Neow。shadow 可选 `phase=NEOW`。
+检出 Neow/boon 屏（`event_id==Neow` 或 meta/id 含 boon）时 Choice 名为 `neow_boon`。未检出则静默跳过该 Choice 名。`--jev-neow` 默认 **off**（随机祝福，`neow_jev_off_random`）。`--jev-neow on` 为可选 A/B（`neow_boon` ≥0.65，即使 `--jev-event off`）。Hang：`--start-with-neow` + `--jev-neow off`。REST 0.50 / heal/smith assist **不**套到 Neow。shadow 可选 `phase=NEOW`。
 
-**测 `neow_boon` 必须 `--start-with-neow`（默认关；hang / 本轮 n=100 不加）。** Gym：`reset(..., options={"start_with_neow": True})` → `RunManager(..., start_with_neow=True)`。`RunEnv` 与 `_enter_neow` 在 `get_event("Neow")` **之前** `import sts2_env.events`。`docs/CARDS_REFERENCE.md` 从 package root 解析（不靠 cwd）。
+**测 `neow_boon` 必须 `--jev-neow on` 且 `--start-with-neow`。Hang 带 `--start-with-neow` 但 `--jev-neow off`（随机祝福）。** Gym：`reset(..., options={"start_with_neow": True})` → `RunManager(..., start_with_neow=True)`。`RunEnv` 与 `_enter_neow` 在 `get_event("Neow")` **之前** `import sts2_env.events`。`docs/CARDS_REFERENCE.md` 从 package root 解析（不靠 cwd）。
 
 若 Neow 屏合法非 Leave 选项 **< 2**（Leave-only / 空祝福）：**不调 Jev**，reason `neow_options_empty`，合法随机。正常开局为 3 个 `event_choice` 祝福。
 
@@ -73,10 +73,10 @@ SHOP **仍合法随机**，本刀不扩。
 
 ```
 --jev-phases map,rest,card          # 现默认等价
---jev-phases map,rest,card,event    # 打开普通 EVENT（Neow 默认已开）
+--jev-phases map,rest,card,event    # 打开普通 EVENT（Neow 仍默认随机）
 --jev-event on|off   (default off)
---jev-neow on|off    (default on, independent of --jev-event)
---start-with-neow    (default off; hang / n=100 表不含 Neow)
+--jev-neow on|off    (default off; on = optional A/B neow_boon)
+--start-with-neow    (hang 带上，与 --jev-neow off 配对)
 ```
 
 `--jev off` 时 EVENT 仍 masked random。阈值：Choice ≥0.65；事件不用 rest Score 覆写选项；错误 → `error` + 合法随机。
@@ -94,7 +94,7 @@ SHOP **仍合法随机**，本刀不扩。
 
 ## Surplus 冒烟
 
-n=2 `suggest_live` + `--jev-event on`（不在本 PR 跑 live TypeSafe）。测 `neow_boon` 另加 `--start-with-neow`。**本轮 n=100 / hang 表不加 Neow。** n=100 Leave-only 是 events import / package-rooted `CARDS_REFERENCE` **之前**的表；Surplus 再冒烟。
+n=2 `suggest_live` + `--jev-event on`（不在本 PR 跑 live TypeSafe）。测 `neow_boon` 另加 `--jev-neow on --start-with-neow`。**Hang：`--start-with-neow --jev-neow off`（随机祝福）。** n=100 Leave-only 是 events import / package-rooted `CARDS_REFERENCE` **之前**的表。
 
 ## REST calibration v1 (2026-09-22, Jev)
 
@@ -104,6 +104,7 @@ n=2 `suggest_live` + `--jev-event on`（不在本 PR 跑 live TypeSafe）。测 
   - `hp_pressure≥2` + HEAL + `conf≥0.30` → `jev_hp_pressure_assist`
   - `hp_pressure≤1` + SMITH + `conf≥0.40` → `jev_smith_assist`
 - Smoke gate: REST used ≥30% (split suggest_live / hp_assist / smith_assist / low_conf).
+- Code may stay; **no win claim**. Hang bar is 3%/6.5 (n50 4%/8 is history).
 
 ## Done when
 

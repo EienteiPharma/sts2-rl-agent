@@ -3,9 +3,9 @@
 
 Modes: force_random | shadow_only | suggest_live
 Base Jev phases: MAP_CHOICE / REST_SITE / CARD_REWARD.
-EVENT is gated by jev_event (CLI --jev-event, default off); Neow opening is
-excepted and still uses Jev (neow_boon @ global 0.65) when --jev-neow on
-(default). --jev-neow off → neow_jev_off_random.
+EVENT is gated by jev_event (CLI --jev-event, default off).
+Neow opening boon is random by default (--jev-neow off → neow_jev_off_random).
+--jev-neow on still uses neow_boon @ global 0.65 even when jev_event is off.
 Other noncombat = masked random. Fail-open to legal random on missing key /
 API / parse / timeout. Never prints or logs the API key.
 """
@@ -951,7 +951,7 @@ def decide_noncombat(
     model: str = DEFAULT_MODEL,
     timeout: float = DEFAULT_TIMEOUT_S,
     jev_event: bool = False,
-    jev_neow: bool = True,
+    jev_neow: bool = False,
 ) -> int:
     """Decide a RunEnv action for non-combat phases under the Jev switch contract."""
     if mode not in MODES:

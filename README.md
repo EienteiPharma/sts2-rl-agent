@@ -177,11 +177,11 @@ python scripts/eval_act1_runenv.py --policy model --model path/to/run_model.zip
 # Surplus hung combat zip in combat (obs_v1=181); legal random outside (`--jev off`).
 python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev off --out /workspace/sts2-sim/evals/act1_runenv_hierarchical_s200000.json
 
-# Same combat zip; TypeSafe/Jev Choice for non-combat (`TYPESAFE_API_KEY`).
-# EVENT stays off (default) so MAP/REST/CARD tables stay comparable.
-python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on
+# Same combat zip; TypeSafe/Jev Choice for MAP/REST/CARD (`TYPESAFE_API_KEY`).
+# EVENT and Neow Jev stay off (hang: add --start-with-neow for random boon).
+python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on --start-with-neow
 
-# Optional ordinary EVENT Choice; Neow still Jev when --jev-event off. Shop random.
+# Optional ordinary EVENT Choice; Neow still random unless --jev-neow on.
 python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on --jev-event on
 ```
 

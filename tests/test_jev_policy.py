@@ -491,6 +491,10 @@ def _event_mask(n_event=2, pending=False, n_choose=0):
 
 
 EVENT_ON = JevPolicyFlags(phases=frozenset({"map", "rest", "card", "event"}), event=True)
+NEOW_ON = JevPolicyFlags(phases=frozenset({"map", "rest", "card"}), event=False, neow=True)
+EVENT_NEOW_ON = JevPolicyFlags(
+    phases=frozenset({"map", "rest", "card", "event"}), event=True, neow=True
+)
 
 
 def test_unknown_deferred_when_pressure_high_and_conf_shy():
@@ -665,8 +669,37 @@ def test_jev_event_off_does_not_call_adapter():
     assert log["phase"] == "EVENT"
 
 
+def test_neow_default_off_is_random():
+    """Hang default: --jev-neow off → neow_jev_off_random even with ≥2 boons."""
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "MAX_HP",
+            "label": "Max HP",
+            "description": "+8 max HP",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "GOLD",
+            "label": "Gold",
+            "description": "+100 gold",
+            "enabled": True,
+        },
+    ]
+    env = _event_env(actions, event_id="Neow")
+    mask = _event_mask(2)
+    adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "GOLD", "confidence": 0.99}}])
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert adapter.calls == []
+    assert log["shadow_fallback_reason"] == JEV_NEOW_OFF_REASON
+    assert JEV_NEOW_OFF_REASON == "neow_jev_off_random"
+    assert log["is_neow"] is True
+    assert mask[action] == 1
+
+
 def test_neow_still_calls_jev_when_event_off():
-    """Surplus exception: --jev-event off still runs neow_boon at 0.65."""
+    """Optional A/B: --jev-neow on still runs neow_boon at 0.65 when event is off."""
     actions = [
         {
             "action": "event_choice",
@@ -693,8 +726,10 @@ def test_neow_still_calls_jev_when_event_off():
     env = _event_env(actions, event_id="Neow")
     mask = _event_mask(3)
     adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "GOLD", "confidence": 0.65}}])
-    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
-    assert adapter.calls, "Neow must call Jev even when --jev-event off"
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=NEOW_ON
+    )
+    assert adapter.calls, "Neow must call Jev when --jev-neow on even if --jev-event off"
     assert CHOICE_NEOW_BOON in adapter.calls[0]["questions"]
     assert CHOICE_EVENT not in adapter.calls[0]["questions"]
     assert action == _EVENT_START + 1
@@ -726,7 +761,9 @@ def test_neow_does_not_use_rest_soft_threshold():
     env = _event_env(actions, event_id="Neow")
     mask = _event_mask(2)
     adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "GOLD", "confidence": 0.55}}])
-    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=NEOW_ON
+    )
     assert adapter.calls
     assert log["shadow_status"] == "uncertain"
     assert log["shadow_suggestion"] == "GOLD"
@@ -793,7 +830,7 @@ def test_neow_boon_choice_name_when_detected():
     mask = _event_mask(2)
     adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "GOLD", "confidence": 0.91}}])
     action, log = choose_jev_noncombat(
-        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_NEOW_ON
     )
     assert CHOICE_NEOW_BOON in adapter.calls[0]["questions"]
     assert CHOICE_EVENT not in adapter.calls[0]["questions"]
@@ -874,7 +911,7 @@ def test_neow_leave_only_does_not_call_jev():
     mask = _event_mask(1)
     adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "leave", "confidence": 0.99}}])
     action, log = choose_jev_noncombat(
-        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_NEOW_ON
     )
     assert adapter.calls == []
     assert log["shadow_fallback_reason"] == NEOW_OPTIONS_EMPTY_REASON
@@ -903,7 +940,7 @@ def test_neow_one_boon_does_not_call_jev():
     mask = _event_mask(2)
     adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "MAX_HP", "confidence": 0.99}}])
     action, log = choose_jev_noncombat(
-        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_NEOW_ON
     )
     assert adapter.calls == []
     assert log["shadow_fallback_reason"] == NEOW_OPTIONS_EMPTY_REASON
@@ -916,7 +953,7 @@ def test_neow_empty_options_does_not_call_jev():
     mask = _event_mask(1)
     adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "leave", "confidence": 0.99}}])
     action, log = choose_jev_noncombat(
-        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_NEOW_ON
     )
     assert adapter.calls == []
     assert log["shadow_fallback_reason"] == NEOW_OPTIONS_EMPTY_REASON
@@ -1022,13 +1059,14 @@ def test_shop_does_not_call_jev():
 def test_resolve_jev_flags_default_event_off():
     flags = resolve_jev_flags()
     assert flags.allows_event() is False
-    assert flags.allows_neow() is True
+    assert flags.allows_neow() is False
     assert "event" not in flags.resolved_phases()
     on = resolve_jev_flags(jev_event="on")
     assert on.allows_event() is True
-    assert on.allows_neow() is True
+    assert on.allows_neow() is False
     via_phases = resolve_jev_flags(jev_phases="map,rest,card,event")
     assert via_phases.allows_event() is True
+    assert via_phases.allows_neow() is False
     neow_off = resolve_jev_flags(jev_event="on", jev_neow="off")
     assert neow_off.allows_event() is True
     assert neow_off.allows_neow() is False

@@ -266,9 +266,9 @@ def test_cli_jev_default_off_and_strategic_alias():
     assert off.jev == "off"
     assert off.jev_event == "off"
     assert off.jev_phases == "map,rest,card"
-    assert off.jev_neow == "on"
+    assert off.jev_neow == "off"
     assert off.jev_flags.allows_event() is False
-    assert off.jev_flags.allows_neow() is True
+    assert off.jev_flags.allows_neow() is False
     on = eval_mod.parse_args(
         ["--policy", "hierarchical", "--combat-model", "c.zip", "--jev", "on"]
     )
@@ -276,7 +276,7 @@ def test_cli_jev_default_off_and_strategic_alias():
     assert on.jev == "on"
     assert on.jev_event == "off"
     assert on.jev_flags.allows_event() is False
-    assert on.jev_flags.allows_neow() is True
+    assert on.jev_flags.allows_neow() is False
     alias = eval_mod.parse_args(
         ["--policy", "hierarchical", "--combat-model", "c.zip", "--strategic", "jev"]
     )
@@ -300,7 +300,7 @@ def test_cli_jev_event_on_and_phases():
     eval_mod.validate_policy_args(args)
     assert args.jev_event == "on"
     assert args.jev_flags.allows_event() is True
-    assert args.jev_flags.allows_neow() is True
+    assert args.jev_flags.allows_neow() is False
     via = eval_mod.parse_args(
         [
             "--policy",
@@ -320,7 +320,26 @@ def test_cli_jev_event_on_and_phases():
     assert via.jev_flags.allows_neow() is False
 
 
-def test_cli_jev_neow_off_ab_arm():
+def test_cli_jev_neow_on_optional_ab():
+    args = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--jev",
+            "on",
+            "--jev-neow",
+            "on",
+            "--start-with-neow",
+        ]
+    )
+    eval_mod.validate_policy_args(args)
+    assert args.jev_event == "off"
+    assert args.jev_neow == "on"
+    assert args.start_with_neow is True
+    assert args.jev_flags.allows_event() is False
+    assert args.jev_flags.allows_neow() is True
     args = eval_mod.parse_args(
         [
             "--policy",
@@ -368,7 +387,7 @@ def test_cli_jev_neow_off_ab_arm():
     assert report["start_with_neow"] is True
     random_ok = eval_mod.parse_args(["--policy", "random"])
     eval_mod.validate_policy_args(random_ok)
-    assert random_ok.jev_neow == "on"
+    assert random_ok.jev_neow == "off"
 
 
 def test_cli_start_with_neow_default_off():
@@ -386,6 +405,8 @@ def test_cli_start_with_neow_default_off():
     )
     eval_mod.validate_policy_args(on)
     assert on.start_with_neow is True
+    assert on.jev_neow == "off"
+    assert on.jev_flags.allows_neow() is False
     report = eval_mod.build_report(
         policy="hierarchical",
         model_path="",
@@ -447,7 +468,7 @@ def test_write_report_jev_on_fields(tmp_path):
         jev="on",
     )
     assert report["jev"] == "on"
-    assert report["jev_neow"] == "on"
+    assert report["jev_neow"] == "off"
     assert report["jev_shadow"]["mode"] == "on"
     out = tmp_path / "act1_runenv.json"
     summary_path = eval_mod.write_report(report, out)
