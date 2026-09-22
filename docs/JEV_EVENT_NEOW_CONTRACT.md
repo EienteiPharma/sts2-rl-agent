@@ -94,7 +94,16 @@ SHOP **仍合法随机**，本刀不扩。
 
 ## Surplus 冒烟
 
-n=2 `suggest_live` + `--jev-event on`（不在本 PR 跑 live TypeSafe）。测 `neow_boon` 另加 `--start-with-neow`。**本轮 n=100 / hang 表不加 Neow。** n=100 Leave-only 是 events import / package-rooted `CARDS_REFERENCE` **之前**的表；Surplus 再冒烟。REST 落地 0%（空 `legal_ids` / `no_jev_options_random`）另刀，EVENT 冒烟后再查。
+n=2 `suggest_live` + `--jev-event on`（不在本 PR 跑 live TypeSafe）。测 `neow_boon` 另加 `--start-with-neow`。**本轮 n=100 / hang 表不加 Neow。** n=100 Leave-only 是 events import / package-rooted `CARDS_REFERENCE` **之前**的表；Surplus 再冒烟。
+
+## REST calibration v1 (2026-09-22, Jev)
+
+- Global Choice ≥0.65 **unchanged** for MAP/CARD/EVENT/Neow.
+- REST only: `REST_CHOICE_MIN_CONFIDENCE = 0.50`.
+- After `_apply_hp_pressure_bias`:
+  - `hp_pressure≥2` + HEAL + `conf≥0.30` → `jev_hp_pressure_assist`
+  - `hp_pressure≤1` + SMITH + `conf≥0.40` → `jev_smith_assist`
+- Smoke gate: REST used ≥30% (split suggest_live / hp_assist / smith_assist / low_conf).
 
 ## Done when
 

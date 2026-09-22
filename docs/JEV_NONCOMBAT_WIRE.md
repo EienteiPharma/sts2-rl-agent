@@ -104,3 +104,16 @@ python scripts/eval_act1_runenv.py --policy hierarchical --model HUNG.zip --jev 
 ## Contract
 
 `docs/JEV_EVENT_NEOW_CONTRACT.md`.
+
+## REST calibration v1 (2026-09-22)
+
+Global Choice ≥0.65 **unchanged** for MAP / CARD / EVENT / Neow.
+
+REST_SITE only:
+- Soft land: `REST_CHOICE_MIN_CONFIDENCE = 0.50` (replaces 0.65 on REST).
+- Keep `_apply_hp_pressure_bias`.
+- After bias, Score assists (parity with `card_fit`):
+  - `hp_pressure≥2` + HEAL/REST + `conf≥0.30` → land, `reason=jev_hp_pressure_assist`
+  - `hp_pressure≤1` + SMITH + `conf≥0.40` → land, `reason=jev_smith_assist`
+- Smoke gate: REST `used≥30%` (denom = REST decisions; split `jev_suggest_live` / `jev_hp_pressure_assist` / `jev_smith_assist` / `low_confidence_random`).
+- If Act1 clear/median regresses vs hang 4%/8 after n=100 → disable assists; keep soft 0.50 or fall back to random.

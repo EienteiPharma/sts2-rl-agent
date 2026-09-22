@@ -16,13 +16,18 @@ from sts2_env.eval.jev import (
     CONTENT_MAP_REF,
     DEFAULT_JEV_PHASES,
     EVENT_OPTIONS_EMPTY_REASON,
+    HP_PRESSURE_ASSIST_REASON,
     JEV_EVENT_OFF_REASON,
     JEV_NEOW_OFF_REASON,
     NEOW_EARLY_CARD_INSTRUCTIONS,
     NEOW_OPTIONS_EMPTY_REASON,
     PLUS_CARD_CRITERION,
     POTION_OR_RELIC_REASON,
+    REST_CHOICE_MIN_CONFIDENCE,
+    REST_HEAL_ASSIST_CONF,
+    REST_SMITH_ASSIST_CONF,
     SHOP_RANDOM_REASON,
+    SMITH_ASSIST_REASON,
     UNKNOWN_DEFER_CONF,
     UNKNOWN_DEFERRED_REASON,
     JevAnswer,
@@ -1005,8 +1010,96 @@ def test_build_options_rest_site_still_maps_rest_option():
     cands = build_rest_options(actions, lambda idx: int(mask[idx]) == 1)
     assert [c.key for c in cands] == ["rest_HEAL", "rest_SMITH"]
     assert cands[0].run_action == _REST_START
-    adapter = ScriptedJev([{"pick": {"choice": "rest_SMITH", "confidence": 0.9}}])
+    adapter = ScriptedJev(
+        [{"hp_pressure": {"score": 1.5}, "pick": {"choice": "rest_SMITH", "confidence": 0.9}}]
+    )
     action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
     assert action == _REST_START + 1
     assert log["shadow_status"] == "ok"
     assert CHOICE_CONFIDENCE_MIN == 0.65
+    assert REST_CHOICE_MIN_CONFIDENCE == 0.50
+
+
+def _rest_heal_smith_env():
+    actions = [
+        {
+            "action": "rest_option",
+            "option_id": "HEAL",
+            "label": "Rest",
+            "enabled": True,
+        },
+        {
+            "action": "rest_option",
+            "option_id": "SMITH",
+            "label": "Smith",
+            "enabled": True,
+        },
+    ]
+    env = _env(RunManager.PHASE_REST_SITE, actions)
+    mask = np.zeros(TOTAL_ACTIONS, dtype=np.int8)
+    mask[_REST_START] = 1
+    mask[_REST_START + 1] = 1
+    return env, mask
+
+
+def test_rest_soft_min_050_lands_and_049_does_not():
+    env, mask = _rest_heal_smith_env()
+    adapter = ScriptedJev(
+        [{"hp_pressure": {"score": 1.5}, "pick": {"choice": "rest_SMITH", "confidence": 0.50}}]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action == _REST_START + 1
+    assert log["shadow_status"] == "ok"
+    assert REST_CHOICE_MIN_CONFIDENCE == 0.50
+    env, mask = _rest_heal_smith_env()
+    adapter = ScriptedJev(
+        [{"hp_pressure": {"score": 1.5}, "pick": {"choice": "rest_SMITH", "confidence": 0.49}}]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert log["shadow_status"] == "uncertain"
+    assert mask[action] == 1
+    assert CHOICE_CONFIDENCE_MIN == 0.65
+
+
+def test_rest_heal_assist_after_hp_pressure_bias():
+    env, mask = _rest_heal_smith_env()
+    adapter = ScriptedJev(
+        [{"hp_pressure": {"score": 2.5}, "pick": {"choice": "rest_HEAL", "confidence": 0.30}}]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action == _REST_START
+    assert log["shadow_status"] == "ok"
+    assert log["shadow_fallback_reason"] == HP_PRESSURE_ASSIST_REASON
+    assert REST_HEAL_ASSIST_CONF == 0.30
+
+
+def test_rest_heal_assist_requires_conf_030():
+    env, mask = _rest_heal_smith_env()
+    adapter = ScriptedJev(
+        [{"hp_pressure": {"score": 2.5}, "pick": {"choice": "rest_HEAL", "confidence": 0.29}}]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert log["shadow_status"] == "uncertain"
+    assert log["shadow_fallback_reason"] != HP_PRESSURE_ASSIST_REASON
+    assert mask[action] == 1
+
+
+def test_rest_smith_assist_after_hp_pressure_bias():
+    env, mask = _rest_heal_smith_env()
+    adapter = ScriptedJev(
+        [{"hp_pressure": {"score": 0.5}, "pick": {"choice": "rest_SMITH", "confidence": 0.40}}]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action == _REST_START + 1
+    assert log["shadow_status"] == "ok"
+    assert log["shadow_fallback_reason"] == SMITH_ASSIST_REASON
+    assert REST_SMITH_ASSIST_CONF == 0.40
+
+
+def test_map_choice_threshold_stays_065():
+    env, mask = _map_env([("MONSTER", (0, 1)), ("ELITE", (1, 1))])
+    adapter = ScriptedJev([{"pick": {"choice": "map_1", "confidence": 0.64}}])
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert log["shadow_status"] == "uncertain"
+    assert CHOICE_CONFIDENCE_MIN == 0.65
+    assert mask[action] == 1

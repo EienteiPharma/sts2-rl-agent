@@ -17,6 +17,8 @@ from sts2_env.eval.jev import (
     DEFAULT_JEV_PHASES,
     EVENT_CHOICE_INSTRUCTIONS,
     EVENT_OPTIONS_EMPTY_REASON,
+    HP_PRESSURE_ASSIST_REASON,
+    HP_PRESSURE_CONTINUE,
     HP_PRESSURE_REST,
     HP_PRESSURE_SCORE_CRITERIA,
     JEV_EVENT_OFF_REASON,
@@ -28,7 +30,13 @@ from sts2_env.eval.jev import (
     NON_JEV_PHASE_REASON,
     PLUS_CARD_CRITERION,
     POTION_OR_RELIC_REASON,
+    REST_CHOICE_MIN_CONFIDENCE,
+    REST_HEAL_ASSIST_CONF,
+    REST_SITE_HP_PRESSURE_CRITERIA,
+    REST_SITE_INSTRUCTIONS,
+    REST_SMITH_ASSIST_CONF,
     SHOP_RANDOM_REASON,
+    SMITH_ASSIST_REASON,
     UNKNOWN_DEFER_CONF,
     UNKNOWN_DEFERRED_REASON,
     UNKNOWN_MAP_CRITERION,
@@ -727,6 +735,59 @@ def _hp_pressure_question() -> dict[str, Any]:
     }
 
 
+def _rest_site_hp_pressure_question() -> dict[str, Any]:
+    return {
+        "type": "score",
+        "instructions": (
+            "How urgently does the player need to heal at this rest site? "
+            "Use HP ratio and upcoming Act1 elite/boss pressure."
+        ),
+        "criteria": REST_SITE_HP_PRESSURE_CRITERIA,
+    }
+
+
+def _rest_is_heal(cand: Candidate) -> bool:
+    key = str(cand.key or "").upper()
+    if key.startswith("REST_CHOOSE") or key.startswith("REST_CONFIRM"):
+        return False
+    oid = str(cand.payload.get("option_id") or cand.key or "").upper()
+    if oid.startswith("REST_CHOOSE") or oid.startswith("REST_CONFIRM"):
+        return False
+    return oid.startswith("HEAL") or oid in {"REST", "HEAL"} or oid.startswith("REST_HEAL")
+
+
+def _rest_is_smith(cand: Candidate) -> bool:
+    key = str(cand.key or "").upper()
+    if key.startswith("REST_CHOOSE") or key.startswith("REST_CONFIRM"):
+        return False
+    oid = str(cand.payload.get("option_id") or cand.key or "").upper()
+    if oid.startswith("REST_CHOOSE") or oid.startswith("REST_CONFIRM"):
+        return False
+    return oid.startswith("SMITH") or oid.startswith("REST_SMITH")
+
+
+def _apply_hp_pressure_bias(
+    choice_key: str | None,
+    cands: list[Candidate],
+    hp_pressure: float | None,
+) -> str | None:
+    if hp_pressure is None or choice_key is None:
+        return choice_key
+    by_key = {c.key: c for c in cands}
+    if choice_key not in by_key:
+        return choice_key
+    heal_opts = [c for c in cands if _rest_is_heal(c)]
+    smith_opts = [c for c in cands if _rest_is_smith(c)]
+    picked = by_key[choice_key]
+    if hp_pressure >= HP_PRESSURE_REST and heal_opts:
+        if not _rest_is_heal(picked):
+            return heal_opts[0].key
+    if hp_pressure <= HP_PRESSURE_CONTINUE and smith_opts:
+        if _rest_is_heal(picked):
+            return smith_opts[0].key
+    return choice_key
+
+
 def _resolve_hp_pressure(
     pressure_ans: JevAnswer,
     mgr: RunManager,
@@ -948,6 +1009,8 @@ def _decide(
 ) -> tuple[int, JevAnswer]:
     if decision == DECISION_REST_OR_CONTINUE:
         return _decide_rest_or_continue(cands, state, adapter, mgr, rng)
+    if decision == DECISION_REST_SITE:
+        return _decide_rest_site(cands, state, adapter, mgr, rng)
     if decision == DECISION_CARD_REWARD:
         return _decide_card_reward(cands, state, adapter, rng)
     if decision in {DECISION_EVENT, DECISION_NEOW}:
@@ -1028,6 +1091,58 @@ def _decide_event(
         pick.fallback_reason = f"choice {pick.choice!r} not in legal candidates"
         return _legal_random_from(cands, rng), pick
     return chosen.run_action, pick
+
+
+def _decide_rest_site(
+    cands: list[Candidate],
+    state: dict[str, Any],
+    adapter: JevClient,
+    mgr: RunManager,
+    rng: np.random.RandomState,
+) -> tuple[int, JevAnswer]:
+    questions = {
+        "hp_pressure": _rest_site_hp_pressure_question(),
+        "pick": _choice_question(cands, REST_SITE_INSTRUCTIONS),
+    }
+    answers = adapter.system_one(state, questions)
+    pressure, _src = _resolve_hp_pressure(
+        answers.get("hp_pressure") or JevAnswer(status="error"), mgr
+    )
+    raw = answers.get("pick") or JevAnswer(status="error")
+    pick = apply_choice_confidence(raw, min_conf=REST_CHOICE_MIN_CONFIDENCE)
+    pick.score = pressure
+    biased_key = _apply_hp_pressure_bias(pick.choice or raw.choice, cands, pressure)
+    chosen = _lookup(cands, biased_key)
+    if chosen is None:
+        pick.status = "error"
+        pick.fallback_reason = f"choice {biased_key!r} not in legal candidates"
+        return _legal_random_from(cands, rng), pick
+    pick.choice = chosen.key
+    conf = pick.confidence if pick.confidence is not None else raw.confidence
+    if pick.status == "ok":
+        return chosen.run_action, pick
+    if (
+        pick.status == "uncertain"
+        and pressure is not None
+        and conf is not None
+    ):
+        if (
+            pressure >= HP_PRESSURE_REST
+            and _rest_is_heal(chosen)
+            and conf >= REST_HEAL_ASSIST_CONF
+        ):
+            pick.status = "ok"
+            pick.fallback_reason = HP_PRESSURE_ASSIST_REASON
+            return chosen.run_action, pick
+        if (
+            pressure <= HP_PRESSURE_CONTINUE
+            and _rest_is_smith(chosen)
+            and conf >= REST_SMITH_ASSIST_CONF
+        ):
+            pick.status = "ok"
+            pick.fallback_reason = SMITH_ASSIST_REASON
+            return chosen.run_action, pick
+    return _legal_random_from(cands, rng), pick
 
 
 def _decide_rest_or_continue(
@@ -1177,7 +1292,7 @@ def _instructions_for(decision: str) -> str:
     if decision == DECISION_CARD_REWARD:
         return base + NEOW_EARLY_CARD_INSTRUCTIONS
     if decision == DECISION_REST_SITE:
-        return base + "Choose a rest-site option (heal vs smith vs relic options)."
+        return REST_SITE_INSTRUCTIONS
     if decision == DECISION_EVENT:
         return EVENT_CHOICE_INSTRUCTIONS
     if decision == DECISION_NEOW:

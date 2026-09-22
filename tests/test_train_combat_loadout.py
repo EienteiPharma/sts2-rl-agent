@@ -120,13 +120,17 @@ def test_loadout_v1_materializes():
 
 
 def test_jev_noncombat_script_surface():
+    import sys
+
     path = Path(__file__).resolve().parents[1] / "scripts" / "jev_noncombat.py"
     spec = importlib.util.spec_from_file_location("jev_noncombat", path)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     assert mod.POTION_OR_RELIC_REASON == "potion_or_relic_reward_random"
     assert mod.CARD_FIT_ASSIST_REASON == "jev_card_fit_assist"
     assert mod.CHOICE_CONFIDENCE_MIN == 0.65
+    assert mod.REST_CHOICE_MIN_CONFIDENCE == 0.50
     assert "Neow+early" in mod.NEOW_EARLY_CARD_INSTRUCTIONS
     assert mod.is_potion_or_relic_reward([{"action": "pick_potion"}])
