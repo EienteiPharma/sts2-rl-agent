@@ -516,6 +516,28 @@ class TestActionMasksPerPhase:
                     return
         pytest.skip("No rest site encountered in tested seeds")
 
+    def test_rest_smith_pending_maps_choose_to_combat_slots(self, env):
+        env.reset(seed=200008)
+        env._mgr._enter_rest_site()
+        smith = next(
+            a
+            for a in env._mgr.get_available_actions()
+            if a.get("option_id") == "SMITH"
+        )
+        env._mgr.take_action(smith)
+        assert _get_phase(env) == RunManager.PHASE_REST_SITE
+        actions = env._mgr.get_available_actions()
+        choose_actions = [a for a in actions if a.get("action") == "choose"]
+        confirm = [a for a in actions if a.get("action") == "confirm_choice"]
+        assert not any(a.get("action") == "rest_option" for a in actions)
+        assert len(choose_actions) >= 10
+        mask = env.action_masks()
+        expected = len(choose_actions) + len(confirm)
+        assert int(np.sum(mask[_COMBAT_START: _COMBAT_START + _COMBAT_SIZE])) == expected
+        assert int(np.sum(mask[_REST_START: _REST_START + _REST_SIZE])) == 0
+        for i in range(len(choose_actions)):
+            assert mask[_COMBAT_START + 1 + i] == 1
+
     def test_shop_mask(self, env):
         """Force into SHOP phase and verify leave is always valid."""
         for seed in range(50):

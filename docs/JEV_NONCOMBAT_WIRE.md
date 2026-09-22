@@ -12,7 +12,7 @@ Eval: `scripts/eval_act1_runenv.py`.
 | Phase | Choice / Score | Notes |
 |-------|----------------|-------|
 | `MAP_CHOICE` | `map_fork` or `rest_or_continue` + `hp_pressure` | Strip `UNASSIGNED`. `UNKNOWN` is legal/visible. |
-| `REST_SITE` | rest-site Choice | heal / smith / relic options |
+| `REST_SITE` | rest-site Choice | heal / smith / relic options; pending `choose`/`confirm_choice` → combat slots (same as EVENT) |
 | `CARD_REWARD` | `card_reward` Choice + `card_fit` Score | potion/relic screens do **not** call CARD Jev (`potion_or_relic_reward_random`) |
 | `EVENT` | **off** | legal random, `jev_event_off_random` |
 | `SHOP` | **never** | legal random |
@@ -83,13 +83,6 @@ n=100 Leave-only was **pre** `import sts2_env.events` / package-rooted
 `CARDS_REFERENCE`. Surplus re-smokes after that fix.
 
 Neow is an opening boon, not a mid-act fixture.
-
-## REST follow-up (after EVENT smoke)
-
-n=100 REST land **0%** with 35× `no_jev_options_random` and empty
-`legal_ids` is a **separate** bug (empty rest legal_ids; code today may
-log `no_legal_visible_candidates`). Investigate **after** EVENT smoke.
-Do not retune Choice 0.65 or the combat zip in this knife.
 
 ## CLI
 

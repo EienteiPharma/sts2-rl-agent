@@ -225,15 +225,82 @@ def card_blurb(act: dict[str, Any]) -> str:
     return core + plus_note
 
 
-def build_options(
+def build_rest_options(
     actions: list[dict[str, Any]],
     legal_fn,
 ) -> list[Candidate]:
-    """True pick_card options: list-order → ``_CARD_RWD_START+i`` / extra.
+    """REST_SITE options: ``rest_option`` → ``_REST_START+i``; pending → combat slots.
+
+    Pending ``confirm_choice`` → ``_COMBAT_START``; ``choose`` index i →
+    ``_COMBAT_START+1+i`` (same as EVENT / ``run_env`` non-combat choice).
+    Keys are ``rest_confirm`` / ``rest_choose_{i}``.
+    """
+    cands: list[Candidate] = []
+    pending = any(a.get("action") in PENDING_CHOICE_ACTIONS for a in actions)
+    if pending:
+        if any(a.get("action") == "confirm_choice" for a in actions):
+            cands.append(
+                Candidate(
+                    key="rest_confirm",
+                    run_action=_COMBAT_START,
+                    description="Confirm current rest-site multi-select choice",
+                    legal=legal_fn(_COMBAT_START),
+                    kind="confirm",
+                    payload={"option_id": "confirm", "list_index": -1},
+                )
+            )
+        choose_actions = [a for a in actions if a.get("action") == "choose"]
+        for i, act in enumerate(choose_actions[: max(_COMBAT_SIZE - 1, 0)]):
+            idx = _COMBAT_START + 1 + i
+            label = str(act.get("label") or act.get("card_id") or i)
+            desc_txt = str(act.get("description") or "")
+            blurb = f"{label}: {desc_txt}".rstrip(": ")
+            cands.append(
+                Candidate(
+                    key=f"rest_choose_{i}",
+                    run_action=idx,
+                    description=blurb,
+                    legal=legal_fn(idx),
+                    kind="choose",
+                    payload={**dict(act), "list_index": i},
+                )
+            )
+        return cands
+
+    rest_actions = [a for a in actions if a.get("action") == "rest_option"]
+    for i, act in enumerate(rest_actions[:_REST_SIZE]):
+        idx = _REST_START + i
+        option_id = str(act.get("option_id", i))
+        enabled = bool(act.get("enabled", True))
+        cands.append(
+            Candidate(
+                key=f"rest_{option_id}",
+                run_action=idx,
+                description=f"Rest option {option_id}: {act.get('label', option_id)}",
+                legal=legal_fn(idx) and enabled,
+                visible=enabled,
+                kind="rest_option",
+                is_rest=option_id in {"HEAL", "heal", "Rest"},
+                payload=dict(act),
+            )
+        )
+    return cands
+
+
+def build_options(
+    actions: list[dict[str, Any]],
+    legal_fn,
+    *,
+    phase: str | None = None,
+) -> list[Candidate]:
+    """True pick_card options, or REST_SITE rest_option / pending combat slots.
 
     Skip is included only when ``action==skip``. Upgraded offers are labelled
-    as Smith/Neow, not natural Act1 drops.
+    as Smith/Neow, not natural Act1 drops. ``phase=REST_SITE`` maps pending
+    ``choose`` / ``confirm_choice`` to combat slots (same as EVENT).
     """
+    if phase == RunManager.PHASE_REST_SITE:
+        return build_rest_options(actions, legal_fn)
     cands: list[Candidate] = []
     pick_actions = [a for a in actions if a.get("action") == "pick_card"]
     for i, act in enumerate(pick_actions):
@@ -411,6 +478,9 @@ def collect_candidates(env: STS2RunEnv, mask: np.ndarray) -> list[Candidate]:
             actions, _legal, event_id=event_id, is_neow=is_neow
         )
 
+    if phase == RunManager.PHASE_REST_SITE:
+        return build_options(actions, _legal, phase=RunManager.PHASE_REST_SITE)
+
     if phase != RunManager.PHASE_COMBAT and any(
         a.get("action") in PENDING_CHOICE_ACTIONS for a in actions
     ):
@@ -464,25 +534,6 @@ def collect_candidates(env: STS2RunEnv, mask: np.ndarray) -> list[Candidate]:
         if is_potion_or_relic_reward(actions):
             return cands
         cands.extend(build_options(actions, _legal))
-        return cands
-
-    if phase == RunManager.PHASE_REST_SITE:
-        rest_actions = [a for a in actions if a.get("action") == "rest_option"]
-        for i, act in enumerate(rest_actions[:_REST_SIZE]):
-            idx = _REST_START + i
-            option_id = str(act.get("option_id", i))
-            cands.append(
-                Candidate(
-                    key=f"rest_{option_id}",
-                    run_action=idx,
-                    description=f"Rest option {option_id}: {act.get('label', option_id)}",
-                    legal=_legal(idx) and bool(act.get("enabled", True)),
-                    visible=bool(act.get("enabled", True)),
-                    kind="rest_option",
-                    is_rest=option_id in {"HEAL", "heal", "Rest"},
-                    payload=dict(act),
-                )
-            )
         return cands
 
     if phase == RunManager.PHASE_BOSS_RELIC:

@@ -4,9 +4,11 @@ Default ``JEV_PHASES`` is map, rest, card. EVENT joins only with
 ``--jev-event on`` (or ``--jev-phases`` listing ``event``). Shop stays
 legal random. MAP ``UNKNOWN`` keeps ``hp_pressure`` and may defer with
 reason ``unknown_deferred``. EVENT pending ``choose`` / ``confirm_choice``
-maps to combat slots via ``build_event_options``. EVENT / Neow call Choice
-only with ≥2 non-Leave options; else ``event_options_empty`` /
-``neow_options_empty`` (skipped, not land-rate).
+maps to combat slots via ``build_event_options``. REST pending
+``choose`` / ``confirm_choice`` maps to combat slots via
+``build_options(..., phase=REST_SITE)`` (``rest_choose_*``). EVENT / Neow
+call Choice only with ≥2 non-Leave options; else ``event_options_empty``
+/ ``neow_options_empty`` (skipped, not land-rate).
 
 Potion/relic screens share ``PHASE_CARD_REWARD`` with true ``pick_card``.
 Those screens must not call card_reward Jev (legal-random,
@@ -50,6 +52,7 @@ from sts2_env.eval.jev_policy import (
     SKIP_ACTIONS,
     build_event_options,
     build_options,
+    build_rest_options,
     card_blurb,
     choose_jev_noncombat,
     is_neow_or_boon_screen,
@@ -93,6 +96,7 @@ __all__ = [
     "UNKNOWN_MAP_CRITERION",
     "build_event_options",
     "build_options",
+    "build_rest_options",
     "card_blurb",
     "choose_jev_noncombat",
     "is_neow_or_boon_screen",

@@ -36,6 +36,8 @@ from sts2_env.eval.jev import (
 from sts2_env.eval.jev_policy import (
     JevPolicyFlags,
     build_event_options,
+    build_options,
+    build_rest_options,
     classify_decision,
     choose_jev_noncombat,
     collect_candidates,
@@ -44,12 +46,14 @@ from sts2_env.eval.jev_policy import (
     strip_illegal_invisible,
 )
 from sts2_env.gym_env.run_env import (
+    STS2RunEnv,
     TOTAL_ACTIONS,
     _CARD_RWD_EXTRA_START,
     _CARD_RWD_START,
     _COMBAT_START,
     _EVENT_START,
     _MAP_START,
+    _REST_START,
     _SHOP_START,
 )
 from sts2_env.run.run_manager import RunManager
@@ -920,3 +924,89 @@ def test_resolve_jev_flags_default_event_off():
     neow_off = resolve_jev_flags(jev_event="on", jev_neow="off")
     assert neow_off.allows_event() is True
     assert neow_off.allows_neow() is False
+
+
+def _rest_pending_mask(n_choose, *, confirm=False):
+    mask = np.zeros(TOTAL_ACTIONS, dtype=np.int8)
+    if confirm:
+        mask[_COMBAT_START] = 1
+    for i in range(n_choose):
+        mask[_COMBAT_START + 1 + i] = 1
+    return mask
+
+
+def test_build_options_rest_site_maps_pending_choose_to_combat_slots():
+    n = 14
+    actions = [{"action": "confirm_choice", "prompt": "Choose a card to upgrade"}] + [
+        {"action": "choose", "index": i, "card_id": f"CARD_{i}"}
+        for i in range(n)
+    ]
+    env = _env(RunManager.PHASE_REST_SITE, actions)
+    mask = _rest_pending_mask(n, confirm=True)
+    cands = build_options(
+        actions, lambda idx: int(mask[idx]) == 1, phase=RunManager.PHASE_REST_SITE
+    )
+    keys = [c.key for c in cands]
+    assert keys[0] == "rest_confirm"
+    assert keys[1:] == [f"rest_choose_{i}" for i in range(n)]
+    assert len([k for k in keys if k.startswith("rest_choose_")]) == n
+    assert cands[0].run_action == _COMBAT_START
+    assert cands[1].run_action == _COMBAT_START + 1
+    assert cands[-1].run_action == _COMBAT_START + n
+    assert all(c.legal for c in cands)
+    kept = strip_illegal_invisible(collect_candidates(env, mask))
+    assert [c.key for c in kept] == keys
+    adapter = ScriptedJev([{"pick": {"choice": "rest_choose_3", "confidence": 0.9}}])
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert adapter.calls, "REST pending must call Jev, not empty legal_ids"
+    assert action == _COMBAT_START + 1 + 3
+    assert log["shadow_status"] == "ok"
+    assert log["shadow_decision"] == "rest_site"
+    assert log["legal_ids"] == keys
+    assert CHOICE_CONFIDENCE_MIN == 0.65
+
+
+def test_rest_smith_pending_live_rest_choose_keys():
+    env = STS2RunEnv(character_id="Ironclad")
+    env.reset(seed=200008)
+    env._mgr._enter_rest_site()
+    smith = next(
+        a for a in env._mgr.get_available_actions() if a.get("option_id") == "SMITH"
+    )
+    env._mgr.take_action(smith)
+    mask = env.action_masks()
+    kept = strip_illegal_invisible(collect_candidates(env, mask))
+    assert kept, "Smith pending must not yield empty legal_ids"
+    assert all(c.key.startswith("rest_choose_") for c in kept)
+    assert all(mask[c.run_action] == 1 for c in kept)
+    assert len(kept) >= 10
+    env.close()
+
+
+def test_build_options_rest_site_still_maps_rest_option():
+    actions = [
+        {
+            "action": "rest_option",
+            "option_id": "HEAL",
+            "label": "Rest",
+            "enabled": True,
+        },
+        {
+            "action": "rest_option",
+            "option_id": "SMITH",
+            "label": "Smith",
+            "enabled": True,
+        },
+    ]
+    env = _env(RunManager.PHASE_REST_SITE, actions)
+    mask = np.zeros(TOTAL_ACTIONS, dtype=np.int8)
+    mask[_REST_START] = 1
+    mask[_REST_START + 1] = 1
+    cands = build_rest_options(actions, lambda idx: int(mask[idx]) == 1)
+    assert [c.key for c in cands] == ["rest_HEAL", "rest_SMITH"]
+    assert cands[0].run_action == _REST_START
+    adapter = ScriptedJev([{"pick": {"choice": "rest_SMITH", "confidence": 0.9}}])
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action == _REST_START + 1
+    assert log["shadow_status"] == "ok"
+    assert CHOICE_CONFIDENCE_MIN == 0.65
