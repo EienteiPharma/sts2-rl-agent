@@ -263,16 +263,58 @@ def test_cli_jev_default_off_and_strategic_alias():
     off = eval_mod.parse_args(["--policy", "hierarchical", "--combat-model", "c.zip"])
     eval_mod.validate_policy_args(off)
     assert off.jev == "off"
+    assert off.jev_event == "off"
+    assert off.jev_phases == "map,rest,card"
+    assert off.jev_neow is None
+    assert off.jev_flags.allows_event() is False
     on = eval_mod.parse_args(
         ["--policy", "hierarchical", "--combat-model", "c.zip", "--jev", "on"]
     )
     eval_mod.validate_policy_args(on)
     assert on.jev == "on"
+    assert on.jev_event == "off"
+    assert on.jev_flags.allows_event() is False
     alias = eval_mod.parse_args(
         ["--policy", "hierarchical", "--combat-model", "c.zip", "--strategic", "jev"]
     )
     eval_mod.validate_policy_args(alias)
     assert alias.jev == "on"
+
+
+def test_cli_jev_event_on_and_phases():
+    args = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--jev",
+            "on",
+            "--jev-event",
+            "on",
+        ]
+    )
+    eval_mod.validate_policy_args(args)
+    assert args.jev_event == "on"
+    assert args.jev_flags.allows_event() is True
+    assert args.jev_flags.allows_neow() is True
+    via = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--jev",
+            "on",
+            "--jev-phases",
+            "map,rest,card,event",
+            "--jev-neow",
+            "off",
+        ]
+    )
+    eval_mod.validate_policy_args(via)
+    assert via.jev_flags.allows_event() is True
+    assert via.jev_flags.allows_neow() is False
 
 
 def test_cli_jev_on_requires_hierarchical():

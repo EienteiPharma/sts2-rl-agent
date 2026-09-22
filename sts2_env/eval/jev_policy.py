@@ -11,11 +11,25 @@ from sts2_env.eval.jev import (
     CARD_FIT_ASSIST_MIN,
     CARD_FIT_ASSIST_REASON,
     CARD_FIT_SCORE_CRITERIA,
+    CHOICE_EVENT,
+    CHOICE_NEOW_BOON,
     CONTENT_MAP_REF,
+    DEFAULT_JEV_PHASES,
+    EVENT_CHOICE_INSTRUCTIONS,
+    HP_PRESSURE_REST,
     HP_PRESSURE_SCORE_CRITERIA,
+    JEV_EVENT_OFF_REASON,
+    JEV_NEOW_OFF_REASON,
+    JEV_PHASE_TOKENS,
+    NEOW_BOON_INSTRUCTIONS,
     NEOW_EARLY_CARD_INSTRUCTIONS,
+    NON_JEV_PHASE_REASON,
     PLUS_CARD_CRITERION,
     POTION_OR_RELIC_REASON,
+    SHOP_RANDOM_REASON,
+    UNKNOWN_DEFER_CONF,
+    UNKNOWN_DEFERRED_REASON,
+    UNKNOWN_MAP_CRITERION,
     JevAnswer,
     JevClient,
     JevError,
@@ -42,7 +56,7 @@ from sts2_env.gym_env.run_env import (
     _SHOP_START,
     _TREASURE_START,
 )
-from sts2_env.run.run_manager import RunManager
+from sts2_env.run.run_manager import NEOW_EVENT_ID, RunManager
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +65,72 @@ DECISION_REST_OR_CONTINUE = "rest_or_continue"
 DECISION_CARD_REWARD = "card_reward"
 DECISION_POTION_OR_RELIC = "potion_or_relic_reward"
 DECISION_REST_SITE = "rest_site"
+DECISION_EVENT = "event_choice"
+DECISION_NEOW = "neow_boon"
+DECISION_SHOP = "shop"
 DECISION_SIMILAR = "similar"
 DECISION_NONE = "none"
 
 REST_POINT_TYPES = frozenset({"REST_SITE", "RestSite", "restsite"})
+UNKNOWN_POINT_TYPES = frozenset({"UNKNOWN", "Unknown", "unknown"})
 POTION_OR_RELIC_ACTIONS = frozenset({"pick_potion", "pick_relic_reward"})
 SKIP_ACTIONS = frozenset({"skip"})
+PENDING_CHOICE_ACTIONS = frozenset({"choose", "confirm_choice"})
+
+
+@dataclass(frozen=True)
+class JevPolicyFlags:
+    """Which non-combat phases call Jev. Default preserves MAP/REST/CARD tables."""
+
+    phases: frozenset[str] = DEFAULT_JEV_PHASES
+    event: bool = False
+    neow: bool | None = None
+
+    def resolved_phases(self) -> frozenset[str]:
+        phases = set(self.phases)
+        if self.event:
+            phases.add("event")
+        return frozenset(phases)
+
+    def allows_event(self) -> bool:
+        return "event" in self.resolved_phases()
+
+    def allows_neow(self) -> bool:
+        if self.neow is None:
+            return self.allows_event()
+        return bool(self.neow)
+
+
+DEFAULT_JEV_FLAGS = JevPolicyFlags()
+
+
+def parse_jev_phases(text: str | None) -> frozenset[str]:
+    raw = (text or "").strip()
+    if not raw:
+        return DEFAULT_JEV_PHASES
+    parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    bad = [p for p in parts if p not in JEV_PHASE_TOKENS]
+    if bad:
+        raise SystemExit(f"unknown --jev-phases token(s): {bad}; expected {sorted(JEV_PHASE_TOKENS)}")
+    return frozenset(parts)
+
+
+def resolve_jev_flags(
+    *,
+    jev_event: str = "off",
+    jev_phases: str | None = None,
+    jev_neow: str | None = None,
+) -> JevPolicyFlags:
+    phases = parse_jev_phases(jev_phases)
+    event = jev_event == "on" or "event" in phases
+    if event:
+        phases = phases | {"event"}
+    neow: bool | None
+    if jev_neow is None:
+        neow = None
+    else:
+        neow = jev_neow == "on"
+    return JevPolicyFlags(phases=phases, event=event, neow=neow)
 
 
 @dataclass
@@ -69,6 +143,7 @@ class Candidate:
     kind: str = ""
     upgraded: bool = False
     is_rest: bool = False
+    is_unknown: bool = False
     payload: dict[str, Any] = field(default_factory=dict)
 
 
@@ -202,6 +277,120 @@ def build_options(
     return cands
 
 
+def _event_id_from_mgr(mgr: Any) -> str:
+    event = getattr(mgr, "_event_model", None)
+    if event is None:
+        return ""
+    return str(getattr(event, "event_id", "") or "")
+
+
+def is_neow_or_boon_screen(event_id: str, actions: list[dict[str, Any]] | None = None) -> bool:
+    """True when the EVENT screen is Neow / a boon. Silent skip otherwise."""
+    eid = str(event_id or "")
+    if eid == NEOW_EVENT_ID or eid.lower() == "neow":
+        return True
+    tokens = [eid]
+    for act in actions or []:
+        for key in ("event_id", "option_id", "label", "id"):
+            val = act.get(key)
+            if val:
+                tokens.append(str(val))
+    blob = " ".join(tokens).lower()
+    return "neow" in blob or "boon" in blob
+
+
+def build_event_options(
+    actions: list[dict[str, Any]],
+    legal_fn,
+    *,
+    event_id: str = "",
+    is_neow: bool = False,
+) -> list[Candidate]:
+    """EVENT options: ``event_choice`` → ``_EVENT_START+i``; pending → combat slots.
+
+    Pending ``confirm_choice`` → ``_COMBAT_START``; ``choose`` index i →
+    ``_COMBAT_START+1+i`` (same as ``run_env._step_event``). ``enabled=False``
+    options are not built.
+    """
+    cands: list[Candidate] = []
+    pending = any(a.get("action") in PENDING_CHOICE_ACTIONS for a in actions)
+    if pending:
+        if any(a.get("action") == "confirm_choice" for a in actions):
+            cands.append(
+                Candidate(
+                    key="confirm",
+                    run_action=_COMBAT_START,
+                    description="Confirm current event multi-select choice",
+                    legal=legal_fn(_COMBAT_START),
+                    kind="confirm",
+                    payload={
+                        "event_id": event_id,
+                        "option_id": "confirm",
+                        "list_index": -1,
+                        "is_neow": is_neow,
+                    },
+                )
+            )
+        choose_actions = [a for a in actions if a.get("action") == "choose"]
+        for i, act in enumerate(choose_actions[: max(_COMBAT_SIZE - 1, 0)]):
+            idx = _COMBAT_START + 1 + i
+            label = str(act.get("label") or act.get("card_id") or i)
+            desc_txt = str(act.get("description") or "")
+            option_id = act.get("option_id")
+            key = str(option_id) if option_id not in (None, "") else f"event_{i}_{label}"
+            blurb = f"{label}: {desc_txt}".rstrip(": ")
+            cands.append(
+                Candidate(
+                    key=key,
+                    run_action=idx,
+                    description=blurb,
+                    legal=legal_fn(idx),
+                    kind="choose",
+                    payload={
+                        **dict(act),
+                        "event_id": event_id,
+                        "option_id": option_id or key,
+                        "list_index": i,
+                        "is_neow": is_neow,
+                    },
+                )
+            )
+        return cands
+
+    event_actions = [
+        a
+        for a in actions
+        if a.get("action") == "event_choice" and a.get("enabled") is not False
+    ]
+    for i, act in enumerate(event_actions[:_EVENT_SIZE]):
+        if act.get("enabled") is False:
+            continue
+        idx = _EVENT_START + i
+        label = str(act.get("label") or act.get("option_id") or i)
+        desc_txt = str(act.get("description") or "")
+        option_id = act.get("option_id")
+        key = str(option_id) if option_id not in (None, "") else f"event_{i}_{label}"
+        enabled = bool(act.get("enabled", True))
+        cands.append(
+            Candidate(
+                key=key,
+                run_action=idx,
+                description=f"{label}: {desc_txt}".rstrip(": "),
+                legal=legal_fn(idx) and enabled,
+                visible=enabled,
+                kind="event",
+                payload={
+                    **dict(act),
+                    "event_id": event_id,
+                    "option_id": option_id or key,
+                    "list_index": i,
+                    "is_neow": is_neow,
+                },
+            )
+        )
+    return cands
+
+
 def collect_candidates(env: STS2RunEnv, mask: np.ndarray) -> list[Candidate]:
     """Pair RunEnv legal mask slots with RunManager actions. Invisible/illegal stay marked."""
     mgr = _mgr(env)
@@ -213,8 +402,15 @@ def collect_candidates(env: STS2RunEnv, mask: np.ndarray) -> list[Candidate]:
     def _legal(idx: int) -> bool:
         return 0 <= idx < len(mask) and int(mask[idx]) == 1
 
+    if phase == RunManager.PHASE_EVENT:
+        event_id = _event_id_from_mgr(mgr)
+        is_neow = is_neow_or_boon_screen(event_id, actions)
+        return build_event_options(
+            actions, _legal, event_id=event_id, is_neow=is_neow
+        )
+
     if phase != RunManager.PHASE_COMBAT and any(
-        a.get("action") in {"choose", "confirm_choice"} for a in actions
+        a.get("action") in PENDING_CHOICE_ACTIONS for a in actions
     ):
         if any(a.get("action") == "confirm_choice" for a in actions):
             cands.append(
@@ -256,6 +452,7 @@ def collect_candidates(env: STS2RunEnv, mask: np.ndarray) -> list[Candidate]:
                     visible=visible,
                     kind="map",
                     is_rest=point_type in REST_POINT_TYPES,
+                    is_unknown=point_type in UNKNOWN_POINT_TYPES,
                     payload=dict(act),
                 )
             )
@@ -328,24 +525,6 @@ def collect_candidates(env: STS2RunEnv, mask: np.ndarray) -> list[Candidate]:
             )
         return cands
 
-    if phase == RunManager.PHASE_EVENT:
-        event_actions = [a for a in actions if a.get("action") == "event_choice"]
-        for i, act in enumerate(event_actions[:_EVENT_SIZE]):
-            idx = _EVENT_START + i
-            enabled = bool(act.get("enabled", True))
-            cands.append(
-                Candidate(
-                    key=f"event_{act.get('option_id', i)}",
-                    run_action=idx,
-                    description=f"Event {act.get('label', act.get('option_id', i))}",
-                    legal=_legal(idx) and enabled,
-                    visible=enabled,
-                    kind="event",
-                    payload=dict(act),
-                )
-            )
-        return cands
-
     if phase == RunManager.PHASE_TREASURE:
         cands.append(
             Candidate(
@@ -378,15 +557,36 @@ def classify_decision(phase: str, cands: list[Candidate]) -> str:
         return DECISION_CARD_REWARD
     if phase == RunManager.PHASE_REST_SITE:
         return DECISION_REST_SITE
+    if phase == RunManager.PHASE_EVENT:
+        return DECISION_EVENT
+    if phase == RunManager.PHASE_SHOP:
+        return DECISION_SHOP
     if phase in {
-        RunManager.PHASE_EVENT,
-        RunManager.PHASE_SHOP,
         RunManager.PHASE_BOSS_RELIC,
+        RunManager.PHASE_TREASURE,
     }:
         return DECISION_SIMILAR
     if cands:
         return DECISION_SIMILAR
     return DECISION_NONE
+
+
+def _jev_phase_token(phase: str) -> str | None:
+    if phase == RunManager.PHASE_MAP_CHOICE:
+        return "map"
+    if phase == RunManager.PHASE_REST_SITE:
+        return "rest"
+    if phase == RunManager.PHASE_CARD_REWARD:
+        return "card"
+    if phase == RunManager.PHASE_EVENT:
+        return "event"
+    return None
+
+
+def _is_unknown_node(cand: Candidate) -> bool:
+    if cand.is_unknown:
+        return True
+    return str(cand.payload.get("point_type", "")).upper() == "UNKNOWN"
 
 
 def _run_state_blob(mgr: RunManager) -> dict[str, Any]:
@@ -412,6 +612,8 @@ def _choice_question(cands: list[Candidate], instructions: str) -> dict[str, Any
         desc = c.description
         if c.upgraded:
             desc = f"{desc}. {PLUS_CARD_CRITERION}"
+        if _is_unknown_node(c):
+            desc = f"{desc}. {UNKNOWN_MAP_CRITERION}"
         criteria[c.key] = desc
     return {
         "type": "choice",
@@ -436,17 +638,103 @@ def _legal_random_from(cands: list[Candidate], rng: np.random.RandomState) -> in
     return pick.run_action
 
 
+def _hp_pressure_question() -> dict[str, Any]:
+    return {
+        "type": "score",
+        "instructions": (
+            "Score current HP pressure for an Act1 map fork. "
+            f"Reference {CONTENT_MAP_REF}. Higher means rest is more urgent."
+        ),
+        "criteria": HP_PRESSURE_SCORE_CRITERIA,
+    }
+
+
+def _resolve_hp_pressure(
+    pressure_ans: JevAnswer,
+    mgr: RunManager,
+) -> tuple[float, str]:
+    hp = int(mgr.run_state.player.current_hp)
+    max_hp = int(mgr.run_state.player.max_hp)
+    if pressure_ans.status == "ok" and pressure_ans.score is not None:
+        return float(pressure_ans.score), "jev_score"
+    return local_hp_pressure(hp, max_hp), "local_fallback"
+
+
+def _maybe_defer_unknown(
+    cands: list[Candidate],
+    chosen: Candidate,
+    pick: JevAnswer,
+    pressure: float,
+    rng: np.random.RandomState,
+) -> tuple[int, JevAnswer] | None:
+    """Defer Unknown when HP is high-pressure and Choice is shy of 0.80."""
+    if not _is_unknown_node(chosen):
+        return None
+    if pick.status != "ok":
+        return None
+    conf = pick.confidence
+    if conf is None or conf >= UNKNOWN_DEFER_CONF:
+        return None
+    if pressure < HP_PRESSURE_REST:
+        return None
+    non_unknown = [c for c in cands if not _is_unknown_node(c)]
+    if not non_unknown:
+        return None
+    action = _legal_random_from(non_unknown, rng)
+    pick.status = "uncertain"
+    pick.fallback_reason = UNKNOWN_DEFERRED_REASON
+    logger.warning(
+        "Jev unknown_deferred hp_pressure=%s conf=%s from=%s action=%s",
+        pressure,
+        conf,
+        chosen.key,
+        action,
+    )
+    return action, pick
+
+
+def _augment_log(
+    log: dict[str, Any],
+    *,
+    decision: str,
+    cands: list[Candidate],
+    action: int,
+    choice_id: str | None = None,
+    event_id: str | None = None,
+    is_neow: bool | None = None,
+    phase: str | None = None,
+) -> dict[str, Any]:
+    log["shadow_decision"] = decision
+    log["legal_ids"] = [c.key for c in cands]
+    executed = next((c.key for c in cands if c.run_action == action), None)
+    log["executed_id"] = executed
+    if log.get("shadow_confidence") is not None:
+        log["jev_confidence"] = log["shadow_confidence"]
+    if choice_id:
+        log["jev_choice_id"] = choice_id
+    if event_id is not None:
+        log["event_id"] = event_id
+    if is_neow is not None:
+        log["is_neow"] = is_neow
+    if phase:
+        log["phase"] = phase
+    return log
+
+
 def choose_jev_noncombat(
     env: STS2RunEnv,
     mask: np.ndarray,
     rng: np.random.RandomState,
     adapter: JevClient,
+    flags: JevPolicyFlags | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Pick a legal non-combat RunEnv action via Jev, or random on fallback.
 
     Errors are logged on the returned shadow fields (status=error) and the
     action falls back to legal random. The decision point is never skipped.
+    Default flags keep EVENT off so MAP/REST/CARD tables stay comparable.
     """
+    flags = flags or DEFAULT_JEV_FLAGS
     mgr = _mgr(env)
     actions = mgr.get_available_actions()
     if mgr.phase == RunManager.PHASE_CARD_REWARD and is_potion_or_relic_reward(actions):
@@ -472,12 +760,55 @@ def choose_jev_noncombat(
         return action, log
 
     decision = classify_decision(mgr.phase, cands)
+    event_id = _event_id_from_mgr(mgr) if mgr.phase == RunManager.PHASE_EVENT else ""
+    is_neow = (
+        mgr.phase == RunManager.PHASE_EVENT
+        and is_neow_or_boon_screen(event_id, actions)
+    )
+    if is_neow:
+        decision = DECISION_NEOW
     state = _run_state_blob(mgr)
     state["decision"] = decision
+    state["event_id"] = event_id
+    state["is_neow"] = is_neow
     state["candidates"] = [
-        {"key": c.key, "description": c.description, "upgraded": c.upgraded, "is_rest": c.is_rest}
+        {
+            "key": c.key,
+            "description": c.description,
+            "upgraded": c.upgraded,
+            "is_rest": c.is_rest,
+            "is_unknown": _is_unknown_node(c),
+        }
         for c in cands
     ]
+
+    phase_token = _jev_phase_token(mgr.phase)
+    allowed = flags.resolved_phases()
+    skip_reason: str | None = None
+    if decision == DECISION_SHOP or mgr.phase == RunManager.PHASE_SHOP:
+        skip_reason = SHOP_RANDOM_REASON
+    elif phase_token == "event" and not flags.allows_event():
+        skip_reason = JEV_EVENT_OFF_REASON
+    elif is_neow and not flags.allows_neow():
+        skip_reason = JEV_NEOW_OFF_REASON
+    elif phase_token is None or phase_token not in allowed:
+        skip_reason = NON_JEV_PHASE_REASON
+
+    if skip_reason is not None:
+        action = _legal_random_from(cands, rng)
+        log = JevAnswer(status="skipped", fallback_reason=skip_reason).as_log()
+        log_phase = None
+        if phase_token == "event":
+            log_phase = "NEOW" if is_neow else "EVENT"
+        return action, _augment_log(
+            log,
+            decision=decision,
+            cands=cands,
+            action=action,
+            event_id=event_id or None,
+            is_neow=is_neow if mgr.phase == RunManager.PHASE_EVENT else None,
+            phase=log_phase,
+        )
 
     try:
         action, answer = _decide(decision, cands, state, adapter, mgr, rng)
@@ -486,7 +817,24 @@ def choose_jev_noncombat(
         action = _legal_random_from(cands, rng)
         answer = JevAnswer(status="error", fallback_reason=str(e))
     log = answer.as_log()
-    log["shadow_decision"] = decision
+    choice_id = None
+    log_phase = None
+    if decision == DECISION_EVENT:
+        choice_id = CHOICE_EVENT
+        log_phase = "EVENT"
+    elif decision == DECISION_NEOW:
+        choice_id = CHOICE_NEOW_BOON
+        log_phase = "NEOW"
+    log = _augment_log(
+        log,
+        decision=decision,
+        cands=cands,
+        action=action,
+        choice_id=choice_id,
+        event_id=event_id or None,
+        is_neow=is_neow if mgr.phase == RunManager.PHASE_EVENT else None,
+        phase=log_phase,
+    )
     if answer.status == "error":
         logger.error(
             "Jev %s status=error fallback=%s; action=%s",
@@ -516,6 +864,10 @@ def _decide(
         return _decide_rest_or_continue(cands, state, adapter, mgr, rng)
     if decision == DECISION_CARD_REWARD:
         return _decide_card_reward(cands, state, adapter, rng)
+    if decision in {DECISION_EVENT, DECISION_NEOW}:
+        return _decide_event(decision, cands, state, adapter, rng)
+    if decision == DECISION_MAP_FORK and any(_is_unknown_node(c) for c in cands):
+        return _decide_map_fork_unknown(cands, state, adapter, mgr, rng)
     instructions = _instructions_for(decision)
     questions = {
         "pick": _choice_question(
@@ -525,6 +877,63 @@ def _decide(
     }
     answers = adapter.system_one(state, questions)
     pick = apply_choice_confidence(answers.get("pick") or JevAnswer(status="error"))
+    if pick.status != "ok":
+        return _legal_random_from(cands, rng), pick
+    chosen = _lookup(cands, pick.choice)
+    if chosen is None:
+        pick.status = "error"
+        pick.fallback_reason = f"choice {pick.choice!r} not in legal candidates"
+        return _legal_random_from(cands, rng), pick
+    return chosen.run_action, pick
+
+
+def _decide_map_fork_unknown(
+    cands: list[Candidate],
+    state: dict[str, Any],
+    adapter: JevClient,
+    mgr: RunManager,
+    rng: np.random.RandomState,
+) -> tuple[int, JevAnswer]:
+    questions = {
+        "hp_pressure": _hp_pressure_question(),
+        "pick": _choice_question(
+            cands,
+            _instructions_for(DECISION_MAP_FORK) + " " + UNKNOWN_MAP_CRITERION,
+        ),
+    }
+    answers = adapter.system_one(state, questions)
+    pressure, _src = _resolve_hp_pressure(
+        answers.get("hp_pressure") or JevAnswer(status="error"), mgr
+    )
+    pick = apply_choice_confidence(answers.get("pick") or JevAnswer(status="error"))
+    pick.score = pressure
+    if pick.status != "ok":
+        return _legal_random_from(cands, rng), pick
+    chosen = _lookup(cands, pick.choice)
+    if chosen is None:
+        pick.status = "error"
+        pick.fallback_reason = f"choice {pick.choice!r} not in legal candidates"
+        return _legal_random_from(cands, rng), pick
+    deferred = _maybe_defer_unknown(cands, chosen, pick, pressure, rng)
+    if deferred is not None:
+        return deferred
+    return chosen.run_action, pick
+
+
+def _decide_event(
+    decision: str,
+    cands: list[Candidate],
+    state: dict[str, Any],
+    adapter: JevClient,
+    rng: np.random.RandomState,
+) -> tuple[int, JevAnswer]:
+    qname = CHOICE_NEOW_BOON if decision == DECISION_NEOW else CHOICE_EVENT
+    instructions = (
+        NEOW_BOON_INSTRUCTIONS if qname == CHOICE_NEOW_BOON else EVENT_CHOICE_INSTRUCTIONS
+    )
+    questions = {qname: _choice_question(cands, instructions)}
+    answers = adapter.system_one(state, questions)
+    pick = apply_choice_confidence(answers.get(qname) or JevAnswer(status="error"))
     if pick.status != "ok":
         return _legal_random_from(cands, rng), pick
     chosen = _lookup(cands, pick.choice)
@@ -545,37 +954,24 @@ def _decide_rest_or_continue(
     rest_cands = [c for c in cands if c.is_rest]
     continue_cands = [c for c in cands if not c.is_rest]
     questions = {
-        "hp_pressure": {
-            "type": "score",
-            "instructions": (
-                "Score current HP pressure for an Act1 map fork. "
-                f"Reference {CONTENT_MAP_REF}. Higher means rest is more urgent."
-            ),
-            "criteria": HP_PRESSURE_SCORE_CRITERIA,
-        },
+        "hp_pressure": _hp_pressure_question(),
         "pick": _choice_question(
             cands,
             (
                 "Choose the next Act1 map node (rest vs continue). "
                 f"See {CONTENT_MAP_REF}."
+                + (
+                    " " + UNKNOWN_MAP_CRITERION
+                    if any(_is_unknown_node(c) for c in cands)
+                    else ""
+                )
             ),
         ),
     }
     answers = adapter.system_one(state, questions)
     pressure_ans = answers.get("hp_pressure") or JevAnswer(status="error")
     pick = apply_choice_confidence(answers.get("pick") or JevAnswer(status="error"))
-
-    hp = int(mgr.run_state.player.current_hp)
-    max_hp = int(mgr.run_state.player.max_hp)
-    if pressure_ans.status == "ok" and pressure_ans.score is not None:
-        pressure = float(pressure_ans.score)
-        pressure_source = "jev_score"
-    else:
-        pressure = local_hp_pressure(hp, max_hp)
-        pressure_source = "local_fallback"
-        if pressure_ans.status != "ok":
-            # Score failed: still decide; log on the pick answer.
-            pass
+    pressure, pressure_source = _resolve_hp_pressure(pressure_ans, mgr)
 
     override = rest_or_continue_override(pressure)
     merged = pick
@@ -607,6 +1003,11 @@ def _decide_rest_or_continue(
                 cont_pick.fallback_reason = (
                     f"hp_pressure {pressure:.2f} <= 1.0 prefer continue ({pressure_source})"
                 )
+                deferred = _maybe_defer_unknown(
+                    continue_cands, chosen, cont_pick, pressure, rng
+                )
+                if deferred is not None:
+                    return deferred
                 return chosen.run_action, cont_pick
         action = _legal_random_from(continue_cands, rng)
         cont_pick.status = cont_pick.status if cont_pick.status != "ok" else "error"
@@ -624,6 +1025,9 @@ def _decide_rest_or_continue(
         pick.fallback_reason = f"choice {pick.choice!r} not in legal candidates"
         return _legal_random_from(cands, rng), pick
     pick.score = pressure
+    deferred = _maybe_defer_unknown(cands, chosen, pick, pressure, rng)
+    if deferred is not None:
+        return deferred
     return chosen.run_action, pick
 
 
@@ -688,4 +1092,8 @@ def _instructions_for(decision: str) -> str:
         return base + NEOW_EARLY_CARD_INSTRUCTIONS
     if decision == DECISION_REST_SITE:
         return base + "Choose a rest-site option (heal vs smith vs relic options)."
+    if decision == DECISION_EVENT:
+        return EVENT_CHOICE_INSTRUCTIONS
+    if decision == DECISION_NEOW:
+        return NEOW_BOON_INSTRUCTIONS
     return base + "Choose among legal visible options at this decision point."

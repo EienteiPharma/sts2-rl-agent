@@ -178,7 +178,11 @@ python scripts/eval_act1_runenv.py --policy model --model path/to/run_model.zip
 python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev off --out /workspace/sts2-sim/evals/act1_runenv_hierarchical_s200000.json
 
 # Same combat zip; TypeSafe/Jev Choice for non-combat (`TYPESAFE_API_KEY`).
+# EVENT stays off (default) so MAP/REST/CARD tables stay comparable.
 python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on
+
+# Optional EVENT (+ Neow) Choice; shop still random. See docs/JEV_NONCOMBAT_WIRE.md
+python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on --jev-event on
 ```
 
 Combat obs is 181 (obs_v1, full `IntentType` one-hot). RunEnv obs is 201. `--policy hierarchical --model` is the combat zip; `--policy model --model` is the RunEnv zip. Never feed RunEnv obs into the combat model. Hierarchical + Jev is **not** an Act1-clear gate. See [docs/act1_runenv_eval_protocol.md](docs/act1_runenv_eval_protocol.md) and [docs/act1_content_map.md](docs/act1_content_map.md).

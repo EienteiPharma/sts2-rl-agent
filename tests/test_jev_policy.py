@@ -11,10 +11,18 @@ from sts2_env.eval.jev import (
     CARD_FIT_ASSIST_MIN,
     CARD_FIT_ASSIST_REASON,
     CHOICE_CONFIDENCE_MIN,
+    CHOICE_EVENT,
+    CHOICE_NEOW_BOON,
     CONTENT_MAP_REF,
+    DEFAULT_JEV_PHASES,
+    JEV_EVENT_OFF_REASON,
+    JEV_NEOW_OFF_REASON,
     NEOW_EARLY_CARD_INSTRUCTIONS,
     PLUS_CARD_CRITERION,
     POTION_OR_RELIC_REASON,
+    SHOP_RANDOM_REASON,
+    UNKNOWN_DEFER_CONF,
+    UNKNOWN_DEFERRED_REASON,
     JevAnswer,
     JevError,
     LiveJevClient,
@@ -24,17 +32,23 @@ from sts2_env.eval.jev import (
     rest_or_continue_override,
 )
 from sts2_env.eval.jev_policy import (
+    JevPolicyFlags,
+    build_event_options,
     classify_decision,
     choose_jev_noncombat,
     collect_candidates,
     is_potion_or_relic_reward,
+    resolve_jev_flags,
     strip_illegal_invisible,
 )
 from sts2_env.gym_env.run_env import (
     TOTAL_ACTIONS,
     _CARD_RWD_EXTRA_START,
     _CARD_RWD_START,
+    _COMBAT_START,
+    _EVENT_START,
     _MAP_START,
+    _SHOP_START,
 )
 from sts2_env.run.run_manager import RunManager
 
@@ -158,6 +172,7 @@ def test_map_fork_respects_confident_choice():
     criteria = adapter.calls[0]["questions"]["pick"]["criteria"]
     assert "map_0" in criteria and "map_1" in criteria
     assert CONTENT_MAP_REF in adapter.calls[0]["questions"]["pick"]["instructions"]
+    assert "hp_pressure" not in adapter.calls[0]["questions"]
 
 
 def test_low_confidence_falls_back_to_legal_random():
@@ -436,3 +451,328 @@ def test_content_map_ref_is_the_stub_doc():
     assert "card_fit" in text
     assert "pick_potion" in text
     assert "Neow+early" in text
+    assert "unknown_deferred" in text
+    assert "待核" in text
+    assert "neow_boon" in text
+    assert "event_choice" in text
+    assert CHOICE_CONFIDENCE_MIN == 0.65
+    assert UNKNOWN_DEFER_CONF == 0.80
+    assert "event" not in DEFAULT_JEV_PHASES
+
+
+def _event_env(actions, event_id="BrainLeech", hp=80, max_hp=80):
+    env = _env(RunManager.PHASE_EVENT, actions, hp=hp, max_hp=max_hp)
+    env._mgr._event_model = SimpleNamespace(event_id=event_id, pending_choice=None)
+    return env
+
+
+def _event_mask(n_event=2, pending=False, n_choose=0):
+    mask = np.zeros(TOTAL_ACTIONS, dtype=np.int8)
+    if pending:
+        mask[_COMBAT_START] = 1
+        for i in range(n_choose):
+            mask[_COMBAT_START + 1 + i] = 1
+        return mask
+    for i in range(n_event):
+        mask[_EVENT_START + i] = 1
+    return mask
+
+
+EVENT_ON = JevPolicyFlags(phases=frozenset({"map", "rest", "card", "event"}), event=True)
+
+
+def test_unknown_deferred_when_pressure_high_and_conf_shy():
+    env, mask = _map_env(
+        [("UNKNOWN", (0, 1)), ("MONSTER", (1, 1))],
+        hp=20,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 2.5},
+                "pick": {"choice": "map_0", "confidence": 0.70},
+            }
+        ]
+    )
+    rng = np.random.RandomState(0)
+    action, log = choose_jev_noncombat(env, mask, rng, adapter)
+    assert log["shadow_fallback_reason"] == UNKNOWN_DEFERRED_REASON
+    assert log["shadow_status"] != "ok"
+    assert log["shadow_suggestion"] == "map_0"
+    assert log["shadow_confidence"] == 0.70
+    assert log["shadow_hp_pressure"] == pytest.approx(2.5)
+    assert action == _MAP_START + 1  # non-Unknown pool only
+    assert CHOICE_CONFIDENCE_MIN == 0.65
+    assert UNKNOWN_DEFER_CONF == 0.80
+    assert "hp_pressure" in adapter.calls[0]["questions"]
+
+
+def test_unknown_not_deferred_when_conf_at_least_080():
+    env, mask = _map_env(
+        [("UNKNOWN", (0, 1)), ("MONSTER", (1, 1))],
+        hp=20,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 2.5},
+                "pick": {"choice": "map_0", "confidence": 0.80},
+            }
+        ]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert log["shadow_status"] == "ok"
+    assert log["shadow_fallback_reason"] != UNKNOWN_DEFERRED_REASON
+    assert action == _MAP_START
+
+
+def test_unknown_not_deferred_when_hp_pressure_below_2():
+    env, mask = _map_env(
+        [("UNKNOWN", (0, 1)), ("MONSTER", (1, 1))],
+        hp=70,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 1.4},
+                "pick": {"choice": "map_0", "confidence": 0.70},
+            }
+        ]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action == _MAP_START
+    assert log["shadow_status"] == "ok"
+    assert log["shadow_fallback_reason"] != UNKNOWN_DEFERRED_REASON
+
+
+def test_unknown_not_deferred_when_no_non_unknown_legal():
+    env, mask = _map_env([("UNKNOWN", (0, 1))], hp=10, max_hp=80)
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 3.0},
+                "pick": {"choice": "map_0", "confidence": 0.70},
+            }
+        ]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action == _MAP_START
+    assert log["shadow_status"] == "ok"
+    assert log["shadow_fallback_reason"] != UNKNOWN_DEFERRED_REASON
+
+
+def test_build_event_options_maps_event_choice_to_event_start():
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "TAKE_GOLD",
+            "label": "Take gold",
+            "description": "+50 gold",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "LEAVE",
+            "label": "Leave",
+            "description": "nothing",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "HIDDEN",
+            "label": "Hidden",
+            "description": "no",
+            "enabled": False,
+        },
+    ]
+    env = _event_env(actions)
+    mask = _event_mask(2)
+    cands = collect_candidates(env, mask)
+    assert [c.key for c in cands] == ["TAKE_GOLD", "LEAVE"]
+    assert cands[0].run_action == _EVENT_START
+    assert cands[1].run_action == _EVENT_START + 1
+    assert "Take gold: +50 gold" in cands[0].description
+    assert all(c.payload.get("list_index") in {0, 1} for c in cands)
+    built = build_event_options(actions, lambda idx: True, event_id="BrainLeech")
+    assert [c.key for c in built] == ["TAKE_GOLD", "LEAVE"]
+
+
+def test_event_pending_choose_confirm_maps_to_combat_slots():
+    actions = [
+        {"action": "confirm_choice", "prompt": "done"},
+        {"action": "choose", "index": 0, "card_id": "STRIKE", "label": "Strike"},
+        {"action": "choose", "index": 1, "card_id": "BASH", "label": "Bash"},
+    ]
+    env = _event_env(actions, event_id="BrainLeech")
+    env._mgr._event_model = SimpleNamespace(event_id="BrainLeech", pending_choice=object())
+    mask = _event_mask(pending=True, n_choose=2)
+    cands = collect_candidates(env, mask)
+    assert cands[0].run_action == _COMBAT_START
+    assert cands[1].run_action == _COMBAT_START + 1
+    assert cands[2].run_action == _COMBAT_START + 2
+    adapter = ScriptedJev(
+        [{CHOICE_EVENT: {"choice": cands[1].key, "confidence": 0.9}}]
+    )
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+    )
+    assert adapter.calls, "pending EVENT choose/confirm must call Jev, not fail-open random"
+    assert CHOICE_EVENT in adapter.calls[0]["questions"]
+    assert action == _COMBAT_START + 1
+    assert log["jev_choice_id"] == CHOICE_EVENT
+    assert log["phase"] == "EVENT"
+
+
+def test_jev_event_off_does_not_call_adapter():
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "A",
+            "label": "A",
+            "description": "gold",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "B",
+            "label": "B",
+            "description": "leave",
+            "enabled": True,
+        },
+    ]
+    env = _event_env(actions)
+    mask = _event_mask(2)
+    adapter = ScriptedJev([{CHOICE_EVENT: {"choice": "A", "confidence": 0.99}}])
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert adapter.calls == []
+    assert log["shadow_fallback_reason"] == JEV_EVENT_OFF_REASON
+    assert mask[action] == 1
+    assert log["phase"] == "EVENT"
+
+
+def test_jev_event_on_uses_event_choice_name():
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "A",
+            "label": "Take gold",
+            "description": "+50 gold (待核)",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "B",
+            "label": "Leave",
+            "description": "nothing",
+            "enabled": True,
+        },
+    ]
+    env = _event_env(actions, event_id="TeaMaster")
+    mask = _event_mask(2)
+    adapter = ScriptedJev([{CHOICE_EVENT: {"choice": "A", "confidence": 0.9}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+    )
+    assert action == _EVENT_START
+    q = adapter.calls[0]["questions"]
+    assert CHOICE_EVENT in q
+    assert CHOICE_NEOW_BOON not in q
+    assert "待核" in q[CHOICE_EVENT]["instructions"]
+    assert "content_map" in adapter.calls[0]["state"]
+    assert adapter.calls[0]["state"]["event_id"] == "TeaMaster"
+    assert log["jev_choice_id"] == CHOICE_EVENT
+    assert log["shadow_decision"] == "event_choice"
+    assert CHOICE_CONFIDENCE_MIN == 0.65
+
+
+def test_neow_boon_choice_name_when_detected():
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "MAX_HP",
+            "label": "Max HP",
+            "description": "+8 max HP",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "GOLD",
+            "label": "Gold",
+            "description": "+100 gold",
+            "enabled": True,
+        },
+    ]
+    env = _event_env(actions, event_id="Neow")
+    mask = _event_mask(2)
+    adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "GOLD", "confidence": 0.91}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+    )
+    assert CHOICE_NEOW_BOON in adapter.calls[0]["questions"]
+    assert CHOICE_EVENT not in adapter.calls[0]["questions"]
+    assert "mid" in adapter.calls[0]["questions"][CHOICE_NEOW_BOON]["instructions"].lower()
+    assert action == _EVENT_START + 1
+    assert log["jev_choice_id"] == CHOICE_NEOW_BOON
+    assert log["is_neow"] is True
+    assert log["phase"] == "NEOW"
+
+
+def test_neow_off_skips_jev_silently():
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "MAX_HP",
+            "label": "Max HP",
+            "description": "+8",
+            "enabled": True,
+        }
+    ]
+    env = _event_env(actions, event_id="Neow")
+    mask = _event_mask(1)
+    adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "MAX_HP", "confidence": 0.99}}])
+    flags = JevPolicyFlags(
+        phases=frozenset({"map", "rest", "card", "event"}),
+        event=True,
+        neow=False,
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter, flags=flags)
+    assert adapter.calls == []
+    assert log["shadow_fallback_reason"] == JEV_NEOW_OFF_REASON
+    assert log["is_neow"] is True
+    assert mask[action] == 1
+
+
+def test_shop_does_not_call_jev():
+    actions = [
+        {"action": "leave_shop"},
+        {"action": "buy_card", "card_id": "ANGER"},
+    ]
+    env = _env(RunManager.PHASE_SHOP, actions)
+    mask = np.zeros(TOTAL_ACTIONS, dtype=np.int8)
+    mask[_SHOP_START] = 1
+    mask[_SHOP_START + 1] = 1
+    adapter = ScriptedJev([{"pick": {"choice": "shop_leave", "confidence": 0.99}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+    )
+    assert adapter.calls == []
+    assert log["shadow_fallback_reason"] == SHOP_RANDOM_REASON
+    assert mask[action] == 1
+
+
+def test_resolve_jev_flags_default_event_off():
+    flags = resolve_jev_flags()
+    assert flags.allows_event() is False
+    assert flags.allows_neow() is False
+    assert "event" not in flags.resolved_phases()
+    on = resolve_jev_flags(jev_event="on")
+    assert on.allows_event() is True
+    assert on.allows_neow() is True
+    via_phases = resolve_jev_flags(jev_phases="map,rest,card,event")
+    assert via_phases.allows_event() is True
+    neow_off = resolve_jev_flags(jev_event="on", jev_neow="off")
+    assert neow_off.allows_event() is True
+    assert neow_off.allows_neow() is False

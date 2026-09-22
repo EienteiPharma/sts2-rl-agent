@@ -21,8 +21,15 @@ Legal visible `MapPointType` values the eval may offer:
 * `SHOP` — merchant
 * `TREASURE` — chest
 * `UNKNOWN` — question-mark (event / possible fight); this is a **legal**
-  visible node, not invisible
+  visible node, not invisible. Criteria: Unknown is a risk. If HP is thin,
+  prefer rest or a safer fork when legal.
 * `ANCIENT` — ancient node when present
+
+When legal map options include `UNKNOWN`, still Score `hp_pressure`. If
+`hp_pressure >= 2.0` and a non-Unknown legal node exists and Choice picked
+Unknown with confidence **< 0.80** → defer, legal random among non-Unknown,
+reason `unknown_deferred`. 0.80 is **defer-only**; Choice land threshold
+stays **0.65**.
 
 Strip `UNASSIGNED` and any action whose RunEnv `action_mask` bit is 0
 before Choice. Do not invent nodes that are not on the current fork.
@@ -55,6 +62,21 @@ must not be scored as CARD land-rate.
 ## Rest site
 Typical options: `HEAL` (rest), `SMITH` (upgrade). Extra options (dig /
 lift / …) only if the corresponding relic enabled them.
+
+## Events (`event_choice`, optional `--jev-event on`)
+Default eval keeps EVENT **off** (legal random, `jev_event_off_random`) so
+MAP/REST/CARD tables stay comparable. When on: Choice name `event_choice`;
+`event_choice` index i → `_EVENT_START+i`; pending `confirm_choice` →
+`_COMBAT_START`; pending `choose` i → `_COMBAT_START+1+i`. Criteria follow
+option label/description (HP, gold, cards, relics). Events marked **待核**:
+**literal risks only** — do not invent hard rules.
+
+Neow/boon screens (`event_id=Neow` or id/meta contains boon) use Choice
+`neow_boon` (opening tolerance, not a mid-act fixture). If Neow is not
+detected, skip `neow_boon` silently. `--jev-neow off` skips Jev on a
+detected Neow screen.
+
+Shop stays legal random.
 
 ## Out of scope
 Do not mix this file with combat-suite (bare / loadout_v0 / loadout_v1)

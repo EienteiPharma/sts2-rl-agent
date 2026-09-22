@@ -32,7 +32,12 @@ from typing import Any
 import numpy as np
 
 from sts2_env.eval.jev import JevAnswer, build_jev_adapter
-from sts2_env.eval.jev_policy import choose_jev_noncombat
+from sts2_env.eval.jev_policy import (
+    DEFAULT_JEV_FLAGS,
+    JevPolicyFlags,
+    choose_jev_noncombat,
+    resolve_jev_flags,
+)
 from sts2_env.gym_env.action_space import get_action_mask
 from sts2_env.gym_env.observation import OBS_SIZE, encode_observation
 from sts2_env.gym_env.run_env import (
@@ -154,13 +159,15 @@ def choose_hierarchical_action(
     received_obs_widths: list[int] | None = None,
     jev_enabled: bool = False,
     jev_adapter: Any = None,
+    jev_flags: JevPolicyFlags | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Pick a RunEnv action for hierarchical policy.
 
     Combat: encode *combat* obs (never ``obs`` / RunEnv) and predict, then map
     the combat action index into the RunEnv combat slice.
     Non-combat: legal random when ``jev_enabled`` is false; Jev Choice/Score
-    when true (errors fall back to legal random).
+    when true (errors fall back to legal random). EVENT is off unless
+    ``jev_flags.allows_event()``.
     """
     mgr = _run_manager(env)
     phase = mgr.phase
@@ -169,7 +176,9 @@ def choose_hierarchical_action(
     if phase != RunManager.PHASE_COMBAT:
         if jev_enabled:
             adapter = jev_adapter or build_jev_adapter(enabled=True)
-            return choose_jev_noncombat(env, mask, rng, adapter)
+            return choose_jev_noncombat(
+                env, mask, rng, adapter, flags=jev_flags or DEFAULT_JEV_FLAGS
+            )
         return _legal_random(mask, rng), shadow
 
     combat = mgr.get_combat_state()
@@ -212,6 +221,7 @@ def choose_action(
     received_obs_widths: list[int] | None = None,
     jev_enabled: bool = False,
     jev_adapter: Any = None,
+    jev_flags: JevPolicyFlags | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Return ``(action, shadow_fields)`` for the current step."""
     if policy == "random":
@@ -229,6 +239,7 @@ def choose_action(
             received_obs_widths=received_obs_widths,
             jev_enabled=jev_enabled,
             jev_adapter=jev_adapter,
+            jev_flags=jev_flags,
         )
     raise SystemExit(f"unknown policy: {policy}")
 
@@ -243,6 +254,7 @@ def _run_episode(
     *,
     jev_enabled: bool = False,
     jev_adapter: Any = None,
+    jev_flags: JevPolicyFlags | None = None,
 ) -> dict:
     obs, info = env.reset(seed=seed)
     done = False
@@ -271,6 +283,7 @@ def _run_episode(
             combat_model,
             jev_enabled=jev_enabled,
             jev_adapter=jev_adapter,
+            jev_flags=jev_flags,
         )
         if info.get("phase") == RunManager.PHASE_COMBAT:
             combat_steps += 1
@@ -339,6 +352,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Alias for --jev on when set to 'jev'",
     )
     ap.add_argument(
+        "--jev-event",
+        choices=["on", "off"],
+        default="off",
+        help="hierarchical + --jev on: EVENT Choice (default off; preserves MAP/REST/CARD tables)",
+    )
+    ap.add_argument(
+        "--jev-phases",
+        default="map,rest,card",
+        help="Comma phases for Jev (default map,rest,card). Include event to enable EVENT",
+    )
+    ap.add_argument(
+        "--jev-neow",
+        choices=["on", "off"],
+        default=None,
+        help="Neow/boon Choice neow_boon (default: follow --jev-event)",
+    )
+    ap.add_argument(
         "--out",
         default="/workspace/sts2-sim/evals/act1_runenv_latest.json",
     )
@@ -371,6 +401,16 @@ def validate_policy_args(args: argparse.Namespace) -> None:
         raise SystemExit("--model/--combat-model require --policy model or hierarchical")
     if args.jev == "on" and args.policy != "hierarchical":
         raise SystemExit("--jev on is only valid with --policy hierarchical")
+    if args.policy != "hierarchical":
+        if args.jev_event == "on":
+            raise SystemExit("--jev-event on is only valid with --policy hierarchical")
+        if args.jev_neow == "on":
+            raise SystemExit("--jev-neow on is only valid with --policy hierarchical")
+    args.jev_flags = resolve_jev_flags(
+        jev_event=args.jev_event,
+        jev_phases=args.jev_phases,
+        jev_neow=args.jev_neow,
+    )
 
 
 def load_policy_models(args: argparse.Namespace) -> tuple[Any, Any]:
@@ -400,6 +440,9 @@ def build_report(
     rows: list[dict],
     elapsed_s: float,
     jev: str = "off",
+    jev_event: str = "off",
+    jev_phases: str = "map,rest,card",
+    jev_neow: str | None = None,
 ) -> dict:
     summary = _summarize(rows)
     return {
@@ -410,6 +453,9 @@ def build_report(
         "model": model_path or None,
         "combat_model": combat_model_path or None,
         "jev": jev,
+        "jev_event": jev_event,
+        "jev_phases": jev_phases,
+        "jev_neow": jev_neow if jev_neow is not None else ("on" if jev_event == "on" else "off"),
         "character": "Ironclad",
         "ascension": 0,
         "seeds": {
@@ -425,10 +471,13 @@ def build_report(
             "note": (
                 "Combat never uses Jev. --jev off: legal random + stub logs. "
                 "--jev on: Choice/Score with confidence>=0.65, hp_pressure "
-                "rest/continue, and card_fit assist on true pick_card; potion/"
-                "relic PHASE_CARD_REWARD screens legal-random "
-                "(potion_or_relic_reward_random). Errors fall back to legal "
-                "random. Not an Act1-clear gate."
+                "rest/continue, MAP UNKNOWN defer (unknown_deferred at conf<0.80 "
+                "when hp_pressure>=2), and card_fit assist on true pick_card; "
+                "potion/relic PHASE_CARD_REWARD screens legal-random "
+                "(potion_or_relic_reward_random). EVENT is off unless "
+                "--jev-event on (or --jev-phases lists event); pending EVENT "
+                "choose/confirm maps to combat slots. Shop stays legal random. "
+                "Errors fall back to legal random. Not an Act1-clear gate."
             ),
         },
         "elapsed_s": round(elapsed_s, 1),
@@ -452,6 +501,7 @@ def main(argv: list[str] | None = None) -> None:
     model, combat_model = load_policy_models(args)
     jev_enabled = args.policy == "hierarchical" and args.jev == "on"
     jev_adapter = build_jev_adapter(enabled=jev_enabled) if args.policy == "hierarchical" else None
+    jev_flags = getattr(args, "jev_flags", None) or DEFAULT_JEV_FLAGS
 
     env = STS2RunEnv(character_id="Ironclad", ascension_level=0, max_steps=args.max_steps)
     rng = np.random.RandomState(0)
@@ -468,6 +518,7 @@ def main(argv: list[str] | None = None) -> None:
                 rng,
                 jev_enabled=jev_enabled,
                 jev_adapter=jev_adapter,
+                jev_flags=jev_flags,
             )
         )
     env.close()
@@ -480,6 +531,9 @@ def main(argv: list[str] | None = None) -> None:
         rows=rows,
         elapsed_s=elapsed,
         jev=args.jev if args.policy == "hierarchical" else "off",
+        jev_event=args.jev_event if args.policy == "hierarchical" else "off",
+        jev_phases=args.jev_phases if args.policy == "hierarchical" else "map,rest,card",
+        jev_neow=args.jev_neow if args.policy == "hierarchical" else "off",
     )
     out = Path(args.out)
     write_report(report, out)

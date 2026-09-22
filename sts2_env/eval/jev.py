@@ -10,6 +10,14 @@ Lab-hung thresholds (do not retune in this eval):
   skip, land with reason ``jev_card_fit_assist``
 * Potion / relic screens that share ``PHASE_CARD_REWARD`` must not call
   card_reward Jev (legal random, reason ``potion_or_relic_reward_random``)
+* MAP ``UNKNOWN``: still Score ``hp_pressure``; if pressure ≥ 2.0 and a
+  non-Unknown legal node exists and Choice picked Unknown with
+  confidence < 0.80 → defer (legal random among non-Unknown,
+  reason ``unknown_deferred``). 0.80 is defer-only; land threshold stays 0.65
+* EVENT Choice is behind ``--jev-event on`` (default off). Pending
+  ``choose`` / ``confirm_choice`` map to combat slots, not fail-open random
+* Neow/boon screens use Choice ``neow_boon``; otherwise skip that name
+* Shop stays legal random (not in default ``JEV_PHASES``)
 * Strip invisible / illegal candidates before Choice
 * Act1 reward ``+`` cards are not natural drops (Smith / Neow only)
 * Card-reward Choice is Neow+early natural Act1, not mid-act fixtures
@@ -37,8 +45,19 @@ CHOICE_CONFIDENCE_MIN = 0.65
 HP_PRESSURE_REST = 2.0
 HP_PRESSURE_CONTINUE = 1.0
 CARD_FIT_ASSIST_MIN = 2.0
+UNKNOWN_DEFER_CONF = 0.80
 POTION_OR_RELIC_REASON = "potion_or_relic_reward_random"
 CARD_FIT_ASSIST_REASON = "jev_card_fit_assist"
+UNKNOWN_DEFERRED_REASON = "unknown_deferred"
+JEV_EVENT_OFF_REASON = "jev_event_off_random"
+JEV_NEOW_OFF_REASON = "jev_neow_off_random"
+SHOP_RANDOM_REASON = "shop_random"
+NON_JEV_PHASE_REASON = "non_jev_phase_random"
+
+DEFAULT_JEV_PHASES = frozenset({"map", "rest", "card"})
+JEV_PHASE_TOKENS = frozenset({"map", "rest", "card", "event"})
+CHOICE_EVENT = "event_choice"
+CHOICE_NEOW_BOON = "neow_boon"
 
 TYPESAFE_API_URL = "https://api.typesafe.ai/v1/systemone"
 TYPESAFE_MODEL = "jev-1.13.0"
@@ -70,6 +89,25 @@ NEOW_EARLY_CARD_INSTRUCTIONS = (
     "Neow+early natural Act1 (not mid-act fixtures). "
     "Choose a card reward or skip. "
     + PLUS_CARD_CRITERION
+)
+
+UNKNOWN_MAP_CRITERION = (
+    "UNKNOWN is a risk node (event or possible fight). If HP is thin, "
+    "prefer rest or a safer legal fork instead of Unknown. See "
+    + CONTENT_MAP_REF + "."
+)
+
+EVENT_CHOICE_INSTRUCTIONS = (
+    "Act1 Ironclad event. Choose among legal visible options by their "
+    "literal label/description (HP, gold, cards, relics). Events marked "
+    "待核: state literal risks only — do not invent hard rules. See "
+    + CONTENT_MAP_REF + "."
+)
+
+NEOW_BOON_INSTRUCTIONS = (
+    "Opening Neow boon (not a mid-act fixture). Prefer Act1 opening "
+    "tolerance (HP / gold / cards / relics). See "
+    + CONTENT_MAP_REF + "."
 )
 
 
