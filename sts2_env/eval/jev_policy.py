@@ -8,9 +8,14 @@ from typing import Any
 import numpy as np
 
 from sts2_env.eval.jev import (
+    CARD_FIT_ASSIST_MIN,
+    CARD_FIT_ASSIST_REASON,
+    CARD_FIT_SCORE_CRITERIA,
     CONTENT_MAP_REF,
     HP_PRESSURE_SCORE_CRITERIA,
+    NEOW_EARLY_CARD_INSTRUCTIONS,
     PLUS_CARD_CRITERION,
+    POTION_OR_RELIC_REASON,
     JevAnswer,
     JevClient,
     JevError,
@@ -44,11 +49,14 @@ logger = logging.getLogger(__name__)
 DECISION_MAP_FORK = "map_fork"
 DECISION_REST_OR_CONTINUE = "rest_or_continue"
 DECISION_CARD_REWARD = "card_reward"
+DECISION_POTION_OR_RELIC = "potion_or_relic_reward"
 DECISION_REST_SITE = "rest_site"
 DECISION_SIMILAR = "similar"
 DECISION_NONE = "none"
 
 REST_POINT_TYPES = frozenset({"REST_SITE", "RestSite", "restsite"})
+POTION_OR_RELIC_ACTIONS = frozenset({"pick_potion", "pick_relic_reward"})
+SKIP_ACTIONS = frozenset({"skip"})
 
 
 @dataclass
@@ -69,6 +77,129 @@ def _mgr(env: STS2RunEnv) -> RunManager:
     if mgr is None:
         raise RuntimeError("env has no run manager")
     return mgr
+
+
+def is_potion_or_relic_reward(actions: list[dict[str, Any]]) -> bool:
+    """Potion/relic screens share PHASE_CARD_REWARD but are not pick_card."""
+    return any(a.get("action") in POTION_OR_RELIC_ACTIONS for a in actions)
+
+
+def _try_preview_card(card_id: Any, upgraded: bool):
+    try:
+        from sts2_env.cards.factory import create_card
+        from sts2_env.core.enums import CardId
+    except Exception:
+        return None
+    raw = str(card_id)
+    cid = None
+    if raw in CardId.__members__:
+        cid = CardId[raw]
+    else:
+        for suffix in ("_IRONCLAD", "_CARD", "_STATUS"):
+            cand = raw + suffix
+            if cand in CardId.__members__:
+                cid = CardId[cand]
+                break
+    if cid is None:
+        return None
+    try:
+        return create_card(cid, upgraded=upgraded)
+    except Exception:
+        return None
+
+
+def card_blurb(act: dict[str, Any]) -> str:
+    """Short label for a pick_card offer (cost / type / dmg-block / plus note)."""
+    card_id = act.get("card_id", "?")
+    upgraded = bool(act.get("upgraded"))
+    rarity = str(act.get("rarity") or "")
+    plus_note = ""
+    name = str(card_id).replace("_", " ")
+    bits: list[str] = []
+    card = _try_preview_card(card_id, upgraded)
+    if card is not None:
+        name = card.card_id.name.replace("_", " ").title()
+        if upgraded or card.upgraded:
+            name += "+"
+            plus_note = " (Smith/Neow upgraded; not a natural Act1 drop)"
+        if rarity:
+            bits.append(rarity.lower())
+        bits.append(card.card_type.name.lower())
+        cost = "X" if getattr(card, "has_energy_cost_x", False) else str(card.cost)
+        bits.append(f"cost {cost}")
+        if card.base_damage:
+            bits.append(f"{card.base_damage} dmg")
+        block = (card.effect_vars or {}).get("block", card.base_block)
+        if block:
+            bits.append(f"{block} block")
+        for k, v in (card.effect_vars or {}).items():
+            if k == "block":
+                continue
+            bits.append(f"{k} {v}")
+    else:
+        if upgraded:
+            name += "+"
+            plus_note = " (Smith/Neow upgraded; not a natural Act1 drop)"
+        if rarity:
+            bits.append(rarity.lower())
+    core = name
+    if bits:
+        core += " — " + ", ".join(bits)
+    return core + plus_note
+
+
+def build_options(
+    actions: list[dict[str, Any]],
+    legal_fn,
+) -> list[Candidate]:
+    """True pick_card options: list-order → ``_CARD_RWD_START+i`` / extra.
+
+    Skip is included only when ``action==skip``. Upgraded offers are labelled
+    as Smith/Neow, not natural Act1 drops.
+    """
+    cands: list[Candidate] = []
+    pick_actions = [a for a in actions if a.get("action") == "pick_card"]
+    for i, act in enumerate(pick_actions):
+        if i < 3:
+            idx = _CARD_RWD_START + i
+        else:
+            idx = _CARD_RWD_EXTRA_START + (i - 3)
+        upgraded = bool(act.get("upgraded"))
+        blurb = card_blurb(act)
+        desc = f"Pick card {i}: {blurb}"
+        cands.append(
+            Candidate(
+                key=f"card_{i}",
+                run_action=idx,
+                description=desc,
+                legal=legal_fn(idx),
+                kind="card",
+                upgraded=upgraded,
+                payload=dict(act),
+            )
+        )
+    if any(a.get("action") in SKIP_ACTIONS for a in actions):
+        skip_idx = _CARD_RWD_START + 3
+        cands.append(
+            Candidate(
+                key="card_skip",
+                run_action=skip_idx,
+                description="Skip card reward",
+                legal=legal_fn(skip_idx),
+                kind="skip",
+            )
+        )
+    if any(a.get("action") == "reroll_card_reward" for a in actions):
+        cands.append(
+            Candidate(
+                key="card_reroll",
+                run_action=_CARD_RWD_REROLL,
+                description="Reroll card reward",
+                legal=legal_fn(_CARD_RWD_REROLL),
+                kind="reroll",
+            )
+        )
+    return cands
 
 
 def collect_candidates(env: STS2RunEnv, mask: np.ndarray) -> list[Candidate]:
@@ -131,88 +262,9 @@ def collect_candidates(env: STS2RunEnv, mask: np.ndarray) -> list[Candidate]:
         return cands
 
     if phase == RunManager.PHASE_CARD_REWARD:
-        if any(a.get("action") == "pick_potion" for a in actions):
-            cands.append(
-                Candidate(
-                    key="potion_take",
-                    run_action=_CARD_RWD_START,
-                    description="Take potion reward",
-                    legal=_legal(_CARD_RWD_START),
-                    kind="potion",
-                )
-            )
-            cands.append(
-                Candidate(
-                    key="potion_skip",
-                    run_action=_CARD_RWD_START + 3,
-                    description="Skip potion reward",
-                    legal=_legal(_CARD_RWD_START + 3),
-                    kind="potion",
-                )
-            )
+        if is_potion_or_relic_reward(actions):
             return cands
-        if any(a.get("action") == "pick_relic_reward" for a in actions):
-            cands.append(
-                Candidate(
-                    key="relic_take",
-                    run_action=_CARD_RWD_START,
-                    description="Take relic reward",
-                    legal=_legal(_CARD_RWD_START),
-                    kind="relic",
-                )
-            )
-            cands.append(
-                Candidate(
-                    key="relic_skip",
-                    run_action=_CARD_RWD_START + 3,
-                    description="Skip relic reward",
-                    legal=_legal(_CARD_RWD_START + 3),
-                    kind="relic",
-                )
-            )
-            return cands
-        pick_actions = [a for a in actions if a.get("action") == "pick_card"]
-        for i, act in enumerate(pick_actions):
-            if i < 3:
-                idx = _CARD_RWD_START + i
-            else:
-                idx = _CARD_RWD_EXTRA_START + (i - 3)
-            upgraded = bool(act.get("upgraded"))
-            card_id = act.get("card_id", i)
-            desc = f"Pick card {i}: {card_id}"
-            if upgraded:
-                desc += " (upgraded/+; not a natural Act1 reward drop)"
-            cands.append(
-                Candidate(
-                    key=f"card_{i}",
-                    run_action=idx,
-                    description=desc,
-                    legal=_legal(idx),
-                    kind="card",
-                    upgraded=upgraded,
-                    payload=dict(act),
-                )
-            )
-        skip_idx = _CARD_RWD_START + 3
-        cands.append(
-            Candidate(
-                key="card_skip",
-                run_action=skip_idx,
-                description="Skip card reward",
-                legal=_legal(skip_idx),
-                kind="skip",
-            )
-        )
-        if any(a.get("action") == "reroll_card_reward" for a in actions):
-            cands.append(
-                Candidate(
-                    key="card_reroll",
-                    run_action=_CARD_RWD_REROLL,
-                    description="Reroll card reward",
-                    legal=_legal(_CARD_RWD_REROLL),
-                    kind="reroll",
-                )
-            )
+        cands.extend(build_options(actions, _legal))
         return cands
 
     if phase == RunManager.PHASE_REST_SITE:
@@ -321,6 +373,8 @@ def classify_decision(phase: str, cands: list[Candidate]) -> str:
             return DECISION_REST_OR_CONTINUE
         return DECISION_MAP_FORK
     if phase == RunManager.PHASE_CARD_REWARD:
+        if any(c.kind in {"potion", "relic"} for c in cands):
+            return DECISION_POTION_OR_RELIC
         return DECISION_CARD_REWARD
     if phase == RunManager.PHASE_REST_SITE:
         return DECISION_REST_SITE
@@ -394,6 +448,17 @@ def choose_jev_noncombat(
     action falls back to legal random. The decision point is never skipped.
     """
     mgr = _mgr(env)
+    actions = mgr.get_available_actions()
+    if mgr.phase == RunManager.PHASE_CARD_REWARD and is_potion_or_relic_reward(actions):
+        valid = np.flatnonzero(np.asarray(mask) == 1)
+        action = int(rng.choice(valid)) if valid.size else 0
+        log = JevAnswer(
+            status="skipped",
+            fallback_reason=POTION_OR_RELIC_REASON,
+        ).as_log()
+        log["shadow_decision"] = DECISION_POTION_OR_RELIC
+        return action, log
+
     all_cands = collect_candidates(env, mask)
     cands = strip_illegal_invisible(all_cands)
     if not cands:
@@ -449,6 +514,8 @@ def _decide(
 ) -> tuple[int, JevAnswer]:
     if decision == DECISION_REST_OR_CONTINUE:
         return _decide_rest_or_continue(cands, state, adapter, mgr, rng)
+    if decision == DECISION_CARD_REWARD:
+        return _decide_card_reward(cands, state, adapter, rng)
     instructions = _instructions_for(decision)
     questions = {
         "pick": _choice_question(
@@ -560,16 +627,65 @@ def _decide_rest_or_continue(
     return chosen.run_action, pick
 
 
+def _is_skip_choice(chosen: Candidate | None, key: str | None) -> bool:
+    if chosen is not None:
+        return chosen.kind == "skip" or chosen.key == "card_skip"
+    return key in {None, "skip", "card_skip"}
+
+
+def _decide_card_reward(
+    cands: list[Candidate],
+    state: dict[str, Any],
+    adapter: JevClient,
+    rng: np.random.RandomState,
+) -> tuple[int, JevAnswer]:
+    questions = {
+        "card_fit": {
+            "type": "score",
+            "instructions": (
+                "Score how well the current Neow+early Act1 card offer fits "
+                f"this deck. Reference {CONTENT_MAP_REF}. Higher means take "
+                "the chosen card even if Choice confidence is shy of 0.65."
+            ),
+            "criteria": CARD_FIT_SCORE_CRITERIA,
+        },
+        "pick": _choice_question(cands, _instructions_for(DECISION_CARD_REWARD)),
+    }
+    answers = adapter.system_one(state, questions)
+    pick = apply_choice_confidence(answers.get("pick") or JevAnswer(status="error"))
+    fit_ans = answers.get("card_fit") or JevAnswer(status="error")
+    card_fit = float(fit_ans.score) if fit_ans.status == "ok" and fit_ans.score is not None else None
+    pick.card_fit = card_fit
+
+    if pick.status == "ok":
+        chosen = _lookup(cands, pick.choice)
+        if chosen is None:
+            pick.status = "error"
+            pick.fallback_reason = f"choice {pick.choice!r} not in legal candidates"
+            return _legal_random_from(cands, rng), pick
+        return chosen.run_action, pick
+
+    chosen = _lookup(cands, pick.choice)
+    if (
+        pick.status == "uncertain"
+        and card_fit is not None
+        and card_fit >= CARD_FIT_ASSIST_MIN
+        and not _is_skip_choice(chosen, pick.choice)
+        and chosen is not None
+    ):
+        pick.status = "ok"
+        pick.fallback_reason = CARD_FIT_ASSIST_REASON
+        return chosen.run_action, pick
+
+    return _legal_random_from(cands, rng), pick
+
+
 def _instructions_for(decision: str) -> str:
     base = f"Act1 Ironclad run. Criteria: {CONTENT_MAP_REF}. "
     if decision == DECISION_MAP_FORK:
         return base + "Choose the next map node among legal visible forks."
     if decision == DECISION_CARD_REWARD:
-        return (
-            base
-            + "Choose a card reward or skip. "
-            + PLUS_CARD_CRITERION
-        )
+        return base + NEOW_EARLY_CARD_INSTRUCTIONS
     if decision == DECISION_REST_SITE:
         return base + "Choose a rest-site option (heal vs smith vs relic options)."
     return base + "Choose among legal visible options at this decision point."

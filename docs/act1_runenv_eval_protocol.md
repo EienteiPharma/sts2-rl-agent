@@ -55,8 +55,8 @@ python scripts/eval_act1_runenv.py --policy hierarchical --combat-model path/to/
 - 战斗步：从 `RunManager.get_combat_state()` 取 `CombatState`，`encode_observation(combat)` + combat `get_action_mask`，`MaskablePPO.predict`，再把 combat action index 映射到 RunEnv combat slice（layout offset 0）。**Jev 不进战斗。**
 - 非战斗步：
   - `--jev off`：`action_masks()==1` 合法随机；日志 `shadow_status=stub`。
-  - `--jev on`：TypeSafe/Jev Choice（`map_fork` / `card_reward` / 同类决策）与 rest_or_continue 的 hp_pressure Score。Choice confidence **≥ 0.65** 否则 uncertain → 合法随机。hp_pressure **≥ 2.0** 优先 rest，**≤ 1.0** 优先 continue，中间信 Choice。先剔 invisible/illegal。Act1 reward `+` 卡不是自然掉落（仅 Smith/Neow）——criteria 见 `docs/act1_content_map.md`。API/模型错误记 `shadow_status=error` 并回退合法随机，**不吞决策点**。
-  - `--jev on` 时日志含 `shadow_suggestion`、`shadow_confidence`、`shadow_fallback_reason`（及 `shadow_hp_pressure`）。
+  - `--jev on`：TypeSafe/Jev Choice（`map_fork` / `card_reward` / 同类决策）与 rest_or_continue 的 hp_pressure Score。Choice confidence **≥ 0.65** 否则 uncertain → 合法随机。hp_pressure **≥ 2.0** 优先 rest，**≤ 1.0** 优先 continue，中间信 Choice。先剥 invisible/illegal。Act1 reward `+` 卡不是自然掉落（仅 Smith/Neow）——criteria 见 `docs/act1_content_map.md`。真 `pick_card` 另打 4 档 Score `card_fit`：**不改** Choice 0.65；confidence < 0.65 但 `card_fit >= 2.0` 且 choice ≠ skip 时落地，原因 `jev_card_fit_assist`。`PHASE_CARD_REWARD` 上的 `pick_potion` / `pick_relic_reward` **不**走 card_reward Jev，合法随机原因 `potion_or_relic_reward_random`（不进 CARD 落地率分母）。API/模型错误记 `shadow_status=error` 并回退合法随机，**不吞决策点**。
+  - `--jev on` 时日志含 `shadow_suggestion`、`shadow_confidence`、`shadow_fallback_reason`（及 `shadow_hp_pressure`）；真卡屏可选 `jev_card_fit`。
 - 输出：完整 JSON + 同名 `.summary.json`（无逐局 rows 的精简版）。
 - Live 调用读 `TYPESAFE_API_KEY`（`sts2_env/eval/jev.py` LiveJevClient）。密钥缺失时按 error 回退，不改 combat 路径。TODO(Surplus/Jev) 可替换该 adapter，不必改 eval 脚本。
 

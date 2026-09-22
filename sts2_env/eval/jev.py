@@ -5,8 +5,14 @@ Lab-hung thresholds (do not retune in this eval):
 * Choice confidence ≥ 0.65, else uncertain → legal random
 * rest_or_continue also uses hp_pressure Score: ≥ 2.0 prefer rest,
   ≤ 1.0 prefer continue, middle trust Choice
+* card_reward also uses card_fit Score (4-level): Choice 0.65 is
+  unchanged; if confidence < 0.65 but card_fit ≥ 2.0 and choice is not
+  skip, land with reason ``jev_card_fit_assist``
+* Potion / relic screens that share ``PHASE_CARD_REWARD`` must not call
+  card_reward Jev (legal random, reason ``potion_or_relic_reward_random``)
 * Strip invisible / illegal candidates before Choice
 * Act1 reward ``+`` cards are not natural drops (Smith / Neow only)
+* Card-reward Choice is Neow+early natural Act1, not mid-act fixtures
 
 Criteria text references ``docs/act1_content_map.md``.
 
@@ -30,6 +36,9 @@ logger = logging.getLogger(__name__)
 CHOICE_CONFIDENCE_MIN = 0.65
 HP_PRESSURE_REST = 2.0
 HP_PRESSURE_CONTINUE = 1.0
+CARD_FIT_ASSIST_MIN = 2.0
+POTION_OR_RELIC_REASON = "potion_or_relic_reward_random"
+CARD_FIT_ASSIST_REASON = "jev_card_fit_assist"
 
 TYPESAFE_API_URL = "https://api.typesafe.ai/v1/systemone"
 TYPESAFE_MODEL = "jev-1.13.0"
@@ -44,10 +53,23 @@ HP_PRESSURE_SCORE_CRITERIA = [
     "3 — critically low HP; rest if a rest node is legal",
 ]
 
+CARD_FIT_SCORE_CRITERIA = [
+    "0 — poor fit for this Neow+early Act1 deck; skip or ignore",
+    "1 — weakly useful; take only if nothing better",
+    "2 — solid Act1 pickup for this Neow+early deck",
+    "3 — high-priority Act1 card for this Neow+early deck",
+]
+
 PLUS_CARD_CRITERION = (
     "Act1 combat-reward '+' / upgraded cards are NOT natural drops "
     "(Smith rest-site upgrade or Neow only). Do not prefer them as if "
     "they were reward-upgraded. See " + CONTENT_MAP_REF + "."
+)
+
+NEOW_EARLY_CARD_INSTRUCTIONS = (
+    "Neow+early natural Act1 (not mid-act fixtures). "
+    "Choose a card reward or skip. "
+    + PLUS_CARD_CRITERION
 )
 
 
@@ -61,18 +83,22 @@ class JevAnswer:
     choice: str | None = None
     confidence: float | None = None
     score: float | None = None
+    card_fit: float | None = None
     probabilities: dict[str, float] = field(default_factory=dict)
     fallback_reason: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     def as_log(self) -> dict[str, Any]:
-        return {
+        log = {
             "shadow_suggestion": self.choice,
             "shadow_status": self.status,
             "shadow_confidence": self.confidence,
             "shadow_hp_pressure": self.score,
             "shadow_fallback_reason": self.fallback_reason,
         }
+        if self.card_fit is not None:
+            log["jev_card_fit"] = self.card_fit
+        return log
 
 
 class JevClient(Protocol):

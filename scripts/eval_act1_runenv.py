@@ -293,6 +293,7 @@ def _run_episode(
         "shadow_confidence": last_shadow.get("shadow_confidence"),
         "shadow_hp_pressure": last_shadow.get("shadow_hp_pressure"),
         "shadow_fallback_reason": last_shadow.get("shadow_fallback_reason"),
+        "jev_card_fit": last_shadow.get("jev_card_fit"),
     }
 
 
@@ -400,9 +401,11 @@ def build_report(
             "mode": "on" if jev == "on" else "stub",
             "note": (
                 "Combat never uses Jev. --jev off: legal random + stub logs. "
-                "--jev on: Choice/Score with confidence>=0.65 and hp_pressure "
-                "rest/continue thresholds; errors fall back to legal random. "
-                "Not an Act1-clear gate."
+                "--jev on: Choice/Score with confidence>=0.65, hp_pressure "
+                "rest/continue, and card_fit assist on true pick_card; potion/"
+                "relic PHASE_CARD_REWARD screens legal-random "
+                "(potion_or_relic_reward_random). Errors fall back to legal "
+                "random. Not an Act1-clear gate."
             ),
         },
         "elapsed_s": round(elapsed_s, 1),

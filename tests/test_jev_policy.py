@@ -8,9 +8,13 @@ import numpy as np
 import pytest
 
 from sts2_env.eval.jev import (
+    CARD_FIT_ASSIST_MIN,
+    CARD_FIT_ASSIST_REASON,
     CHOICE_CONFIDENCE_MIN,
     CONTENT_MAP_REF,
+    NEOW_EARLY_CARD_INSTRUCTIONS,
     PLUS_CARD_CRITERION,
+    POTION_OR_RELIC_REASON,
     JevAnswer,
     JevError,
     LiveJevClient,
@@ -23,10 +27,12 @@ from sts2_env.eval.jev_policy import (
     classify_decision,
     choose_jev_noncombat,
     collect_candidates,
+    is_potion_or_relic_reward,
     strip_illegal_invisible,
 )
 from sts2_env.gym_env.run_env import (
     TOTAL_ACTIONS,
+    _CARD_RWD_EXTRA_START,
     _CARD_RWD_START,
     _MAP_START,
 )
@@ -267,8 +273,141 @@ def test_plus_card_criterion_in_card_reward_choice():
     q = adapter.calls[0]["questions"]["pick"]
     assert PLUS_CARD_CRITERION in q["instructions"]
     assert CONTENT_MAP_REF in q["instructions"]
+    assert "Neow+early" in q["instructions"]
+    assert "mid" in q["instructions"].lower()
+    assert NEOW_EARLY_CARD_INSTRUCTIONS in q["instructions"] or "Neow+early" in q["instructions"]
     assert PLUS_CARD_CRITERION in q["criteria"]["card_1"]
     assert PLUS_CARD_CRITERION not in q["criteria"]["card_0"]
+    assert "card_fit" in adapter.calls[0]["questions"]
+    assert adapter.calls[0]["questions"]["card_fit"]["type"] == "score"
+    assert "card_skip" not in q["criteria"]
+    assert "Anger" in q["criteria"]["card_0"] or "ANGER" in q["criteria"]["card_0"] or "anger" in q["criteria"]["card_0"].lower() or "Pick card 0" in q["criteria"]["card_0"]
+
+
+def test_card_reward_skip_only_when_action_is_skip():
+    actions = [
+        {"action": "pick_card", "card_id": "ANGER", "upgraded": False, "rarity": "COMMON"},
+        {"action": "pick_card", "card_id": "INFLAME", "upgraded": False, "rarity": "UNCOMMON"},
+        {"action": "pick_card", "card_id": "BASH", "upgraded": True, "rarity": "BASIC"},
+        {"action": "pick_card", "card_id": "HEMOKINESIS", "upgraded": False, "rarity": "UNCOMMON"},
+    ]
+    env = _env(RunManager.PHASE_CARD_REWARD, actions)
+    mask = np.zeros(TOTAL_ACTIONS, dtype=np.int8)
+    for i in range(3):
+        mask[_CARD_RWD_START + i] = 1
+    mask[_CARD_RWD_EXTRA_START] = 1
+    cands = collect_candidates(env, mask)
+    keys = [c.key for c in cands]
+    assert keys == ["card_0", "card_1", "card_2", "card_3"]
+    assert cands[3].run_action == _CARD_RWD_EXTRA_START
+    assert "Smith/Neow" in cands[2].description
+    env2 = _env(
+        RunManager.PHASE_CARD_REWARD,
+        actions + [{"action": "skip"}],
+    )
+    with_skip = collect_candidates(env2, mask)
+    assert any(c.key == "card_skip" for c in with_skip)
+
+
+def test_potion_or_relic_reward_does_not_call_card_jev():
+    for action_name in ("pick_potion", "pick_relic_reward"):
+        actions = [
+            {"action": action_name, "potion_id": "FAKE"}
+            if action_name == "pick_potion"
+            else {"action": action_name, "relic_id": "FAKE"},
+            {"action": "skip_potion" if action_name == "pick_potion" else "skip_relic"},
+        ]
+        assert is_potion_or_relic_reward(actions)
+        env = _env(RunManager.PHASE_CARD_REWARD, actions)
+        mask = np.zeros(TOTAL_ACTIONS, dtype=np.int8)
+        mask[_CARD_RWD_START] = 1
+        mask[_CARD_RWD_START + 3] = 1
+        adapter = ScriptedJev([{"pick": {"choice": "card_0", "confidence": 0.99}}])
+        rng = np.random.RandomState(0)
+        action, log = choose_jev_noncombat(env, mask, rng, adapter)
+        assert adapter.calls == []
+        assert log["shadow_decision"] == "potion_or_relic_reward"
+        assert log["shadow_fallback_reason"] == POTION_OR_RELIC_REASON
+        assert log["shadow_status"] != "ok"
+        assert mask[action] == 1
+
+
+def test_card_fit_assist_lands_when_choice_not_skip():
+    actions = [
+        {"action": "pick_card", "card_id": "ANGER", "upgraded": False, "rarity": "COMMON"},
+        {"action": "pick_card", "card_id": "INFLAME", "upgraded": False, "rarity": "UNCOMMON"},
+        {"action": "skip"},
+    ]
+    env = _env(RunManager.PHASE_CARD_REWARD, actions)
+    mask = np.zeros(TOTAL_ACTIONS, dtype=np.int8)
+    mask[_CARD_RWD_START] = 1
+    mask[_CARD_RWD_START + 1] = 1
+    mask[_CARD_RWD_START + 3] = 1
+    adapter = ScriptedJev(
+        [
+            {
+                "pick": {"choice": "card_1", "confidence": 0.50},
+                "card_fit": {"score": 2.0},
+            }
+        ]
+    )
+    rng = np.random.RandomState(0)
+    action, log = choose_jev_noncombat(env, mask, rng, adapter)
+    assert action == _CARD_RWD_START + 1
+    assert log["shadow_status"] == "ok"
+    assert log["shadow_fallback_reason"] == CARD_FIT_ASSIST_REASON
+    assert log["jev_card_fit"] == pytest.approx(2.0)
+    assert CARD_FIT_ASSIST_MIN == 2.0
+    assert CHOICE_CONFIDENCE_MIN == 0.65
+
+
+def test_card_fit_assist_does_not_land_skip():
+    actions = [
+        {"action": "pick_card", "card_id": "ANGER", "upgraded": False, "rarity": "COMMON"},
+        {"action": "skip"},
+    ]
+    env = _env(RunManager.PHASE_CARD_REWARD, actions)
+    mask = np.zeros(TOTAL_ACTIONS, dtype=np.int8)
+    mask[_CARD_RWD_START] = 1
+    mask[_CARD_RWD_START + 3] = 1
+    adapter = ScriptedJev(
+        [
+            {
+                "pick": {"choice": "card_skip", "confidence": 0.40},
+                "card_fit": {"score": 3.0},
+            }
+        ]
+    )
+    rng = np.random.RandomState(1)
+    action, log = choose_jev_noncombat(env, mask, rng, adapter)
+    assert log["shadow_status"] == "uncertain"
+    assert log["shadow_fallback_reason"] != CARD_FIT_ASSIST_REASON
+    assert mask[action] == 1
+
+
+def test_card_fit_below_assist_stays_random():
+    actions = [
+        {"action": "pick_card", "card_id": "ANGER", "upgraded": False},
+        {"action": "pick_card", "card_id": "INFLAME", "upgraded": False},
+    ]
+    env = _env(RunManager.PHASE_CARD_REWARD, actions)
+    mask = np.zeros(TOTAL_ACTIONS, dtype=np.int8)
+    mask[_CARD_RWD_START] = 1
+    mask[_CARD_RWD_START + 1] = 1
+    adapter = ScriptedJev(
+        [
+            {
+                "pick": {"choice": "card_1", "confidence": 0.50},
+                "card_fit": {"score": 1.0},
+            }
+        ]
+    )
+    rng = np.random.RandomState(0)
+    action, log = choose_jev_noncombat(env, mask, rng, adapter)
+    assert log["shadow_status"] == "uncertain"
+    assert log.get("jev_card_fit") == pytest.approx(1.0)
+    assert mask[action] == 1
+    assert CHOICE_CONFIDENCE_MIN == 0.65
 
 
 def test_live_client_missing_key_raises_jev_error():
@@ -294,3 +433,6 @@ def test_content_map_ref_is_the_stub_doc():
     assert "TODO(Surplus/Jev)" in text
     assert "UNASSIGNED" in text
     assert "UNKNOWN" in text
+    assert "card_fit" in text
+    assert "pick_potion" in text
+    assert "Neow+early" in text

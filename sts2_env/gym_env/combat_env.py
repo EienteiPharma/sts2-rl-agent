@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any, Callable
 import logging
 
 import gymnasium
@@ -42,6 +43,7 @@ class STS2CombatEnv(gymnasium.Env):
         player_max_hp: int = IRONCLAD_STARTING_HP,
         max_turns: int = 200,
         render_mode: str | None = None,
+        loadout_provider: Callable[[], dict[str, Any]] | None = None,
     ):
         super().__init__()
         self.observation_space = spaces.Box(
@@ -53,6 +55,7 @@ class STS2CombatEnv(gymnasium.Env):
         self.player_max_hp = player_max_hp
         self.max_turns = max_turns
         self.render_mode = render_mode
+        self.loadout_provider = loadout_provider
 
         self.combat: CombatState | None = None
 
@@ -63,13 +66,20 @@ class STS2CombatEnv(gymnasium.Env):
         rng_seed = int(self.np_random.integers(0, INT_MAX_EXCLUSIVE))
         rng = Rng(rng_seed)
 
-        # Create deck
-        deck = create_ironclad_starter_deck()
+        if self.loadout_provider is not None:
+            spec = self.loadout_provider()
+            deck = list(spec["deck"])
+            player_hp = int(spec.get("hp", self.player_hp))
+            player_max_hp = int(spec.get("max_hp", self.player_max_hp))
+        else:
+            deck = create_ironclad_starter_deck()
+            player_hp = self.player_hp
+            player_max_hp = self.player_max_hp
 
         # Create combat
         self.combat = CombatState(
-            player_hp=self.player_hp,
-            player_max_hp=self.player_max_hp,
+            player_hp=player_hp,
+            player_max_hp=player_max_hp,
             deck=deck,
             rng_seed=rng_seed,
             character_id="Ironclad",

@@ -1,0 +1,80 @@
+{
+  "locked": true,
+  "id": 29,
+  "seed": 200029,
+  "label": "Neow+early natural Act1 deck (RunEnv death snapshot)",
+  "source": "RunEnv death snapshot",
+  "floor": 6,
+  "act": 0,
+  "max_hp": 80,
+  "snapshot_hp": 0,
+  "hp": 44,
+  "hp_synth": true,
+  "deck": [
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "BASH",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "TRUE_GRIT",
+      "upgraded": false,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "BLUDGEON",
+      "upgraded": false,
+      "rarity": "UNCOMMON"
+    },
+    {
+      "card_id": "INFERNO_CARD",
+      "upgraded": false,
+      "rarity": "UNCOMMON"
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "locked": true,
+  "id": 16,
+  "seed": 200016,
+  "label": "Neow+early natural Act1 deck (RunEnv death snapshot)",
+  "source": "RunEnv death snapshot",
+  "floor": 3,
+  "act": 0,
+  "max_hp": 80,
+  "snapshot_hp": 0,
+  "hp": 44,
+  "hp_synth": true,
+  "deck": [
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "BASH",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "TWIN_STRIKE",
+      "upgraded": false,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "STOMP",
+      "upgraded": false,
+      "rarity": "UNCOMMON"
+    }
+  ]
+}

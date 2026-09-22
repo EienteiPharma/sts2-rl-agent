@@ -40,6 +40,18 @@ card in a reward list is not a natural drop — it comes from **Smith** (rest
 site) or **Neow** (opening). Do not prefer upgraded reward cards as if the
 reward itself upgraded them.
 
+Choice instructions are **Neow+early natural Act1**, not mid-act fixtures.
+`PHASE_CARD_REWARD` is also used for potion and relic reward screens
+(`pick_potion` / `pick_relic_reward`); those are **not** `pick_card` and
+must not be scored as CARD land-rate.
+
+`card_fit` Score (lab-hung, 4-level, mirrors rest Score):
+
+* Choice confidence threshold stays **0.65**
+* confidence < 0.65 and `card_fit >= 2.0` and choice ≠ skip → land
+  (`jev_card_fit_assist`)
+* otherwise uncertain → legal random
+
 ## Rest site
 Typical options: `HEAL` (rest), `SMITH` (upgrade). Extra options (dig /
 lift / …) only if the corresponding relic enabled them.

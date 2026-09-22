@@ -128,6 +128,10 @@ python scripts/train_combat.py \
     --total-timesteps 500000 \
     --n-envs 4 \
     --output-dir output/combat_ppo
+
+# Neow+early natural Act1 decks (RunEnv death snapshots), NOT bare starter.
+# Does not start training by itself; this is the CLI loadout switch.
+python scripts/train_combat.py --loadout neow_early --output-dir output/combat_ppo_neow_early
 ```
 
 Key flags:
@@ -140,6 +144,7 @@ Key flags:
 | `--batch-size` | 256 | Minibatch size |
 | `--n-steps` | 2048 | Steps per rollout per env |
 | `--output-dir` | output/combat_ppo | Where to save models and logs |
+| `--loadout` | `bare` | `bare` = Ironclad starter; `neow_early` = rotating Neow+early natural Act1 death snapshots (NOT bare) |
 
 ### Train a Full-Run Agent
 
@@ -154,6 +159,26 @@ python scripts/train_full_run.py \
 ```
 
 The `--act-count` flag controls how many acts per episode (1 = Act 1 only, 3 = full game).
+
+### Evaluate Act1 RunEnv (frozen protocol)
+
+Frozen seeds `200000..200049`. Primary metric is `act1_clear_rate` (max `act >= 1`). This is **not** the combat-suite win rate, and **`hierarchical` is not an Act1-clear gate** — gates stay lab-owned.
+
+```bash
+# random baseline
+python scripts/eval_act1_runenv.py --policy random --out evals/act1_runenv_random.json
+
+# RunEnv-sized MaskablePPO only (combat zips are rejected)
+python scripts/eval_act1_runenv.py --policy model --model path/to/run_model.zip
+
+# Combat zip in combat; legal random outside combat (`--jev off`).
+python scripts/eval_act1_runenv.py --policy hierarchical --combat-model path/to/combat_ppo_obs_v1.zip --jev off
+
+# Same combat zip; TypeSafe/Jev Choice for non-combat (`TYPESAFE_API_KEY`).
+python scripts/eval_act1_runenv.py --policy hierarchical --combat-model path/to/combat_ppo_obs_v1.zip --jev on
+```
+
+Combat obs is 181 (obs_v1, full `IntentType` one-hot). RunEnv obs is 201. Do not pass a combat zip to `--model`. Hierarchical + Jev is **not** an Act1-clear gate. See [docs/act1_runenv_eval_protocol.md](docs/act1_runenv_eval_protocol.md) and [docs/act1_content_map.md](docs/act1_content_map.md).
 
 ### Connect to Real Game
 
@@ -178,7 +203,10 @@ sts2-rl-agent/
 |-- pyproject.toml                 # Package config, dependencies
 |-- scripts/
 |   |-- benchmark.py               # Throughput benchmark
-|   |-- train_combat.py            # Combat-only training
+|   |-- eval_act1_runenv.py        # Frozen Act1 RunEnv eval (random/model/hierarchical)
+|   |-- jev_noncombat.py           # CARD_REWARD Jev wiring (potion/relic skip, card_fit)
+|   |-- train_combat.py            # Combat-only training (`--loadout bare|neow_early`)
+|   |-- fixtures/neow_early/       # LOCKED Neow+early RunEnv death-snapshot decks
 |   +-- train_full_run.py          # Full-run training
 |
 |-- sts2_env/                      # Python package (headless simulator)
