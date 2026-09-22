@@ -133,4 +133,6 @@ def test_jev_noncombat_script_surface():
     assert mod.CHOICE_CONFIDENCE_MIN == 0.65
     assert mod.REST_CHOICE_MIN_CONFIDENCE == 0.50
     assert "Neow+early" in mod.NEOW_EARLY_CARD_INSTRUCTIONS
+    assert mod.NEOW_JEV_OFF_REASON == "neow_jev_off_random"
+    assert "jev_neow" in mod.decide_noncombat.__code__.co_varnames
     assert mod.is_potion_or_relic_reward([{"action": "pick_potion"}])

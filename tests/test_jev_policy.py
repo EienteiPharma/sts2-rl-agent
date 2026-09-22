@@ -825,6 +825,7 @@ def test_neow_off_skips_jev_silently():
     action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter, flags=flags)
     assert adapter.calls == []
     assert log["shadow_fallback_reason"] == JEV_NEOW_OFF_REASON
+    assert JEV_NEOW_OFF_REASON == "neow_jev_off_random"
     assert log["is_neow"] is True
     assert mask[action] == 1
 

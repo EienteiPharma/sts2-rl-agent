@@ -266,7 +266,7 @@ def test_cli_jev_default_off_and_strategic_alias():
     assert off.jev == "off"
     assert off.jev_event == "off"
     assert off.jev_phases == "map,rest,card"
-    assert off.jev_neow is None
+    assert off.jev_neow == "on"
     assert off.jev_flags.allows_event() is False
     assert off.jev_flags.allows_neow() is True
     on = eval_mod.parse_args(
@@ -318,6 +318,57 @@ def test_cli_jev_event_on_and_phases():
     eval_mod.validate_policy_args(via)
     assert via.jev_flags.allows_event() is True
     assert via.jev_flags.allows_neow() is False
+
+
+def test_cli_jev_neow_off_ab_arm():
+    args = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--jev",
+            "on",
+            "--jev-neow",
+            "off",
+            "--start-with-neow",
+        ]
+    )
+    eval_mod.validate_policy_args(args)
+    assert args.jev_event == "off"
+    assert args.jev_neow == "off"
+    assert args.start_with_neow is True
+    assert args.jev_flags.allows_event() is False
+    assert args.jev_flags.allows_neow() is False
+    report = eval_mod.build_report(
+        policy="hierarchical",
+        model_path="",
+        combat_model_path="/tmp/combat.zip",
+        rows=[
+            {
+                "seed": 200000,
+                "act1_clear": False,
+                "full_run_win": False,
+                "truncated": True,
+                "max_act": 0,
+                "floor": 1,
+                "hp": 40,
+                "max_hp": 80,
+                "gold": 99,
+                "steps": 1,
+                "reward": -1.0,
+            }
+        ],
+        elapsed_s=0.1,
+        jev="on",
+        jev_neow="off",
+        start_with_neow=True,
+    )
+    assert report["jev_neow"] == "off"
+    assert report["start_with_neow"] is True
+    random_ok = eval_mod.parse_args(["--policy", "random"])
+    eval_mod.validate_policy_args(random_ok)
+    assert random_ok.jev_neow == "on"
 
 
 def test_cli_start_with_neow_default_off():

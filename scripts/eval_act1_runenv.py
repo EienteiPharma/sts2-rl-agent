@@ -367,8 +367,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument(
         "--jev-neow",
         choices=["on", "off"],
-        default=None,
-        help="Neow/boon Choice neow_boon (default on, independent of --jev-event)",
+        default="on",
+        help=(
+            "When --jev-event off: still route Neow opening boon through Jev "
+            "(neow_boon @ 0.65) if on (default). Set off for random Neow boon "
+            "(A/B: --start-with-neow without neow_boon Jev; reason neow_jev_off_random)"
+        ),
     )
     ap.add_argument(
         "--start-with-neow",
@@ -415,8 +419,8 @@ def validate_policy_args(args: argparse.Namespace) -> None:
     if args.policy != "hierarchical":
         if args.jev_event == "on":
             raise SystemExit("--jev-event on is only valid with --policy hierarchical")
-        if args.jev_neow == "on":
-            raise SystemExit("--jev-neow on is only valid with --policy hierarchical")
+        if args.jev_neow == "off":
+            raise SystemExit("--jev-neow off is only valid with --policy hierarchical")
     args.jev_flags = resolve_jev_flags(
         jev_event=args.jev_event,
         jev_phases=args.jev_phases,

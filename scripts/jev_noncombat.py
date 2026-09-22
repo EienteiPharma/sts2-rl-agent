@@ -3,9 +3,9 @@
 
 Modes: force_random | shadow_only | suggest_live
 Base Jev phases: MAP_CHOICE / REST_SITE / CARD_REWARD.
-Ordinary EVENT is gated by jev_event (CLI --jev-event, default off).
-Detected Neow still goes through Jev (neow_boon, Choice ≥ 0.65) when
-jev_event is off. REST 0.50 / heal/smith assists stay REST_SITE-only.
+EVENT is gated by jev_event (CLI --jev-event, default off); Neow opening is
+excepted and still uses Jev (neow_boon @ global 0.65) when --jev-neow on
+(default). --jev-neow off → neow_jev_off_random.
 Other noncombat = masked random. Fail-open to legal random on missing key /
 API / parse / timeout. Never prints or logs the API key.
 """
@@ -951,6 +951,7 @@ def decide_noncombat(
     model: str = DEFAULT_MODEL,
     timeout: float = DEFAULT_TIMEOUT_S,
     jev_event: bool = False,
+    jev_neow: bool = True,
 ) -> int:
     """Decide a RunEnv action for non-combat phases under the Jev switch contract."""
     if mode not in MODES:
@@ -987,26 +988,30 @@ def decide_noncombat(
         defaults.update(kwargs)
         return DecisionRecord(**defaults)
 
-    # Detect Neow early: with --jev-event off, ordinary EVENT stays random,
-    # but Neow opening boon still goes through Jev (neow_boon @ global 0.65).
+    # Detect Neow early: with --jev-event off, ordinary EVENT stays random;
+    # Neow opening boon goes through Jev only when jev_neow=True (global 0.65).
     mgr = getattr(env, "_mgr", None)
     acts_for_neow = mgr.get_available_actions() if mgr is not None else []
     is_neow = phase == "EVENT" and _is_neow_screen(env, acts_for_neow)
     log_phase = "NEOW" if is_neow else phase
+    neow_jev = bool(is_neow and jev_neow)
 
-    # EVENT with switch off: masked random, do not call API — except Neow.
-    if phase == "EVENT" and not jev_event and not is_neow:
+    # EVENT with switch off: masked random — Neow also random if jev_neow=False.
+    if phase == "EVENT" and not jev_event and not neow_jev:
         action = _legal_random(mask, rng)
+        reason = "neow_jev_off_random" if is_neow else "jev_event_off_random"
         rec = _base_rec(
             executed_action_index=action,
-            reason="jev_event_off_random",
+            reason=reason,
+            phase=log_phase,
+            is_neow=is_neow if is_neow else None,
         )
         append_shadow_log(shadow_log, rec)
         return action
 
     # Non-Jev phases: masked random (caller should not invoke for COMBAT).
-    # Neow is EVENT-phase but eligible even when jev_event=False.
-    if phase not in phases and not is_neow:
+    # Neow is EVENT-phase but eligible when jev_neow=True even if jev_event=False.
+    if phase not in phases and not neow_jev:
         action = _legal_random(mask, rng)
         rec = _base_rec(executed_action_index=action, reason="non_jev_phase_random")
         append_shadow_log(shadow_log, rec)
@@ -1333,6 +1338,7 @@ POTION_OR_RELIC_REASON = "potion_or_relic_reward_random"
 CARD_FIT_ASSIST_REASON = "jev_card_fit_assist"
 HP_PRESSURE_ASSIST_REASON = "jev_hp_pressure_assist"
 SMITH_ASSIST_REASON = "jev_smith_assist"
+NEOW_JEV_OFF_REASON = "neow_jev_off_random"
 NEOW_EARLY_CARD_INSTRUCTIONS = (
     "Neow+early natural Act1 (not mid-act fixtures). "
     "Choose a card reward or skip."

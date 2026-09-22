@@ -79,7 +79,8 @@ Neow/boon screens (`event_id=Neow` or id/meta contains boon) use Choice
 `neow_boon` (opening tolerance, not a mid-act fixture) even when
 `--jev-event off`. If Neow is not detected, skip `neow_boon` silently.
 `--jev-neow` default on; `--jev-neow off` skips Jev on a detected Neow
-screen. REST 0.50 / heal/smith assists do not apply to Neow.
+screen (`neow_jev_off_random`, A/B with `--start-with-neow`). REST 0.50 /
+heal/smith assists do not apply to Neow.
 
 Shop stays legal random.
 

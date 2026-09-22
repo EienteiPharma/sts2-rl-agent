@@ -63,7 +63,7 @@ If the EVENT screen is Neow / boon (`event_id==Neow` or id/meta contains
 If Neow is **not** detected, skip `neow_boon` silently and use `event_choice`.
 `--jev-neow` default **on** (independent of `--jev-event`). Explicit
 `--jev-neow off` skips Jev on a detected Neow screen (legal random,
-`jev_neow_off_random`).
+`neow_jev_off_random`).
 
 **Measure `neow_boon` only with `--start-with-neow`.** Hang tables and this
 round's n=100 omit Neow (`STS2RunEnv.reset` default / eval CLI default off
@@ -98,6 +98,9 @@ python scripts/eval_act1_runenv.py --policy hierarchical --model HUNG.zip --jev 
 
 # Measure neow_boon (hang / n=100 tables stay without this flag)
 python scripts/eval_act1_runenv.py --policy hierarchical --model HUNG.zip --jev on --jev-event on --start-with-neow
+
+# A/B: Neow on screen but Jev off (reason neow_jev_off_random)
+python scripts/eval_act1_runenv.py --policy hierarchical --model HUNG.zip --jev on --jev-neow off --start-with-neow
 ```
 
 `--jev-phases map,rest,card,event` is equivalent to `--jev-event on`.
@@ -128,5 +131,6 @@ Detected Neow (`event_id==Neow` / `_is_neow_screen`) still calls Jev: Choice
 `neow_boon`, global land **≥ 0.65**. REST soft 0.50 / heal/smith assists stay
 REST_SITE-only and **do not** apply to Neow.
 
-`--jev-neow` default **on**. Explicit `--jev-neow off` → `jev_neow_off_random`.
+`--jev-neow` default **on**. Explicit `--jev-neow off` + `--start-with-neow`
+→ legal random, reason `neow_jev_off_random` (Surplus A/B arm).
 Combat zip and MAP/CARD 0.65 are unchanged.
