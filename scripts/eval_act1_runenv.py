@@ -14,11 +14,13 @@ Policies
   (alias ``--combat-model``; obs_v1 / OBS_SIZE=181) via
   ``encode_observation(CombatState)`` + combat ``get_action_mask``.
   ``--combat-policy ppo`` (default) is the hung path. ``--combat-policy jev``
-  is an optional bypass (not a hang swap): legal-shortlist Choice, fail-open
-  to bh_v1. Non-combat default (``--jev off``): legal random, Jev shadow only (no
-  action change). ``--jev on`` calls TypeSafe/Jev Choice. Non-combat Jev is
-  independent of ``--combat-policy``. MAP low-HP ``--map-lowhp`` default on
-  (v1 uncertain filter). ``--map-lowhp-hard`` default **off**.
+  is **experimental** (failed HOLD bypass; not hang / not next mainline):
+  legal-shortlist Choice, fail-open to bh_v1. See
+  ``docs/COMBAT_JEV_HOLD_FAIL.md``. Non-combat default (``--jev off``): legal
+  random, Jev shadow only (no action change). ``--jev on`` calls TypeSafe/Jev
+  Choice. Non-combat Jev is independent of ``--combat-policy``. MAP low-HP
+  ``--map-lowhp`` default on (v1 uncertain filter). ``--map-lowhp-hard``
+  default **off**.
 
 Never feed RunEnv observations into the combat model.
 
@@ -162,8 +164,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="ppo",
         help=(
             "Combat source for hierarchical. Default ppo = hung bh_v1 zip "
-            "(unchanged hang path). jev = optional bypass (not a hang swap): "
-            "combat_step_choice on the legal shortlist; fail-open to bh_v1."
+            "(unchanged hang path). jev is experimental (failed HOLD bypass, "
+            "not hang / not next mainline): combat_step_choice on the legal "
+            "shortlist; fail-open to bh_v1."
         ),
     )
     ap.add_argument(

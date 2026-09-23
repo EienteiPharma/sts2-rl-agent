@@ -3,7 +3,8 @@
 
 Protocol: ``docs/HOLD_PROTOCOL.md``. Dual gate overall ≥70 / Boss ≥40 on this
 aligned protocol. Hang zip stays ``bh_v1``. Not Act1 RunEnv.
-``--combat-policy jev`` is an optional bypass (not a hang swap); default ppo.
+``--combat-policy jev`` is **experimental** (failed HOLD bypass; not hang /
+not next mainline); default remains **ppo**. See ``docs/COMBAT_JEV_HOLD_FAIL.md``.
 
 Box ops used to keep a bare Act1 22-enc copy at ``/workspace/sts2-sim/eval_combat_suite.py``
 (no ``--suite loadout_v1``). That is **not** the hang table. Use this script.
@@ -69,8 +70,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="ppo",
         help=(
             "Combat source. Default ppo = hung bh_v1 zip (hang table). "
-            "jev = optional bypass (not a hang swap): combat_step_choice on "
-            "the legal shortlist; fail-open to the same zip."
+            "jev is experimental (failed HOLD bypass, not hang / not next "
+            "mainline): combat_step_choice on the legal shortlist; fail-open "
+            "to the same zip."
         ),
     )
     parser.add_argument(
@@ -80,7 +82,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Parallel HOLD fights (ProcessPool spawn, same as collect). "
             "Default 1 = serial (prior behavior). Sentry smoke passes --workers 8. "
-            "jev arm shards TypeSafe keys "
+            "experimental jev arm shards TypeSafe keys "
             "(TYPESAFE_API_KEY / TYPESAFE_API_KEY_1.._4 / TYPESAFE_API_KEYS)."
         ),
     )

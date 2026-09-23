@@ -1,6 +1,11 @@
-"""Optional combat-step Jev Choice bypass (not a hang swap).
+"""Experimental combat-step Jev Choice bypass (failed HOLD; not hang).
 
-Locked contract from Jev router:
+Lab lock 2026-09-23: HOLD smoke on tip ``2b1dcf4`` collapsed
+(A ppo 74.2 / 98.9 / Boss 49.4 vs B jev 18.6 / 36.7 / Boss 0.6;
+failopen_rate 41.2% mostly ``low_conf``). Damage was from Jev-chosen
+steps, not insufficient fail-open. Archive: ``docs/COMBAT_JEV_HOLD_FAIL.md``.
+
+Locked contract (unchanged; flag kept, default remains ``--combat-policy ppo``):
 - Choice name: ``combat_step_choice``
 - Options: code-enumerated legal play-card / use-potion / end-turn only
 - Confidence default **0.35**; missing or below → fail-open
@@ -8,7 +13,7 @@ Locked contract from Jev router:
 - Reasons: ``timeout`` | ``error`` | ``bad_id`` | ``low_conf`` | ``empty_list``
 
 Default eval path remains ``--combat-policy ppo``. This module is unused
-until the operator opts into ``--combat-policy jev``.
+until the operator opts into experimental ``--combat-policy jev``.
 """
 from __future__ import annotations
 

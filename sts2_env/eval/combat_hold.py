@@ -415,8 +415,8 @@ def run_hold_smoke(
 
     ``workers`` default 1 is the historical serial loop. ``workers>1`` uses a
     spawn ProcessPool (MaskablePPO is not thread-safe); sentry smoke passes 8.
-    Parallel workers reload ``model_path`` and, on ``--combat-policy jev``,
-    shard TypeSafe keys via ``key_for_worker``.
+    Parallel workers reload ``model_path`` and, on experimental
+    ``--combat-policy jev``, shard TypeSafe keys via ``key_for_worker``.
     """
     jobs = hold_jobs(n_eps=n_eps, fixture_dir=fixture_dir)
     n_workers = max(1, int(workers))

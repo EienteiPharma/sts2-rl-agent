@@ -52,21 +52,20 @@ PYTHONPATH=. python scripts/eval_combat_suite.py \
 
 Expect overall ≈74% and Boss ≈49% on `bh_v1` (tolerance ~±3–5pp). Gate remains **≥70 / Boss≥40** on this protocol.
 
-Sentry 8-way smoke (default `--workers 1` stays serial, same as hang table):
+Sentry 8-way smoke (default `--workers 1` stays serial, same as hang table). Combat source default is **`--combat-policy ppo`**:
 
 ```bash
-# A — hung PPO (no TypeSafe)
+# A — hung PPO (hang / Lab mainline; no TypeSafe)
 PYTHONPATH=. python scripts/eval_combat_suite.py \
   --suite loadout_v1 --n-eps 20 --workers 8 --combat-policy ppo \
   --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip
-
-# B — optional combat-Jev bypass (shards TYPESAFE_API_KEY / _1.._4 / TYPESAFE_API_KEYS)
-PYTHONPATH=. python scripts/eval_combat_suite.py \
-  --suite loadout_v1 --n-eps 20 --workers 8 --combat-policy jev \
-  --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip
 ```
 
-`--workers N` uses a spawn ProcessPool (MaskablePPO is not thread-safe; same pattern as hang collect). Aggregate still reports overall / elite / Boss (plus `combat_jev` telemetry on the jev arm). Do **not** change dual-gate thresholds or homogenize fixtures.
+`--workers N` uses a spawn ProcessPool (MaskablePPO is not thread-safe; same pattern as hang collect). Aggregate still reports overall / elite / Boss. Do **not** change dual-gate thresholds or homogenize fixtures.
+
+## Combat-Jev bypass (abandoned)
+
+HOLD smoke on tip `2b1dcf4` (Lab lock): A ppo **74.2 / 98.9 / Boss 49.4** vs B jev **18.6 / 36.7 / Boss 0.6** (Δ **−55.6pp / −48.8pp**). `failopen_rate` 41.2% (mostly `low_conf`). Damage was from **Jev-chosen** steps, not insufficient fail-open. Archive: `docs/COMBAT_JEV_HOLD_FAIL.md`. `--combat-policy jev` remains an **experimental** failed-bypass flag only (not hang / not next mainline). Hang combat stays `bh_v1`.
 
 ## Not this protocol
 

@@ -144,9 +144,9 @@ def choose_hierarchical_action(
 
     Combat default (``combat_policy=ppo``): encode *combat* obs (never ``obs``
     / RunEnv) and predict with hung bh_v1, then map the combat action index
-    into the RunEnv combat slice. ``combat_policy=jev`` is an optional bypass
-    (not a hang swap): TypeSafe Choice on the legal shortlist, fail-open to
-    the same hung zip.
+    into the RunEnv combat slice. ``combat_policy=jev`` is experimental
+    (failed HOLD bypass; not hang / not next mainline): TypeSafe Choice on
+    the legal shortlist, fail-open to the same hung zip.
     Non-combat: legal random when ``jev_enabled`` is false; Jev Choice/Score
     when true (errors fall back to legal random). Ordinary EVENT is off unless
     ``jev_flags.allows_event()``. Detected Neow uses Jev only when

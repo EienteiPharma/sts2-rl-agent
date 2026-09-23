@@ -310,6 +310,12 @@ def test_eval_combat_suite_cli_is_hang_hold():
     args8 = mod.parse_args(["--workers", "8", "--combat-policy", "jev"])
     assert args8.workers == 8
     assert args8.combat_policy == "jev"
+    import inspect
+
+    src = inspect.getsource(mod.parse_args)
+    assert 'default="ppo"' in src
+    assert "experimental" in src
+    assert "failed HOLD bypass" in src
     with pytest.raises(SystemExit, match="loadout_v1"):
         mod.main(["--suite", "bare"])
 
