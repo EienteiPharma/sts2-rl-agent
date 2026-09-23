@@ -45,9 +45,11 @@ COMBAT_JEV_CONF_MIN = 0.35
 COMBAT_JEV_HAND_TRUNCATE = 8
 COMBAT_JEV_MONSTER_TRUNCATE = 3
 COMBAT_JEV_INSTRUCTIONS = (
-    "Among legal actions pick the safest step: prioritize survival and "
-    "clearing intent damage, then efficiency; if unsure, don't force a pick "
-    "(fail-open)."
+    "You may only choose a key that appears on the legal shortlist. "
+    "Priority: block or prevent this-turn intent damage and survive first; "
+    "efficiency second. "
+    "If the target is unclear or two options look equally good, prefer low "
+    "confidence and let fail-open handle it; do not hard-pick."
 )
 
 FAILOPEN_TIMEOUT = "timeout"
@@ -111,6 +113,23 @@ def _powers_line(creature: Creature) -> str:
     return " ".join(parts)
 
 
+def _hp_ratio_pct(creature: Creature) -> int:
+    return int(round(100.0 * int(creature.current_hp) / max(int(creature.max_hp), 1)))
+
+
+def _player_context_line(
+    combat: CombatState,
+    acting: Creature,
+    *,
+    end_turn_legal: bool,
+) -> str:
+    return (
+        f"hp={_hp_ratio_pct(acting)}% "
+        f"energy={int(combat.current_energy)} "
+        f"end_turn={'yes' if end_turn_legal else 'no'}"
+    )
+
+
 def _intent_line(combat: CombatState, enemy: Creature) -> str:
     ai = combat.enemy_ais.get(enemy.combat_id)
     if ai is None:
@@ -130,7 +149,14 @@ def _intent_line(combat: CombatState, enemy: Creature) -> str:
             bits.append(f"{name} {dmg}")
         else:
             bits.append(name)
-    return "/".join(bits)
+    return "/".join(bits) if bits else "unknown"
+
+
+def _intent_for_enemies(combat: CombatState, enemies: list[Creature]) -> str:
+    if not enemies:
+        return "none"
+    parts = [_intent_line(combat, enemy) for enemy in enemies if enemy.is_alive]
+    return " | ".join(parts) if parts else "none"
 
 
 def summarize_combat_action(
@@ -138,33 +164,43 @@ def summarize_combat_action(
     action: int,
     *,
     owner: Creature | None = None,
+    end_turn_legal: bool = True,
 ) -> str:
-    """One-line human summary: card/potion name, cost, target if known."""
+    """One-line shortlist summary for combat_step_choice criteria."""
     acting = owner or combat.primary_player
     owner_state = combat.combat_player_state_for(acting)
     hand = owner_state.hand if owner_state is not None else combat.hand
     potions = owner_state.potions if owner_state is not None else combat.potions
+    alive = [e for e in combat.enemies if e.is_alive]
+    ctx = _player_context_line(combat, acting, end_turn_legal=end_turn_legal)
     if int(action) == ACTION_END_TURN:
-        return "end turn"
+        intent = _intent_for_enemies(combat, alive)
+        return f"end turn | intent: {intent} | {ctx}"
     if is_potion_action(int(action)):
         slot, tgt = action_to_potion_and_target(int(action))
         name = "?"
         if slot is not None and 0 <= slot < len(potions) and potions[slot] is not None:
             name = str(getattr(potions[slot], "potion_id", potions[slot]))
         if tgt is None:
-            return f"use potion {name} (self)"
+            intent = _intent_for_enemies(combat, alive)
+            return f"use potion {name} (self) | intent: {intent} | {ctx}"
         enemy = combat.enemies[tgt] if 0 <= tgt < len(combat.enemies) else None
-        return f"use potion {name} -> {_label(enemy, attr='monster_id')}"
+        tgt_label = _label(enemy, attr="monster_id")
+        intent = _intent_line(combat, enemy) if enemy is not None and enemy.is_alive else "none"
+        return f"use potion {name} -> {tgt_label} | intent: {intent} | {ctx}"
     hand_i, tgt = action_to_card_and_target(int(action))
     if hand_i is None:
-        return f"action {action}"
+        return f"action {action} | {ctx}"
     card = hand[hand_i] if 0 <= hand_i < len(hand) else None
     name = _label(getattr(card, "card_id", None)) if card is not None else f"hand[{hand_i}]"
     cost = _cost_text(card) if card is not None else "?"
     if tgt is None:
-        return f"play {name} cost {cost}"
+        intent = _intent_for_enemies(combat, alive)
+        return f"play {name} cost {cost} (self) | intent: {intent} | {ctx}"
     enemy = combat.enemies[tgt] if 0 <= tgt < len(combat.enemies) else None
-    return f"play {name} cost {cost} -> {_label(enemy, attr='monster_id')}"
+    tgt_label = _label(enemy, attr="monster_id")
+    intent = _intent_line(combat, enemy) if enemy is not None and enemy.is_alive else "none"
+    return f"play {name} cost {cost} -> {tgt_label} | intent: {intent} | {ctx}"
 
 
 def enumerate_legal_combat_actions(
@@ -179,15 +215,27 @@ def enumerate_legal_combat_actions(
     """
     if combat.pending_choice is not None:
         return []
+    mask_arr = np.asarray(mask)
+    end_turn_legal = (
+        int(mask_arr[ACTION_END_TURN]) == 1 if mask_arr.size > ACTION_END_TURN else False
+    )
     out: list[tuple[str, int, str]] = []
-    for action in np.flatnonzero(np.asarray(mask) == 1):
+    for action in np.flatnonzero(mask_arr == 1):
         idx = int(action)
         if idx != ACTION_END_TURN and not is_potion_action(idx):
             hand_i, _tgt = action_to_card_and_target(idx)
             if hand_i is None:
                 continue
         action_id = combat_action_id(idx)
-        out.append((action_id, idx, summarize_combat_action(combat, idx, owner=owner)))
+        out.append(
+            (
+                action_id,
+                idx,
+                summarize_combat_action(
+                    combat, idx, owner=owner, end_turn_legal=end_turn_legal
+                ),
+            )
+        )
     return out
 
 

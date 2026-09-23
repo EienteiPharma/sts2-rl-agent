@@ -79,8 +79,10 @@ def _reset_combat(seed: int = 1):
 def test_contract_constants_locked():
     assert CHOICE_COMBAT_STEP == "combat_step_choice"
     assert COMBAT_JEV_CONF_MIN == 0.35
+    assert "legal shortlist" in COMBAT_JEV_INSTRUCTIONS
+    assert "intent damage" in COMBAT_JEV_INSTRUCTIONS
     assert "fail-open" in COMBAT_JEV_INSTRUCTIONS
-    assert "safest step" in COMBAT_JEV_INSTRUCTIONS
+    assert "hard-pick" in COMBAT_JEV_INSTRUCTIONS
 
 
 def test_enumerate_legal_is_play_potion_end_only():
@@ -94,10 +96,28 @@ def test_enumerate_legal_is_play_potion_end_only():
         assert action_id == combat_action_id(idx)
         assert int(mask[idx]) == 1
         assert (
-            summary == "end turn"
+            summary.startswith("end turn |")
             or summary.startswith("play ")
             or summary.startswith("use potion ")
         )
+        assert "hp=" in summary
+        assert "energy=" in summary
+        assert "end_turn=" in summary
+        assert "intent:" in summary
+
+
+def test_choice_question_includes_tightened_instructions():
+    env, combat, obs, mask = _reset_combat()
+    options = enumerate_legal_combat_actions(combat, mask)
+    from sts2_env.eval.combat_jev import _choice_question
+
+    q = _choice_question(options)
+    assert q["instructions"] == COMBAT_JEV_INSTRUCTIONS
+    assert q["type"] == "choice"
+    assert set(q["criteria"]) == {action_id for action_id, _idx, _ in options}
+    for _aid, _idx, summary in options:
+        assert q["criteria"][_aid] == summary
+    env.close()
 
 
 def test_choose_success_uses_shortlist_id_not_ppo():
