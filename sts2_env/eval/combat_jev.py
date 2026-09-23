@@ -41,7 +41,7 @@ from sts2_env.gym_env.action_space import (
 from sts2_env.gym_env.observation import encode_observation
 
 CHOICE_COMBAT_STEP = "combat_step_choice"
-COMBAT_JEV_CONF_MIN = 0.35
+COMBAT_JEV_CONF_MIN = 0.45
 COMBAT_JEV_HAND_TRUNCATE = 8
 COMBAT_JEV_MONSTER_TRUNCATE = 3
 COMBAT_JEV_INSTRUCTIONS = (

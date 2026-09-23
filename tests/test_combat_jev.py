@@ -1,4 +1,4 @@
-"""Combat-Jev bypass contract: combat_step_choice, conf 0.35, fail-open to bh_v1."""
+"""Combat-Jev bypass contract: combat_step_choice, conf 0.45, fail-open to bh_v1."""
 from __future__ import annotations
 
 import numpy as np
@@ -78,7 +78,7 @@ def _reset_combat(seed: int = 1):
 
 def test_contract_constants_locked():
     assert CHOICE_COMBAT_STEP == "combat_step_choice"
-    assert COMBAT_JEV_CONF_MIN == 0.35
+    assert COMBAT_JEV_CONF_MIN == 0.45
     assert "legal shortlist" in COMBAT_JEV_INSTRUCTIONS
     assert "intent damage" in COMBAT_JEV_INSTRUCTIONS
     assert "fail-open" in COMBAT_JEV_INSTRUCTIONS
