@@ -13,4 +13,6 @@ Opening Neow does **not** drag; Jev picking the boon **does**. Hang keeps the Ne
 
 **Win gate:** Act1 clear ≥5% on this protocol.
 
+**Combat HOLD (separate lock):** `docs/HOLD_PROTOCOL.md`. Dual gate is Act1 clear ≥5% **and** loadout_v1 HOLD ≥70 / Boss≥40 on that aligned protocol (fixtures 01–03, enc 16–21, fixture relics/potions). Hang zip stays `bh_v1`.
+
 REST calibration code may remain; no win claim from it. Strategic claims frozen (EVENT off, neow Jev off) until the lab unfreezes.

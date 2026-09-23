@@ -187,6 +187,17 @@ python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2
 
 Combat obs is 181 (obs_v1, full `IntentType` one-hot). RunEnv obs is 201. `--policy hierarchical --model` is the combat zip; `--policy model --model` is the RunEnv zip. Never feed RunEnv obs into the combat model. Hierarchical + Jev is **not** an Act1-clear gate. See [docs/act1_runenv_eval_protocol.md](docs/act1_runenv_eval_protocol.md) and [docs/act1_content_map.md](docs/act1_content_map.md).
 
+### Evaluate loadout_v1 HOLD (locked combat suite)
+
+Hang table (2026-09-22 `bh_v1`, n_eps=20): **74.2 / 98.9 / Boss 49.4**. Dual gate is overall ≥70 / Boss ≥40 **on this protocol** (fixtures 01–03, enc 16–21, relic/potion apply). See [docs/HOLD_PROTOCOL.md](docs/HOLD_PROTOCOL.md).
+
+```bash
+PYTHONPATH=. python scripts/eval_combat_suite.py \
+  --suite loadout_v1 --n-eps 20 \
+  --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip \
+  --out evals/obs_v1_bh_v1_loadout_v1_n20.summary.json
+```
+
 ### Connect to Real Game
 
 After training, run the agent against the actual game:
@@ -211,6 +222,7 @@ sts2-rl-agent/
 |-- scripts/
 |   |-- benchmark.py               # Throughput benchmark
 |   |-- eval_act1_runenv.py        # Frozen Act1 RunEnv eval (random/model/hierarchical)
+|   |-- eval_combat_suite.py       # Hang HOLD: --suite loadout_v1 (relics/potions)
 |   |-- jev_noncombat.py           # CARD_REWARD Jev wiring (potion/relic skip, card_fit)
 |   |-- train_combat.py            # Combat-only training (`--loadout bare|neow_early|loadout_v1|mix_neow_v1`)
 |   |-- collect_runenv_combat.py   # Hang-protocol combat-only buffer (n_envs collectors)
@@ -366,6 +378,8 @@ Following lessons from the STS1 RL community, this project uses a two-phase stra
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guide, dev setup, adding content |
 | [docs/SIMULATOR_ARCHITECTURE.md](docs/SIMULATOR_ARCHITECTURE.md) | Python simulator internal architecture |
 | [docs/TRAINING_GUIDE.md](docs/TRAINING_GUIDE.md) | Comprehensive RL training guide |
+| [docs/HANG_PROTOCOL_2026-09-22.md](docs/HANG_PROTOCOL_2026-09-22.md) | Hang Act1 RunEnv flags/bars |
+| [docs/HOLD_PROTOCOL.md](docs/HOLD_PROTOCOL.md) | Locked loadout_v1 HOLD (relics/potions, hang table) |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | TCP bridge communication protocol |
 | [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) | Current known issues and limitations |
 | [docs/MOD_BUILD_GUIDE.md](docs/MOD_BUILD_GUIDE.md) | How to build and install the bridge mod |

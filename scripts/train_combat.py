@@ -125,6 +125,67 @@ def assert_neow_early_labels(fixtures: list[dict[str, Any]]) -> None:
             )
 
 
+def _raw_id_entries(raw: Any, *, dict_keys: tuple[str, ...], what: str) -> list[str] | None:
+    """Parse a fixture relics/potions list. None = key omitted (not empty)."""
+    if raw is None:
+        return None
+    if not isinstance(raw, (list, tuple)):
+        raise SystemExit(f"fixture {what} must be a list")
+    out: list[str] = []
+    for entry in raw:
+        if entry is None:
+            continue
+        if isinstance(entry, dict):
+            name = None
+            for key in dict_keys:
+                if entry.get(key) is not None:
+                    name = entry.get(key)
+                    break
+        else:
+            name = entry
+        if name is None:
+            raise SystemExit(f"unknown {what} in fixture: {entry!r}")
+        out.append(str(name))
+    return out
+
+
+def coerce_fixture_relic_ids(names: list[str]) -> list[str]:
+    from sts2_env.relics.registry import coerce_relic_id
+
+    relics: list[str] = []
+    for name in names:
+        try:
+            relics.append(coerce_relic_id(name).name)
+        except KeyError as e:
+            raise SystemExit(f"unknown relic_id in fixture: {name}") from e
+    return relics
+
+
+def coerce_fixture_potions(names: list[str]):
+    import sts2_env.potions  # noqa: F401  # register models + effects
+    from sts2_env.potions.base import PotionInstance, all_potion_models, create_potion, get_potion_model
+
+    potions: list[PotionInstance] = []
+    for i, name in enumerate(names):
+        pid = name
+        if get_potion_model(pid) is None:
+            camel = "".join(part.capitalize() for part in pid.replace("-", "_").split("_") if part)
+            lower = pid.lower()
+            match = None
+            if get_potion_model(camel) is not None:
+                match = camel
+            else:
+                for model in all_potion_models():
+                    if model.potion_id.lower() == lower or model.potion_id.lower() == camel.lower():
+                        match = model.potion_id
+                        break
+            if match is None:
+                raise SystemExit(f"unknown potion_id in fixture: {name}")
+            pid = match
+        potions.append(create_potion(pid, slot=i))
+    return potions
+
+
 def materialize_fixture(fixture: dict[str, Any], *, suite: str | None = None) -> dict[str, Any]:
     from sts2_env.cards.factory import create_card
     from sts2_env.core.enums import CardId
@@ -155,13 +216,43 @@ def materialize_fixture(fixture: dict[str, Any], *, suite: str | None = None) ->
         deck.append(create_card(CardId[name], upgraded=upgraded))
     if not deck:
         raise SystemExit("fixture has empty deck")
-    return {
+    spec: dict[str, Any] = {
         "deck": deck,
         "hp": hp,
         "max_hp": max_hp,
         "label": fixture.get("label"),
         "suite": suite or fixture.get("suite"),
     }
+    relic_names = _raw_id_entries(
+        fixture.get("relics"),
+        dict_keys=("relic_id", "id", "name"),
+        what="relics",
+    )
+    if relic_names is not None:
+        spec["relics"] = coerce_fixture_relic_ids(relic_names)
+    potion_names = _raw_id_entries(
+        fixture.get("potions"),
+        dict_keys=("potion_id", "id", "name"),
+        what="potions",
+    )
+    if potion_names is not None:
+        spec["potions"] = coerce_fixture_potions(potion_names)
+    return spec
+
+
+def options_from_fixture(fixture: dict[str, Any], *, suite: str | None = None) -> dict[str, Any]:
+    """Hang-era reset options: deck/hp/max_hp plus relics/potions when present."""
+    spec = materialize_fixture(fixture, suite=suite)
+    options: dict[str, Any] = {
+        "deck": spec["deck"],
+        "hp": spec["hp"],
+        "max_hp": spec["max_hp"],
+    }
+    if "relics" in spec:
+        options["relics"] = spec["relics"]
+    if "potions" in spec:
+        options["potions"] = spec["potions"]
+    return options
 
 
 def materialize_neow_early_fixture(fixture: dict[str, Any]) -> dict[str, Any]:

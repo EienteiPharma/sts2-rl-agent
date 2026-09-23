@@ -34,11 +34,12 @@ Eval hang flags/bars unchanged. EVENT / neow Jev stay off on the RunEnv half. MA
 
 ## HOLD smoke callback
 
-`sts2_env/eval/combat_hold.py` — same layout as box `eval_combat_suite --suite loadout_v1`:
+`sts2_env/eval/combat_hold.py` — locked HOLD protocol (`docs/HOLD_PROTOCOL.md`):
 
-- Fixtures `loadout_v1_01/02/03`
+- Fixtures `loadout_v1_01/02/03` with relics `BURNING_BLOOD` + `SHURIKEN` (applied via reset options; omitted relics default to those two)
 - Encounters 16–21 (elite+boss)
-- Gate: overall **≥0.70**, Boss **≥0.40**
+- Seeds `40000+fix*1000+enc*100+ep`
+- Gate: overall **≥0.70**, Boss **≥0.40** on this protocol (hang table 74.2 / 98.9 / Boss 49.4). Relic-stripped HOLD is not the gate.
 
 `--hold-freq N` runs that smoke every N combat timesteps, writes `hold_logs.json`, saves `best_hold/best_model` when a smoke **passes** and improves. `--hold-stop` ends `learn()` on a miss (off by default; n_eps=1 is noisy). `--hold-n-eps 1` is smoke (18 fights); `20` is full box HOLD (360).
 

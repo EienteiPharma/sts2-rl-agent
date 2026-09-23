@@ -26,7 +26,7 @@
 ## 禁止混谈
 
 - **不得**把 bare / loadout_* combat 胜率写成 Act1 通关率。
-- loadout_v1 战斗套件报赢（74.2/98.9/49.4）**不**自动等于本表通关。
+- loadout_v1 战斗套件报赢（74.2/98.9/49.4）**不**自动等于本表通关。HOLD 口径见 `docs/HOLD_PROTOCOL.md`（fixture relics/potions 必须落地）。
 - Jev 战略 Choice 由 `--jev on` 接入非战斗决策；阈值见下，**不**等于 Act1 通关完成。
 - **`hierarchical` ≠ Act1 通关完成。** 战斗步只接 hung combat zip；非战斗默认合法随机。通关门禁仍由实验室另挂。
 

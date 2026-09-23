@@ -1,7 +1,15 @@
-"""loadout_v1 HOLD smoke (elite+boss). Gate: overall ≥70% and Boss ≥40%.
+"""loadout_v1 HOLD (elite+boss). Gate: overall ≥70% and Boss ≥40%.
 
-Matches box ``eval_combat_suite.py --suite loadout_v1`` encounter slice
-(ids 16-21) and the three named HOLD fixtures. Not a hang-protocol eval.
+Locked protocol: docs/HOLD_PROTOCOL.md
+
+Hang 2026-09-22 table on ``bh_v1`` (n_eps=20): overall 74.2 / elite 98.9 / Boss 49.4.
+That table used ``eval_combat_suite.py --suite loadout_v1`` with fixture relics
+(BURNING_BLOOD, SHURIKEN) and potions applied via reset options. A later
+materialize path dropped those keys, so 0-step HOLD on the same zip collapsed
+(39.4 / 78.9 / Boss 0.0). This module is the aligned runner.
+
+Not a hang-protocol Act1 RunEnv eval. Dual gates still ≥70 / Boss≥40 **on this
+protocol**. Hang zip stays ``bh_v1``. Buffer train stays frozen.
 """
 
 from __future__ import annotations
@@ -19,6 +27,22 @@ HOLD_FIXTURE_DIR = (
     Path(__file__).resolve().parents[2] / "scripts" / "fixtures" / "loadout_v1"
 )
 HOLD_SEED_BASE = 40000
+HOLD_SEED_FORMULA = "40000+fix*1000+enc*100+ep"
+# Hang-era Ironclad mid-act HOLD fixtures included starter + Shuriken. Applied
+# when the JSON omits ``relics`` so box-stripped copies still match the table.
+HOLD_DEFAULT_RELICS = ("BURNING_BLOOD", "SHURIKEN")
+HANG_HOLD_TABLE = {
+    "date": "2026-09-22",
+    "zip": "combat_ppo_obs_v1_bh_v1",
+    "n_eps": 20,
+    "overall": 0.742,
+    "elite": 0.989,
+    "boss": 0.494,
+    "summary": "evals/obs_v1_bh_v1_loadout_v1_n20.summary.json",
+}
+HUNG_COMBAT_ZIP = (
+    "/workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip"
+)
 
 
 def bucket_for_enc(enc_id: int) -> str:
@@ -73,7 +97,7 @@ def load_hold_fixtures(fixture_dir: Path | None = None) -> list[dict[str, Any]]:
 
 
 def hold_jobs(n_eps: int = 1, fixture_dir: Path | None = None) -> list[dict[str, Any]]:
-    """3 fixtures × elite+boss encounters × n_eps (box HOLD layout)."""
+    """3 fixtures × elite+boss encounters × n_eps (hang HOLD layout)."""
     from sts2_env.encounters.act1 import ALL_ACT1_ENCOUNTERS
 
     fixtures = load_hold_fixtures(fixture_dir)
@@ -96,7 +120,7 @@ def hold_jobs(n_eps: int = 1, fixture_dir: Path | None = None) -> list[dict[str,
     return jobs
 
 
-def _materialize(fx: dict[str, Any]) -> dict[str, Any]:
+def _train_combat_mod():
     import importlib.util
     import sys
 
@@ -108,7 +132,55 @@ def _materialize(fx: dict[str, Any]) -> dict[str, Any]:
         mod = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = mod
         spec.loader.exec_module(mod)
-    return mod.materialize_fixture(fx, suite="loadout_v1")
+    return mod
+
+
+def apply_hold_relics(spec: dict[str, Any]) -> dict[str, Any]:
+    """Keep fixture relics when present; else hang reconstruction defaults."""
+    relics = spec.get("relics")
+    if relics:
+        spec["relics"] = list(relics)
+        return spec
+    spec["relics"] = list(HOLD_DEFAULT_RELICS)
+    spec["relics_defaulted"] = True
+    return spec
+
+
+def _materialize(fx: dict[str, Any]) -> dict[str, Any]:
+    mod = _train_combat_mod()
+    spec = mod.materialize_fixture(fx, suite="loadout_v1")
+    return apply_hold_relics(spec)
+
+
+def options_from_hold_fixture(fx: dict[str, Any]) -> dict[str, Any]:
+    """Hang-era ``options_from_fixture`` plus HOLD relic default when omitted."""
+    spec = _materialize(fx)
+    options: dict[str, Any] = {
+        "deck": spec["deck"],
+        "hp": spec["hp"],
+        "max_hp": spec["max_hp"],
+        "relics": spec["relics"],
+    }
+    if spec.get("potions") is not None:
+        options["potions"] = spec["potions"]
+    return options
+
+
+def hold_protocol_meta(*, n_eps: int) -> dict[str, Any]:
+    return {
+        "suite": "loadout_v1",
+        "fixtures": list(HOLD_FIXTURE_STEMS),
+        "enc_ids": list(HOLD_ENC_IDS),
+        "seed_base": HOLD_SEED_BASE,
+        "seed_formula": HOLD_SEED_FORMULA,
+        "n_eps": int(n_eps),
+        "n_jobs": 3 * len(HOLD_ENC_IDS) * int(n_eps),
+        "default_relics": list(HOLD_DEFAULT_RELICS),
+        "relics": "fixture relics/potions applied via reset options; omitted relics → HOLD_DEFAULT_RELICS",
+        "gate": {"overall_min": HOLD_OVERALL_MIN, "boss_min": HOLD_BOSS_MIN},
+        "hang_table": dict(HANG_HOLD_TABLE),
+        "zip": "combat_ppo_obs_v1_bh_v1",
+    }
 
 
 def run_hold_smoke(
@@ -118,21 +190,18 @@ def run_hold_smoke(
     fixture_dir: Path | None = None,
     max_steps: int = 400,
 ) -> dict[str, Any]:
-    """Run HOLD episodes with a predict(obs, mask)->action callable. No SB3 import."""
+    """Run HOLD episodes with a predict(obs, mask)->action callable. No SB3 import.
+
+    Applies fixture relics/potions through ``env.reset(..., options=...)`` (hang
+    ``options_from_fixture`` path). Win = ``terminated and reward > 0``.
+    """
     from sts2_env.gym_env.combat_env import STS2CombatEnv
 
     rows: list[dict[str, Any]] = []
     for job in hold_jobs(n_eps=n_eps, fixture_dir=fixture_dir):
-        spec = _materialize(job["fixture"])
-
-        def _provider(s=spec):
-            return s
-
-        env = STS2CombatEnv(
-            encounter_pool=[job["encounter_setup"]],
-            loadout_provider=_provider,
-        )
-        obs, info = env.reset(seed=int(job["seed"]))
+        options = options_from_hold_fixture(job["fixture"])
+        env = STS2CombatEnv(encounter_pool=[job["encounter_setup"]])
+        obs, info = env.reset(seed=int(job["seed"]), options=options)
         done = False
         steps = 0
         reward = 0.0
@@ -160,4 +229,5 @@ def run_hold_smoke(
     summary = summarize_hold_rows(rows)
     summary["passed"] = hold_passes(summary)
     summary["n_eps"] = int(n_eps)
+    summary["protocol"] = hold_protocol_meta(n_eps=n_eps)
     return summary

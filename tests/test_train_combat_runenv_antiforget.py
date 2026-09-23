@@ -160,14 +160,25 @@ def test_hold_gate_matches_lab():
 
 
 def test_hold_jobs_are_three_fixtures_elite_boss():
+    from sts2_env.eval.combat_hold import HOLD_DEFAULT_RELICS, HOLD_SEED_BASE, hold_protocol_meta
+
     jobs = hold_jobs(n_eps=1)
     assert HOLD_FIXTURE_STEMS == ("loadout_v1_01", "loadout_v1_02", "loadout_v1_03")
     assert HOLD_ENC_IDS == list(range(16, 22))
+    assert HOLD_DEFAULT_RELICS == ("BURNING_BLOOD", "SHURIKEN")
     assert len(jobs) == 3 * 6
     assert {j["bucket"] for j in jobs} == {"elite", "boss"}
     assert sum(1 for j in jobs if j["bucket"] == "boss") == 9
     jobs2 = hold_jobs(n_eps=2)
     assert len(jobs2) == 36
+    jobs20 = hold_jobs(n_eps=20)
+    assert len(jobs20) == 360
+    job = jobs[0]
+    assert job["seed"] == HOLD_SEED_BASE + job["fixture_index"] * 1000 + job["enc_id"] * 100 + job["ep"]
+    meta = hold_protocol_meta(n_eps=20)
+    assert meta["seed_formula"] == "40000+fix*1000+enc*100+ep"
+    assert meta["gate"]["overall_min"] == 0.70
+    assert meta["gate"]["boss_min"] == 0.40
 
 
 def test_mix_runenv_half_is_hang_combat():
@@ -324,6 +335,10 @@ def test_hold_smoke_constructs_with_legal_first_action():
     # plus a single materialized combat reset through the mix loadout half
     # already covered. Here run a 1-job slice by temporarily using n_eps=1
     # would be 18. Skip full 18; prove callable path with jobs[0] via env.
+    from sts2_env.eval.combat_hold import options_from_hold_fixture
+    from sts2_env.gym_env.combat_env import STS2CombatEnv
+    from sts2_env.relics.base import RelicId
+
     jobs = hold_jobs(n_eps=1)
     assert len(jobs) == 18
     summary = summarize_hold_rows(
@@ -332,3 +347,14 @@ def test_hold_smoke_constructs_with_legal_first_action():
     assert summary["overall"]["n"] == 2
     assert callable(run_hold_smoke)
     assert callable(predict_fn)
+    job = jobs[0]
+    opts = options_from_hold_fixture(job["fixture"])
+    assert "BURNING_BLOOD" in opts["relics"]
+    assert "SHURIKEN" in opts["relics"]
+    env = STS2CombatEnv(encounter_pool=[job["encounter_setup"]])
+    env.reset(seed=int(job["seed"]), options=opts)
+    assert env.combat is not None
+    relic_ids = {r.relic_id for r in env.combat.relics}
+    assert RelicId.BURNING_BLOOD in relic_ids
+    assert RelicId.SHURIKEN in relic_ids
+    env.close()

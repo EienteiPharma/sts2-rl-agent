@@ -5,7 +5,7 @@ Online anti-forgetting mix (`docs/RUNENV_ONPOLICY_ANTIFORGET.md`) is **still val
 1. **Collect** hang-protocol RunEnv rollouts; write **combat segments only**.
 2. **Train** MaskablePPO from that buffer so Jev does **not** block `learn()`.
 
-Hang protocol is **locked**. Do not turn Jev off, do not replace MAP/CARD with random, do not change hang flags/bars to buy fps. Dual gate unchanged: Act1 RunEnv clear **≥5%** **and** loadout_v1 HOLD overall ≥70 / Boss ≥40. Hang zip stays `bh_v1` until both pass. Not a win claim.
+Hang protocol is **locked**. Do not turn Jev off, do not replace MAP/CARD with random, do not change hang flags/bars to buy fps. Dual gate unchanged: Act1 RunEnv clear **≥5%** **and** loadout_v1 HOLD overall ≥70 / Boss ≥40 **on `docs/HOLD_PROTOCOL.md`** (fixture relics/potions). Hang zip stays `bh_v1` until both pass. Not a win claim.
 
 ## Hang protocol (frozen)
 
