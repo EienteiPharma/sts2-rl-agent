@@ -325,6 +325,10 @@ def test_jev_noncombat_script_surface():
     assert "Neow+early" in mod.NEOW_EARLY_CARD_INSTRUCTIONS
     assert mod.NEOW_JEV_OFF_REASON == "neow_jev_off_random"
     assert "jev_neow" in mod.decide_noncombat.__code__.co_varnames
+    assert "map_lowhp" in mod.decide_noncombat.__code__.co_varnames
+    assert mod.MAP_LOWHP_SAFE_REASON == "map_lowhp_safe"
+    assert mod.MAP_LOWHP_RANDOM_REASON == "map_lowhp_random"
+    assert mod.MAP_LOWHP_ON is True
     assert mod.is_potion_or_relic_reward([{"action": "pick_potion"}])
     assert mod.TYPESAFE_HTTP_USER_AGENT == "sts2-rl-agent-jev/1.0"
     assert "Python-urllib" not in mod.TYPESAFE_HTTP_USER_AGENT

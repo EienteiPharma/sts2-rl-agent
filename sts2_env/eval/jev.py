@@ -27,6 +27,12 @@ Lab-hung thresholds (do not retune in this eval):
   is random (``neow_jev_off_random``). REST 0.50 / heal/smith assists
   do not apply to Neow. Otherwise skip that name
 * Shop stays legal random (not in default ``JEV_PHASES``)
+* MAP low-HP (``map_lowhp``, hang default **on**): when ``hp_pressure >= 2.0``
+  and a legal map node is ``SHOP`` or ``REST_SITE``, do not pick
+  ``MONSTER`` / ``ELITE`` / ``BOSS`` via low-confidence or legal-random
+  fallback (re-sample among shop/rest). If Choice picked a fight node at
+  that pressure, override to rest-then-shop (reason ``map_lowhp_safe``).
+  If only fight nodes remain, keep full-pool random. ``--map-lowhp off`` disables.
 * Strip invisible / illegal candidates before Choice
 * Act1 reward ``+`` cards are not natural drops (Smith / Neow only)
 * Card-reward Choice is Neow+early natural Act1, not mid-act fixtures
@@ -71,6 +77,12 @@ NEOW_OPTIONS_EMPTY_REASON = "neow_options_empty"
 EVENT_OPTIONS_EMPTY_REASON = "event_options_empty"
 SHOP_RANDOM_REASON = "shop_random"
 NON_JEV_PHASE_REASON = "non_jev_phase_random"
+MAP_LOWHP_ON = True
+MAP_LOWHP_PRESSURE = HP_PRESSURE_REST  # 2.0; same band as rest_or_continue prefer-rest
+MAP_SAFE_POINT_TYPES = frozenset({"SHOP", "REST_SITE"})
+MAP_FIGHT_POINT_TYPES = frozenset({"MONSTER", "ELITE", "BOSS"})
+MAP_LOWHP_SAFE_REASON = "map_lowhp_safe"
+MAP_LOWHP_RANDOM_REASON = "map_lowhp_random"
 
 DEFAULT_JEV_PHASES = frozenset({"map", "rest", "card"})
 JEV_PHASE_TOKENS = frozenset({"map", "rest", "card", "event"})
@@ -583,3 +595,68 @@ def rest_or_continue_override(hp_pressure: float) -> str | None:
     if hp_pressure <= HP_PRESSURE_CONTINUE:
         return "continue"
     return None
+
+
+def normalize_map_point_type(point_type: str | None) -> str:
+    return str(point_type or "").strip().upper().replace("-", "_")
+
+
+def is_map_safe_point(point_type: str | None) -> bool:
+    """Shop or rest map nodes — legal recoveries when HP is thin."""
+    name = normalize_map_point_type(point_type)
+    if name in MAP_SAFE_POINT_TYPES:
+        return True
+    if name in {"RESTSITE", "REST"}:
+        return True
+    if name in {"MERCHANT", "STORE"}:
+        return True
+    return False
+
+
+def is_map_fight_point(point_type: str | None) -> bool:
+    return normalize_map_point_type(point_type) in MAP_FIGHT_POINT_TYPES
+
+
+def map_lowhp_active(
+    hp_pressure: float | None,
+    *,
+    enabled: bool = MAP_LOWHP_ON,
+) -> bool:
+    return bool(enabled) and hp_pressure is not None and float(hp_pressure) >= MAP_LOWHP_PRESSURE
+
+
+def map_lowhp_safe_items(items, point_type_of):
+    return [item for item in items if is_map_safe_point(point_type_of(item))]
+
+
+def map_lowhp_filter(items, point_type_of, hp_pressure, *, enabled: bool = MAP_LOWHP_ON):
+    """Safe shop/rest subset when the constraint fires.
+
+    Returns None when the filter does not apply (caller keeps the full pool),
+    including the documented case where only monster/elite remain.
+    """
+    if not map_lowhp_active(hp_pressure, enabled=enabled):
+        return None
+    safe = map_lowhp_safe_items(items, point_type_of)
+    return safe or None
+
+
+def map_lowhp_prefer(items, point_type_of):
+    """Deterministic safe pick: rest before shop."""
+    if not items:
+        raise ValueError("map_lowhp_prefer requires a non-empty safe pool")
+    rests = [
+        item
+        for item in items
+        if normalize_map_point_type(point_type_of(item)) in {"REST_SITE", "RESTSITE", "REST"}
+    ]
+    if rests:
+        return rests[0]
+    shops = [
+        item
+        for item in items
+        if normalize_map_point_type(point_type_of(item)) in {"SHOP", "MERCHANT", "STORE"}
+    ]
+    if shops:
+        return shops[0]
+    return items[0]

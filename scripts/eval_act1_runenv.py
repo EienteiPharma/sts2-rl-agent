@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Frozen Act1 RunEnv eval (box ops). Protocol: docs/act1_runenv_eval_protocol.md
 
-Seeds 200000..200049 (50). Primary metric: act1_clear_rate (max act >= 1).
+Seeds 200000..200049 (50; ``--n`` extends the range, hang bar ``--n 100``).
+Primary metric: act1_clear_rate (max act >= 1).
 Never conflate with combat suite win rates.
 
 Policies
@@ -14,7 +15,7 @@ Policies
   ``encode_observation(CombatState)`` + combat ``get_action_mask``.
   Non-combat default (``--jev off``): legal random, Jev shadow only (no
   action change). ``--jev on`` calls TypeSafe/Jev Choice. Jev never runs
-  in combat.
+  in combat. MAP low-HP ``--map-lowhp`` default on.
 
 Never feed RunEnv observations into the combat model.
 
@@ -376,6 +377,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     ap.add_argument(
+        "--map-lowhp",
+        choices=["on", "off"],
+        default="on",
+        help=(
+            "MAP low-HP constraint (hang default on). When hp_pressure>=2.0 "
+            "and shop/rest is legal, do not random-fall to monster/elite. "
+            "Set off to disable."
+        ),
+    )
+    ap.add_argument(
+        "--n",
+        type=int,
+        default=SEED_COUNT,
+        help=(
+            f"Episode count from seed {SEED_START} (default {SEED_COUNT}; "
+            "hang bar uses --n 100)"
+        ),
+    )
+    ap.add_argument(
         "--start-with-neow",
         action="store_true",
         default=False,
@@ -422,10 +442,13 @@ def validate_policy_args(args: argparse.Namespace) -> None:
             raise SystemExit("--jev-event on is only valid with --policy hierarchical")
         if args.jev_neow == "on":
             raise SystemExit("--jev-neow on is only valid with --policy hierarchical")
+    if int(getattr(args, "n", SEED_COUNT)) < 1:
+        raise SystemExit("--n must be >= 1")
     args.jev_flags = resolve_jev_flags(
         jev_event=args.jev_event,
         jev_phases=args.jev_phases,
         jev_neow=args.jev_neow,
+        map_lowhp=getattr(args, "map_lowhp", "on"),
     )
 
 
@@ -460,8 +483,11 @@ def build_report(
     jev_phases: str = "map,rest,card",
     jev_neow: str | None = None,
     start_with_neow: bool = False,
+    map_lowhp: str = "on",
+    seed_count: int | None = None,
 ) -> dict:
     summary = _summarize(rows)
+    n_seeds = seed_count if seed_count is not None else (summary.get("n") or SEED_COUNT)
     return {
         "ts": datetime.now(timezone.utc).isoformat(),
         "protocol": PROTOCOL_ID,
@@ -474,13 +500,14 @@ def build_report(
         "jev_phases": jev_phases,
         "jev_neow": jev_neow if jev_neow is not None else "off",
         "start_with_neow": bool(start_with_neow),
+        "map_lowhp": map_lowhp,
         "character": "Ironclad",
         "ascension": 0,
         "seeds": {
             "start": SEED_START,
-            "count": SEED_COUNT,
-            "list_head": SEEDS[:3],
-            "list_tail": SEEDS[-3:],
+            "count": n_seeds,
+            "list_head": list(range(SEED_START, SEED_START + n_seeds))[:3],
+            "list_tail": list(range(SEED_START, SEED_START + n_seeds))[-3:],
         },
         "run_obs_size": RUN_OBS_SIZE,
         "combat_obs_size": OBS_SIZE,
@@ -490,7 +517,10 @@ def build_report(
                 "Combat never uses Jev. --jev off: legal random + stub logs. "
                 "--jev on: Choice/Score with confidence>=0.65, hp_pressure "
                 "rest/continue, MAP UNKNOWN defer (unknown_deferred at conf<0.80 "
-                "when hp_pressure>=2), and card_fit assist on true pick_card; "
+                "when hp_pressure>=2), MAP low-HP constraint map_lowhp (default on: "
+                "hp_pressure>=2 + shop/rest legal → no monster/elite via "
+                "low_confidence_random; fight pick overridden map_lowhp_safe; "
+                "--map-lowhp off disables), and card_fit assist on true pick_card; "
                 "potion/relic PHASE_CARD_REWARD screens legal-random "
                 "(potion_or_relic_reward_random). EVENT is off unless "
                 "--jev-event on (or --jev-phases lists event); pending EVENT "
@@ -525,7 +555,9 @@ def main(argv: list[str] | None = None) -> None:
     rng = np.random.RandomState(0)
     rows: list[dict] = []
     t0 = datetime.now(timezone.utc)
-    for seed in SEEDS:
+    n = max(1, int(getattr(args, "n", SEED_COUNT)))
+    seeds = list(range(SEED_START, SEED_START + n))
+    for seed in seeds:
         rows.append(
             _run_episode(
                 env,
@@ -554,6 +586,8 @@ def main(argv: list[str] | None = None) -> None:
         jev_phases=args.jev_phases if args.policy == "hierarchical" else "map,rest,card",
         jev_neow=args.jev_neow if args.policy == "hierarchical" else "off",
         start_with_neow=bool(getattr(args, "start_with_neow", False)),
+        map_lowhp=getattr(args, "map_lowhp", "on") if args.policy == "hierarchical" else "on",
+        seed_count=n,
     )
     out = Path(args.out)
     write_report(report, out)

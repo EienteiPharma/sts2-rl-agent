@@ -9,6 +9,8 @@
 (Box `--jev-mode suggest_live` is the same live Choice path as PR `--jev on`.)
 
 **Jev:** MAP / REST / CARD on; EVENT off; Neow random (`--jev-neow` default off).  
+MAP low-HP routing (`--map-lowhp`, default **on**): thin HP + shop/rest legal → do not random-fall to monster/elite. Hang zip and EVENT-off flags unchanged.
+
 Opening Neow does **not** drag; Jev picking the boon **does**. Hang keeps the Neow screen (`--start-with-neow`) and randomizes the boon.
 
 **Win gate:** Act1 clear ≥5% on this protocol.

@@ -267,16 +267,21 @@ def test_cli_jev_default_off_and_strategic_alias():
     assert off.jev_event == "off"
     assert off.jev_phases == "map,rest,card"
     assert off.jev_neow == "off"
+    assert off.map_lowhp == "on"
+    assert off.n == eval_mod.SEED_COUNT
     assert off.jev_flags.allows_event() is False
     assert off.jev_flags.allows_neow() is False
+    assert off.jev_flags.map_lowhp is True
     on = eval_mod.parse_args(
         ["--policy", "hierarchical", "--combat-model", "c.zip", "--jev", "on"]
     )
     eval_mod.validate_policy_args(on)
     assert on.jev == "on"
     assert on.jev_event == "off"
+    assert on.map_lowhp == "on"
     assert on.jev_flags.allows_event() is False
     assert on.jev_flags.allows_neow() is False
+    assert on.jev_flags.map_lowhp is True
     alias = eval_mod.parse_args(
         ["--policy", "hierarchical", "--combat-model", "c.zip", "--strategic", "jev"]
     )
@@ -388,6 +393,50 @@ def test_cli_jev_neow_on_optional_ab():
     random_ok = eval_mod.parse_args(["--policy", "random"])
     eval_mod.validate_policy_args(random_ok)
     assert random_ok.jev_neow == "off"
+
+
+def test_cli_map_lowhp_default_on_and_n_flag():
+    off = eval_mod.parse_args(["--policy", "hierarchical", "--combat-model", "c.zip"])
+    eval_mod.validate_policy_args(off)
+    assert off.map_lowhp == "on"
+    assert off.n == 50
+    assert off.jev_flags.map_lowhp is True
+    disabled = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--jev",
+            "on",
+            "--map-lowhp",
+            "off",
+            "--n",
+            "100",
+        ]
+    )
+    eval_mod.validate_policy_args(disabled)
+    assert disabled.map_lowhp == "off"
+    assert disabled.jev_flags.map_lowhp is False
+    assert disabled.n == 100
+    report = eval_mod.build_report(
+        policy="hierarchical",
+        model_path="",
+        combat_model_path="c.zip",
+        rows=[],
+        elapsed_s=0.1,
+        jev="on",
+        map_lowhp="on",
+        seed_count=100,
+    )
+    assert report["map_lowhp"] == "on"
+    assert report["seeds"]["count"] == 100
+    assert "map_lowhp" in report["jev_shadow"]["note"]
+    bad = eval_mod.parse_args(
+        ["--policy", "hierarchical", "--combat-model", "c.zip", "--n", "0"]
+    )
+    with pytest.raises(SystemExit, match="--n"):
+        eval_mod.validate_policy_args(bad)
 
 
 def test_cli_start_with_neow_default_off():
