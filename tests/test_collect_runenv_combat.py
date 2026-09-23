@@ -31,9 +31,13 @@ from sts2_env.gym_env.observation import OBS_SIZE
 from sts2_env.gym_env.runenv_antiforget import (
     SOURCE_LOADOUT,
     SOURCE_RUNENV,
+    FixedLengthCombatEnv,
     MixedHangLoadoutEnv,
     MixedHangLoadoutEnvMaker,
     make_loadout_v1_provider,
+    parse_mix_by,
+    probe_mix_step_fraction,
+    select_mix_source,
 )
 from sts2_env.gym_env.runenv_onpolicy_combat import (
     HANG_JEV_EVENT,
@@ -271,7 +275,7 @@ def test_mixed_maker_pickle_buffer_path(tmp_path):
     path = tmp_path / "buf.npz"
     save_combat_buffer(path, arrays)
     maker = MixedHangLoadoutEnvMaker(
-        seed=1, runenv_frac=1.0, max_steps=40, buffer_path=str(path)
+        seed=1, runenv_frac=1.0, max_steps=40, buffer_path=str(path), mix_by="steps"
     )
     loaded = pickle.loads(pickle.dumps(maker))
     env = loaded()
@@ -311,9 +315,10 @@ def test_train_from_buffer_cli_and_dry_run(tmp_path):
     assert args.n_envs == 1
     assert args.total_timesteps == 2048
     assert args.output_dir == train_mod.DEFAULT_OUTPUT_DIR
-    assert args.output_dir.endswith("combat_runenv_offline_ld03")
+    assert args.output_dir.endswith("combat_runenv_offline_ld03_steps")
     assert args.device == "auto"
     assert args.lr == pytest.approx(3e-5)
+    assert args.mix_by == "steps"
     report = train_mod.dry_run(
         train_mod.parse_args(
             ["--dry-run", "--output-dir", "output/combat_runenv_offline_dry"]
@@ -341,6 +346,10 @@ def test_train_from_buffer_cli_and_dry_run(tmp_path):
     assert "combat_ppo_obs_v1_bh_v1" in report["frozen_outdirs"]
     assert "combat_runenv_antiforget_v1" in report["frozen_outdirs"]
     assert report["antiforget_v1_0.7"] == "frozen"
+    assert report["mix_by"] == "steps"
+    assert report["mix_probe"]["mix_by"] == "steps"
+    assert 0.25 <= report["mix_probe"]["step_runenv"] <= 0.40
+    assert 0.25 <= report["step_runenv_frac"] <= 0.40
     arrays = synthetic_combat_buffer(n=8, n_episodes=2, seed=1)
     buf = tmp_path / "transitions.npz"
     save_combat_buffer(buf, arrays)
@@ -419,3 +428,156 @@ def test_antiforget_n_envs_subproc_documented():
     assert report["subproc_maker"] == "MixedHangLoadoutEnvMaker"
     maker = mod.make_masked_env(0, runenv_frac=0.0, max_steps=40)
     pickle.dumps(maker)
+
+
+def test_parse_mix_by_and_select_source():
+    assert parse_mix_by("steps") == "steps"
+    assert parse_mix_by("EPISODES") == "episodes"
+    with pytest.raises(SystemExit, match="mix-by"):
+        parse_mix_by("tokens")
+    rng = np.random.RandomState(0)
+    assert (
+        select_mix_source(
+            mix_by="steps",
+            runenv_frac=0.0,
+            n_runenv_steps=0,
+            n_loadout_steps=0,
+            rng=rng,
+        )
+        == SOURCE_LOADOUT
+    )
+    assert (
+        select_mix_source(
+            mix_by="steps",
+            runenv_frac=1.0,
+            n_runenv_steps=0,
+            n_loadout_steps=0,
+            rng=rng,
+        )
+        == SOURCE_RUNENV
+    )
+    # Buffer-dominant count must pick loadout at frac 0.3.
+    assert (
+        select_mix_source(
+            mix_by="steps",
+            runenv_frac=0.3,
+            n_runenv_steps=940,
+            n_loadout_steps=60,
+            rng=np.random.RandomState(1),
+            jitter=0.05,
+        )
+        == SOURCE_LOADOUT
+    )
+    assert (
+        select_mix_source(
+            mix_by="steps",
+            runenv_frac=0.3,
+            n_runenv_steps=0,
+            n_loadout_steps=100,
+            rng=np.random.RandomState(1),
+            jitter=0.05,
+        )
+        == SOURCE_RUNENV
+    )
+
+
+def test_mix_by_steps_frac_03_step_runenv_in_band():
+    steps = probe_mix_step_fraction(
+        runenv_frac=0.3,
+        mix_by="steps",
+        runenv_ep_len=200,
+        loadout_ep_len=5,
+        min_steps=5000,
+        seed=0,
+    )
+    assert 0.25 <= steps["step_runenv"] <= 0.40
+    episodes = probe_mix_step_fraction(
+        runenv_frac=0.3,
+        mix_by="episodes",
+        runenv_ep_len=200,
+        loadout_ep_len=5,
+        min_steps=5000,
+        seed=0,
+    )
+    # Episode Bernoulli at 0.3 with 40× length skew is ~0.94 buffer steps.
+    assert episodes["step_runenv"] >= 0.80
+    assert episodes["ep_runenv"] < 0.55
+    # mix_by=episodes is Bernoulli on reset, ignoring step counts.
+    n_run = 0
+    for i in range(200):
+        src = select_mix_source(
+            mix_by="episodes",
+            runenv_frac=0.3,
+            n_runenv_steps=940,
+            n_loadout_steps=60,
+            rng=np.random.RandomState(i),
+        )
+        if src == SOURCE_RUNENV:
+            n_run += 1
+    assert 35 <= n_run <= 90
+    assert (
+        select_mix_source(
+            mix_by="steps",
+            runenv_frac=0.3,
+            n_runenv_steps=940,
+            n_loadout_steps=60,
+            rng=np.random.RandomState(0),
+            jitter=0.05,
+        )
+        == SOURCE_LOADOUT
+    )
+
+
+def test_mix_by_steps_long_buffer_short_loadout():
+    arrays = synthetic_combat_buffer(n=400, n_episodes=2, seed=0)
+    replay = CombatReplayEnv(arrays, hang_protocol_meta(), seed=0)
+    env = MixedHangLoadoutEnv(
+        runenv_frac=0.3,
+        loadout_env=FixedLengthCombatEnv(5, source=SOURCE_LOADOUT),
+        runenv_env=replay,
+        mix_by="steps",
+    )
+    assert env.mix_by == "steps"
+    env.reset(seed=0)
+    while (env._n_runenv_steps + env._n_loadout_steps) < 4000:
+        mask = env.action_masks()
+        action = int(np.flatnonzero(np.asarray(mask) == 1)[0])
+        _obs, _r, terminated, truncated, info = env.step(action)
+        if terminated or truncated:
+            if (env._n_runenv_steps + env._n_loadout_steps) >= 4000:
+                break
+            env.reset()
+    total = env._n_runenv_steps + env._n_loadout_steps
+    frac = env._n_runenv_steps / total
+    env.close()
+    assert 0.25 <= frac <= 0.40
+    live = MixedHangLoadoutEnv(
+        runenv_frac=0.3,
+        loadout_provider=make_loadout_v1_provider(offset=0),
+        max_steps=40,
+    )
+    assert live.mix_by == "episodes"
+    live.close()
+    buf_default = MixedHangLoadoutEnv(
+        runenv_frac=0.3,
+        loadout_env=FixedLengthCombatEnv(5),
+        runenv_env=CombatReplayEnv(
+            synthetic_combat_buffer(n=16, n_episodes=4, seed=1),
+            hang_protocol_meta(),
+        ),
+    )
+    assert buf_default.mix_by == "steps"
+    buf_default.close()
+
+
+def test_train_from_buffer_mix_by_cli(capsys):
+    assert train_mod.parse_args([]).mix_by == "steps"
+    assert train_mod.parse_args(["--mix-by", "episodes"]).mix_by == "episodes"
+    with pytest.raises(SystemExit):
+        train_mod.parse_args(["--mix-by", "tokens"])
+    with pytest.raises(SystemExit):
+        train_mod.parse_args(["--help"])
+    help_text = capsys.readouterr().out
+    assert "--mix-by" in help_text
+    assert "{steps,episodes}" in help_text
+    assert "steps (default)" in help_text

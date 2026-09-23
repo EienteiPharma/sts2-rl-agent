@@ -10,8 +10,8 @@ Usage:
     python scripts/train_combat_from_buffer.py \\
         --buffer output/runenv_combat_buffer/transitions.npz \\
         --continue-from /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip \\
-        --output-dir output/combat_runenv_offline_ld03 \\
-        --runenv-frac 0.3 --device auto --n-envs 1 --total-timesteps 2048
+        --output-dir output/combat_runenv_offline_ld03_steps \\
+        --runenv-frac 0.3 --mix-by steps --device auto --n-envs 1 --total-timesteps 2048
 
 Never overwrites ``bh_v1``, ``combat_runenv_onpolicy_v1``, or
 ``combat_runenv_antiforget_v1``. Never continue-from the antiforget_v1 zip.
@@ -36,11 +36,16 @@ from sts2_env.gym_env.combat_buffer import (
     synthetic_combat_buffer,
 )
 from sts2_env.gym_env.runenv_antiforget import (
+    DEFAULT_MIX_BY_BUFFER,
     DEFAULT_RUNENV_FRAC,
+    MIX_BY_EPISODES,
+    MIX_BY_STEPS,
     MaskedEnvMaker,
     MixedHangLoadoutEnvMaker,
     frozen_runenv_frac_warning,
+    parse_mix_by,
     parse_runenv_frac,
+    probe_mix_step_fraction,
     refuse_antiforget_v1_continue,
 )
 from sts2_env.gym_env.runenv_onpolicy_combat import (
@@ -53,7 +58,7 @@ from sts2_env.gym_env.runenv_onpolicy_combat import (
 
 HUNG_OUTDIR_NAME = "combat_ppo_obs_v1_bh_v1"
 HUNG_COMBAT_ZIP = f"/workspace/sts2-sim/output/{HUNG_OUTDIR_NAME}/final_model.zip"
-DEFAULT_OUTPUT_DIR = "output/combat_runenv_offline_ld03"
+DEFAULT_OUTPUT_DIR = "output/combat_runenv_offline_ld03_steps"
 PROTOCOL_ID = "hang_protocol_runenv_offline_buffer_ld03 LOCKED 2026-09-23"
 
 
@@ -107,6 +112,7 @@ def make_masked_env(
     buffer_path: str | None,
     runenv_frac: float,
     max_steps: int = 2000,
+    mix_by: str = MIX_BY_STEPS,
     ActionMasker: Any = None,
 ):
     inner = MixedHangLoadoutEnvMaker(
@@ -114,6 +120,7 @@ def make_masked_env(
         runenv_frac=runenv_frac,
         max_steps=max_steps,
         buffer_path=buffer_path,
+        mix_by=mix_by,
     )
     return MaskedEnvMaker(inner, ActionMasker=ActionMasker)
 
@@ -153,8 +160,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=DEFAULT_RUNENV_FRAC,
         help=(
-            "P(buffer/RunEnv episode); rest live loadout_v1 "
-            "(default 0.3 loadout-dominant; 0.7 frozen)"
+            "Target mix fraction for buffer/RunEnv (default 0.3; 0.7 frozen). "
+            "With --mix-by steps this is a step fraction; with episodes it is "
+            "P(buffer episode) — hang fights are ~50× longer than loadout."
+        ),
+    )
+    parser.add_argument(
+        "--mix-by",
+        dest="mix_by",
+        default=DEFAULT_MIX_BY_BUFFER,
+        choices=["steps", "episodes"],
+        help=(
+            "How --runenv-frac is applied. steps (default): drive cumulative "
+            "PPO step fraction toward the frac (needed — buffer eps are ~50× "
+            "loadout). episodes: Bernoulli per reset (live online default)."
         ),
     )
     parser.add_argument(
@@ -196,6 +215,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     args = parser.parse_args(argv)
     args.runenv_frac = parse_runenv_frac(args.runenv_frac)
+    args.mix_by = parse_mix_by(args.mix_by)
     return args
 
 
@@ -259,6 +279,7 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         loadout_provider=make_loadout_v1_provider(offset=0),
         max_steps=40,
         runenv_env=replay,
+        mix_by=MIX_BY_EPISODES,
     )
     obs_m, info_m = mix.reset(seed=1)
     mix.close()
@@ -270,6 +291,14 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     obs_l, info_l = env_l.reset(seed=1)
     env_l.close()
     jobs = hold_jobs(n_eps=1)
+    mix_probe = probe_mix_step_fraction(
+        runenv_frac=args.runenv_frac,
+        mix_by=args.mix_by,
+        runenv_ep_len=80,
+        loadout_ep_len=4,
+        min_steps=1600,
+        seed=0,
+    )
     return {
         "protocol": PROTOCOL_ID,
         "dry_run": True,
@@ -280,6 +309,13 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "n_transitions": int(arrays["obs"].shape[0]),
         "runenv_frac": args.runenv_frac,
         "loadout_frac": round(1.0 - args.runenv_frac, 4),
+        "mix_by": args.mix_by,
+        "step_runenv_frac": mix_probe["step_runenv"],
+        "mix_by_note": (
+            "steps = target cumulative PPO step fraction (buffer default). "
+            "episodes = Bernoulli per reset; hang eps ~50x loadout so frac 0.3 "
+            "was ~0.94 buffer steps (loadoutdom_ep_v1)."
+        ),
         "runenv_frac_warning": frozen_runenv_frac_warning(args.runenv_frac),
         "recipe": "loadout_dominant_0.3",
         "continue_from_policy": "bh_v1_only",
@@ -328,6 +364,7 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "frozen_outdirs": list(FROZEN_OUTDIR_NAMES),
         "online_antiforget_still_valid": True,
         "antiforget_v1_0.7": "frozen",
+        "mix_probe": mix_probe,
     }
 
 
@@ -415,6 +452,7 @@ def train(args: argparse.Namespace) -> None:
     print("  output_dir:      ", output_dir)
     print("  buffer:          ", buffer_path, "n=", arrays["obs"].shape[0])
     print("  runenv_frac:     ", args.runenv_frac)
+    print("  mix_by:          ", args.mix_by)
     note = frozen_runenv_frac_warning(args.runenv_frac)
     if note:
         print(" ", note)
@@ -432,6 +470,7 @@ def train(args: argparse.Namespace) -> None:
             buffer_path=buffer_path,
             runenv_frac=args.runenv_frac,
             max_steps=args.max_steps,
+            mix_by=args.mix_by,
             ActionMasker=ActionMasker,
         )
         for i in range(n_envs)
