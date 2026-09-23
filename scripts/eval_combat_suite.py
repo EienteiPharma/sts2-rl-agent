@@ -3,8 +3,9 @@
 
 Protocol: ``docs/HOLD_PROTOCOL.md``. Dual gate overall ≥70 / Boss ≥40 on this
 aligned protocol. Hang zip stays ``bh_v1``. Not Act1 RunEnv.
-``--combat-policy jev`` is **experimental** (failed HOLD bypass; not hang /
-not next mainline); default remains **ppo**. See ``docs/COMBAT_JEV_HOLD_FAIL.md``.
+``--combat-policy jev`` is **experimental** (HOLD failed twice; latest
+``ecd0073`` B 7.8/15.6/Boss 0.0; not hang / not next mainline); default
+**ppo**. See ``docs/COMBAT_JEV_HOLD_FAIL.md``.
 
 Box ops used to keep a bare Act1 22-enc copy at ``/workspace/sts2-sim/eval_combat_suite.py``
 (no ``--suite loadout_v1``). That is **not** the hang table. Use this script.

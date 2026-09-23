@@ -14,8 +14,8 @@ Policies
   (alias ``--combat-model``; obs_v1 / OBS_SIZE=181) via
   ``encode_observation(CombatState)`` + combat ``get_action_mask``.
   ``--combat-policy ppo`` (default) is the hung path. ``--combat-policy jev``
-  is **experimental** (failed HOLD bypass; not hang / not next mainline):
-  legal-shortlist Choice, fail-open to bh_v1. See
+  is **experimental** (HOLD failed twice on ``ecd0073``; not hang / not next
+  mainline): legal-shortlist Choice, fail-open to bh_v1. See
   ``docs/COMBAT_JEV_HOLD_FAIL.md``. Non-combat default (``--jev off``): legal
   random, Jev shadow only (no action change). ``--jev on`` calls TypeSafe/Jev
   Choice. Non-combat Jev is independent of ``--combat-policy``. MAP low-HP

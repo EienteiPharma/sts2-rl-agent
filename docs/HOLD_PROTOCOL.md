@@ -65,7 +65,7 @@ PYTHONPATH=. python scripts/eval_combat_suite.py \
 
 ## Combat-Jev bypass (abandoned)
 
-HOLD smoke on tip `2b1dcf4` (Lab lock): A ppo **74.2 / 98.9 / Boss 49.4** vs B jev **18.6 / 36.7 / Boss 0.6** (Δ **−55.6pp / −48.8pp**). `failopen_rate` 41.2% (mostly `low_conf`). Damage was from **Jev-chosen** steps, not insufficient fail-open. Archive: `docs/COMBAT_JEV_HOLD_FAIL.md`. `--combat-policy jev` remains an **experimental** failed-bypass flag only (not hang / not next mainline). Hang combat stays `bh_v1`.
+HOLD smoke failed twice (Lab lock). First `2b1dcf4`: B jev 18.6 / 36.7 / Boss 0.6, failopen 41.2%. Second `ecd0073` (prompt `1da5744` + conf 0.45): B jev **7.8 / 15.6 / Boss 0.0** (Δ **−66.4pp / −49.4pp** vs A ppo 74.2 / 98.9 / 49.4); failopen 33.8% but scores worse → poison is **selected steps**, not the gate. Archive: `docs/COMBAT_JEV_HOLD_FAIL.md`. `--combat-policy jev` remains **experimental** only (not hang / not next mainline). Hang combat stays `bh_v1`.
 
 ## Not this protocol
 

@@ -17,7 +17,7 @@ Opening Neow does **not** drag; Jev picking the boon **does**. Hang keeps the Ne
 
 **Combat HOLD (separate lock):** `docs/HOLD_PROTOCOL.md`. Dual gate is Act1 clear ≥5% **and** loadout_v1 HOLD ≥70 / Boss≥40 on that aligned protocol (fixtures 01–03, enc 16–21, fixture relics/potions). Hang zip stays `bh_v1`.
 
-**Combat-Jev (`--combat-policy jev`):** HOLD smoke failed on `2b1dcf4` (B jev 18.6 / 36.7 / Boss 0.6 vs A ppo 74.2 / 98.9 / 49.4; Δ −55.6pp / −48.8pp; failopen_rate 41.2% mostly `low_conf`). Damage was from Jev-chosen steps, not insufficient fail-open. Archived; **not** hang / **not** next mainline. Hang combat stays `bh_v1`. Details: `docs/COMBAT_JEV_HOLD_FAIL.md`.
+**Combat-Jev (`--combat-policy jev`):** HOLD failed twice; second on `ecd0073` (B 7.8 / 15.6 / Boss 0.0 vs A 74.2 / 98.9 / 49.4; failopen 33.8% but worse than first fail → selected steps toxic). **Not** hang / **not** next mainline. Hang combat stays `bh_v1`. Details: `docs/COMBAT_JEV_HOLD_FAIL.md`.
 
 REST calibration code may remain; no win claim from it. Strategic claims frozen (EVENT off, neow Jev off) until the lab unfreezes.
 
