@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -24,15 +25,12 @@ from typing import Any
 import numpy as np
 
 from sts2_env.eval.jev import (
+    MAP_LOWHP_HARD_REASON,
     MAP_LOWHP_ON,
     MAP_LOWHP_RANDOM_REASON,
     MAP_LOWHP_SAFE_REASON,
-    is_map_fight_point,
-    is_map_safe_point,
     local_hp_pressure,
-    map_lowhp_active,
-    map_lowhp_filter,
-    map_lowhp_prefer,
+    map_lowhp_hard_item,
     map_lowhp_safe_items,
 )
 
@@ -886,40 +884,29 @@ def _sample_map_lowhp(
     *,
     map_lowhp: bool,
 ) -> tuple[int, str | None, str | None]:
-    """Legal-random among shop/rest when the low-HP MAP constraint fires.
-
-    If only monster/elite remain, keep the full legal pool (no reason tag).
-    """
+    """Hard-select rest-then-shop when v2 fires; else full-pool random."""
     legal = _legal_opts(options, mask)
-    pool = map_lowhp_filter(
+    preferred = map_lowhp_hard_item(
         legal, _opt_point_type, hp_pressure, enabled=map_lowhp
     )
-    source = pool if pool else legal
-    if not source:
+    if preferred is not None:
+        return preferred.action_index, preferred.option_id, MAP_LOWHP_HARD_REASON
+    if not legal:
         return _legal_random(mask, rng), None, None
-    pick = source[int(rng.randint(0, len(source)))]
-    reason = MAP_LOWHP_RANDOM_REASON if pool else None
-    return pick.action_index, pick.option_id, reason
+    pick = legal[int(rng.randint(0, len(legal)))]
+    return pick.action_index, pick.option_id, None
 
 
-def _maybe_map_lowhp_safe(
+def _maybe_map_lowhp_hard(
     options: list[NoncombatOption],
-    chosen: NoncombatOption | None,
     hp_pressure: float | None,
     *,
     map_lowhp: bool,
 ) -> NoncombatOption | None:
-    """Override a fight pick to rest-then-shop when HP is thin and those exist."""
-    if not map_lowhp_active(hp_pressure, enabled=map_lowhp):
-        return None
-    if chosen is None or not is_map_fight_point(_opt_point_type(chosen)):
-        return None
-    if is_map_safe_point(_opt_point_type(chosen)):
-        return None
-    safe = map_lowhp_safe_items(options, _opt_point_type)
-    if not safe:
-        return None
-    return map_lowhp_prefer(safe, _opt_point_type)
+    """Hard-select rest-then-shop when HP is thin and those nodes are legal."""
+    return map_lowhp_hard_item(
+        options, _opt_point_type, hp_pressure, enabled=map_lowhp
+    )
 
 
 def _apply_hp_pressure_bias(
@@ -1051,11 +1038,10 @@ def decide_noncombat(
 ) -> int:
     """Decide a RunEnv action for non-combat phases under the Jev switch contract.
 
-    ``map_lowhp`` (hang default on): MAP_CHOICE with ``hp_pressure >= 2.0``
-    and a legal shop/rest node will not pick monster/elite via
-    ``low_confidence_random`` / api-error / choice-not-in-legal. A confident
-    fight pick at that pressure is overridden to rest-then-shop
-    (``map_lowhp_safe``). If only fight nodes remain, full-pool random.
+    ``map_lowhp`` (hang default on, v2 hard-select): MAP_CHOICE with
+    ``hp_pressure >= 2.0`` and a legal shop/rest node **always** executes
+    rest-then-shop (``map_lowhp_hard``), regardless of Jev confidence or
+    Choice. If only fight nodes remain, full-pool random.
     """
     if mode not in MODES:
         mode = "force_random"
@@ -1264,6 +1250,32 @@ def decide_noncombat(
         else hp_pressure
     )
 
+    if phase == "MAP_CHOICE" and mode == "suggest_live":
+        hard_pick = _maybe_map_lowhp_hard(
+            _legal_opts(options, mask), map_pressure, map_lowhp=map_lowhp
+        )
+        if hard_pick is not None:
+            print(
+                f"map_lowhp_hard pressure={map_pressure} "
+                f"jev_choice={choice_id} executed={hard_pick.option_id}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return _finish(
+                executed=hard_pick.action_index,
+                executed_id=hard_pick.option_id,
+                used=True,
+                reason=MAP_LOWHP_HARD_REASON,
+                jev_choice_id=choice_id,
+                jev_confidence=conf,
+                jev_action_index=hard_pick.action_index,
+                jev_hp_pressure=map_pressure,
+                latency_ms=latency_ms,
+                model_name=model_name,
+                error_type=error_type,
+                jev_card_fit=card_fit,
+            )
+
     if error_type or choice_id is None or conf is None:
         if phase == "MAP_CHOICE":
             action, eid, extra = _sample_map_lowhp(
@@ -1433,25 +1445,6 @@ def decide_noncombat(
             model_name=model_name,
             jev_card_fit=card_fit,
         )
-
-    if phase == "MAP_CHOICE":
-        safe_pick = _maybe_map_lowhp_safe(
-            options, chosen, map_pressure, map_lowhp=map_lowhp
-        )
-        if safe_pick is not None:
-            return _finish(
-                executed=safe_pick.action_index,
-                executed_id=safe_pick.option_id,
-                used=True,
-                reason=MAP_LOWHP_SAFE_REASON,
-                jev_choice_id=choice_id,
-                jev_confidence=conf,
-                jev_action_index=jev_aid,
-                jev_hp_pressure=map_pressure,
-                latency_ms=latency_ms,
-                model_name=model_name,
-                jev_card_fit=card_fit,
-            )
 
     deferred = _maybe_unknown_defer()
     if deferred is not None:

@@ -25,9 +25,8 @@ from sts2_env.eval.jev import (
     JEV_NEOW_OFF_REASON,
     NEOW_OPTIONS_EMPTY_REASON,
     JEV_PHASE_TOKENS,
+    MAP_LOWHP_HARD_REASON,
     MAP_LOWHP_ON,
-    MAP_LOWHP_RANDOM_REASON,
-    MAP_LOWHP_SAFE_REASON,
     NEOW_BOON_INSTRUCTIONS,
     NEOW_EARLY_CARD_INSTRUCTIONS,
     NON_JEV_PHASE_REASON,
@@ -47,12 +46,8 @@ from sts2_env.eval.jev import (
     JevClient,
     JevError,
     apply_choice_confidence,
-    is_map_fight_point,
-    is_map_safe_point,
     local_hp_pressure,
-    map_lowhp_active,
-    map_lowhp_filter,
-    map_lowhp_prefer,
+    map_lowhp_hard_item,
     map_lowhp_safe_items,
     rest_or_continue_override,
 )
@@ -692,55 +687,34 @@ def _cand_point_type(cand: Candidate) -> str:
     return ""
 
 
-def _is_safe_map_node(cand: Candidate) -> bool:
-    return bool(cand.is_rest) or is_map_safe_point(_cand_point_type(cand))
-
-
-def _is_fight_map_node(cand: Candidate) -> bool:
-    return is_map_fight_point(_cand_point_type(cand))
-
-
-def _map_lowhp_random(
+def _apply_map_lowhp_hard(
     cands: list[Candidate],
-    rng: np.random.RandomState,
-    hp_pressure: float | None,
-    *,
-    map_lowhp: bool,
-) -> tuple[int, str | None]:
-    pool = map_lowhp_filter(
-        cands, _cand_point_type, hp_pressure, enabled=map_lowhp
-    )
-    if pool:
-        return _legal_random_from(pool, rng), MAP_LOWHP_RANDOM_REASON
-    return _legal_random_from(cands, rng), None
-
-
-def _maybe_map_lowhp_override(
-    cands: list[Candidate],
-    chosen: Candidate | None,
     pick: JevAnswer,
     pressure: float | None,
     *,
     map_lowhp: bool,
 ) -> tuple[int, JevAnswer] | None:
-    """When HP is thin and shop/rest is legal, do not take monster/elite."""
-    if not map_lowhp_active(pressure, enabled=map_lowhp):
+    """Hard-select rest-then-shop whenever pressure+safe-legal, even on ok-path.
+
+    Leaves ``pick.choice`` as Jev's original suggestion so shadow logs still
+    show the Choice; executed action is the safe node. Tags ``map_lowhp_hard``.
+    """
+    preferred = map_lowhp_hard_item(
+        cands, _cand_point_type, pressure, enabled=map_lowhp
+    )
+    if preferred is None:
         return None
-    safe = map_lowhp_safe_items(cands, _cand_point_type)
-    if not safe:
-        return None
-    # Hard override fight nodes only. Treasure / ancient stay. Unknown uses
-    # unknown_deferred (which prefers the same safe pool when present).
-    if chosen is None or not _is_fight_map_node(chosen):
-        return None
-    if _is_safe_map_node(chosen):
-        return None
-    preferred = map_lowhp_prefer(safe, _cand_point_type)
     pick.status = "ok"
-    pick.choice = preferred.key
-    pick.fallback_reason = MAP_LOWHP_SAFE_REASON
+    pick.fallback_reason = MAP_LOWHP_HARD_REASON
     if pressure is not None:
         pick.score = float(pressure)
+    logger.warning(
+        "map_lowhp_hard pressure=%s jev_choice=%s executed=%s point_type=%s",
+        pressure,
+        pick.choice,
+        preferred.key,
+        _cand_point_type(preferred),
+    )
     return preferred.run_action, pick
 
 
@@ -929,6 +903,8 @@ def _augment_log(
     log["legal_ids"] = [c.key for c in cands]
     executed = next((c.key for c in cands if c.run_action == action), None)
     log["executed_id"] = executed
+    if log.get("shadow_fallback_reason") == MAP_LOWHP_HARD_REASON:
+        log["map_lowhp_hard"] = True
     if log.get("shadow_confidence") is not None:
         log["jev_confidence"] = log["shadow_confidence"]
     if choice_id:
@@ -1052,14 +1028,14 @@ def choose_jev_noncombat(
                 int(mgr.run_state.player.current_hp),
                 int(mgr.run_state.player.max_hp),
             )
-            action, extra = _map_lowhp_random(
-                cands, rng, pressure, map_lowhp=map_lowhp
+            answer = JevAnswer(status="error", fallback_reason=str(e), score=pressure)
+            hard = _apply_map_lowhp_hard(
+                cands, answer, pressure, map_lowhp=map_lowhp
             )
-            answer = JevAnswer(
-                status="error",
-                fallback_reason=extra or str(e),
-                score=pressure,
-            )
+            if hard is not None:
+                action, answer = hard
+            else:
+                action = _legal_random_from(cands, rng)
         else:
             action = _legal_random_from(cands, rng)
             answer = JevAnswer(status="error", fallback_reason=str(e))
@@ -1165,28 +1141,16 @@ def _decide_map_fork(
     )
     pick = apply_choice_confidence(answers.get("pick") or JevAnswer(status="error"))
     pick.score = pressure
+    hard = _apply_map_lowhp_hard(cands, pick, pressure, map_lowhp=map_lowhp)
+    if hard is not None:
+        return hard
     if pick.status != "ok":
-        action, extra = _map_lowhp_random(
-            cands, rng, pressure, map_lowhp=map_lowhp
-        )
-        if extra:
-            pick.fallback_reason = extra
-        return action, pick
+        return _legal_random_from(cands, rng), pick
     chosen = _lookup(cands, pick.choice)
     if chosen is None:
         pick.status = "error"
         pick.fallback_reason = f"choice {pick.choice!r} not in legal candidates"
-        action, extra = _map_lowhp_random(
-            cands, rng, pressure, map_lowhp=map_lowhp
-        )
-        if extra:
-            pick.fallback_reason = extra
-        return action, pick
-    overridden = _maybe_map_lowhp_override(
-        cands, chosen, pick, pressure, map_lowhp=map_lowhp
-    )
-    if overridden is not None:
-        return overridden
+        return _legal_random_from(cands, rng), pick
     deferred = _maybe_defer_unknown(cands, chosen, pick, pressure, rng)
     if deferred is not None:
         return deferred
@@ -1303,6 +1267,9 @@ def _decide_rest_or_continue(
     override = rest_or_continue_override(pressure)
     merged = pick
     merged.score = pressure
+    hard = _apply_map_lowhp_hard(cands, merged, pressure, map_lowhp=map_lowhp)
+    if hard is not None:
+        return hard
     if override == "rest" and rest_cands:
         merged.status = "ok"
         merged.choice = rest_cands[0].key
@@ -1345,28 +1312,13 @@ def _decide_rest_or_continue(
         return action, cont_pick
 
     if pick.status != "ok":
-        action, extra = _map_lowhp_random(
-            cands, rng, pressure, map_lowhp=map_lowhp
-        )
-        if extra:
-            pick.fallback_reason = extra
-        return action, pick
+        return _legal_random_from(cands, rng), pick
     chosen = _lookup(cands, pick.choice)
     if chosen is None:
         pick.status = "error"
         pick.fallback_reason = f"choice {pick.choice!r} not in legal candidates"
-        action, extra = _map_lowhp_random(
-            cands, rng, pressure, map_lowhp=map_lowhp
-        )
-        if extra:
-            pick.fallback_reason = extra
-        return action, pick
+        return _legal_random_from(cands, rng), pick
     pick.score = pressure
-    overridden = _maybe_map_lowhp_override(
-        cands, chosen, pick, pressure, map_lowhp=map_lowhp
-    )
-    if overridden is not None:
-        return overridden
     deferred = _maybe_defer_unknown(cands, chosen, pick, pressure, rng)
     if deferred is not None:
         return deferred

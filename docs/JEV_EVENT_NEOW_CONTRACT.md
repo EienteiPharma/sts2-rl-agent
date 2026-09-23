@@ -32,7 +32,7 @@
 
 UNKNOWN 只走 `map_fork`，不要在 EVENT 相位伪造 Unknown。
 
-**MAP low-HP (`map_lowhp`，hang 默认 on，本刀新增):** `hp_pressure>=2` 且合法含 shop/rest 时，low-conf/legal-random 不抽 monster/elite（`map_lowhp_random`）；自信 fight 改 rest-then-shop（`map_lowhp_safe`）。仅剩 fight 则全池随机。`--map-lowhp off` 关。EVENT 仍默认 off。
+**MAP low-HP (`map_lowhp` v2，hang 默认 on):** `hp_pressure>=2` 且合法含 shop/rest 时 **hard-select** rest-then-shop（`map_lowhp_hard`），不论 Jev 自信与否。仅剩 fight 则全池随机。`--map-lowhp off` 关。EVENT 仍默认 off。
 
 ## B) EVENT（`--jev-event on`，默认 off）
 

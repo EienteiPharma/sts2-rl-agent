@@ -432,6 +432,9 @@ def test_cli_map_lowhp_default_on_and_n_flag():
     assert report["map_lowhp"] == "on"
     assert report["seeds"]["count"] == 100
     assert "map_lowhp" in report["jev_shadow"]["note"]
+    assert "map_lowhp_hard" in report["jev_shadow"]["note"]
+    assert report["summary"]["map_lowhp_hard_n"] == 0
+    assert report["summary"]["map_lowhp_hard_eps"] == 0
     bad = eval_mod.parse_args(
         ["--policy", "hierarchical", "--combat-model", "c.zip", "--n", "0"]
     )

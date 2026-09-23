@@ -20,6 +20,7 @@ from sts2_env.eval.jev import (
     HP_PRESSURE_ASSIST_REASON,
     JEV_EVENT_OFF_REASON,
     JEV_NEOW_OFF_REASON,
+    MAP_LOWHP_HARD_REASON,
     MAP_LOWHP_ON,
     MAP_LOWHP_PRESSURE,
     MAP_LOWHP_RANDOM_REASON,
@@ -46,6 +47,7 @@ from sts2_env.eval.jev import (
     is_map_safe_point,
     local_hp_pressure,
     map_lowhp_filter,
+    map_lowhp_hard_item,
     map_lowhp_prefer,
     rest_or_continue_override,
     typesafe_http_headers,
@@ -243,9 +245,11 @@ def test_rest_or_continue_hp_pressure_prefers_rest():
     action, log = choose_jev_noncombat(env, mask, rng, adapter)
     assert log["shadow_decision"] == "rest_or_continue"
     assert action == _MAP_START  # rest
-    assert log["shadow_suggestion"] == "map_0"
+    assert log["executed_id"] == "map_0"
+    assert log["shadow_suggestion"] == "map_1"
     assert log["shadow_hp_pressure"] == pytest.approx(2.4)
-    assert "prefer rest" in (log["shadow_fallback_reason"] or "")
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_HARD_REASON
+    assert log.get("map_lowhp_hard") is True
 
 
 def test_rest_or_continue_hp_pressure_prefers_continue():
@@ -1470,6 +1474,7 @@ def test_map_choice_threshold_stays_065():
 def test_map_lowhp_filter_and_prefer():
     assert MAP_LOWHP_ON is True
     assert MAP_LOWHP_PRESSURE == 2.0
+    assert MAP_LOWHP_HARD_REASON == "map_lowhp_hard"
     assert is_map_safe_point("SHOP")
     assert is_map_safe_point("REST_SITE")
     assert is_map_safe_point("merchant")
@@ -1483,9 +1488,13 @@ def test_map_lowhp_filter_and_prefer():
     mixed = ["SHOP", "REST_SITE", "MONSTER"]
     assert map_lowhp_prefer(mixed, lambda x: x) == "REST_SITE"
     assert map_lowhp_prefer(["SHOP"], lambda x: x) == "SHOP"
+    assert map_lowhp_hard_item(nodes, lambda x: x, 2.0) == "SHOP"
+    assert map_lowhp_hard_item(mixed, lambda x: x, 2.5) == "REST_SITE"
+    assert map_lowhp_hard_item(["MONSTER", "ELITE"], lambda x: x, 3.0) is None
+    assert map_lowhp_hard_item(nodes, lambda x: x, 2.0, enabled=False) is None
 
 
-def test_map_lowhp_low_conf_random_picks_shop_not_monster():
+def test_map_lowhp_low_conf_hard_selects_shop_not_monster():
     env, mask = _map_env(
         [("SHOP", (0, 1)), ("MONSTER", (1, 1))],
         hp=20,
@@ -1506,12 +1515,14 @@ def test_map_lowhp_low_conf_random_picks_shop_not_monster():
         )
         seen.add(action)
         assert action == _MAP_START
-        assert log["shadow_fallback_reason"] == MAP_LOWHP_RANDOM_REASON
+        assert log["shadow_fallback_reason"] == MAP_LOWHP_HARD_REASON
+        assert log["executed_id"] == "map_0"
+        assert log.get("map_lowhp_hard") is True
         assert log["shadow_decision"] == "map_fork"
     assert seen == {_MAP_START}
 
 
-def test_map_lowhp_overrides_confident_monster_to_shop():
+def test_map_lowhp_hard_overrides_confident_monster_to_shop():
     env, mask = _map_env(
         [("SHOP", (0, 1)), ("MONSTER", (1, 1))],
         hp=80,
@@ -1527,9 +1538,32 @@ def test_map_lowhp_overrides_confident_monster_to_shop():
     )
     action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
     assert action == _MAP_START
-    assert log["shadow_fallback_reason"] == MAP_LOWHP_SAFE_REASON
-    assert log["shadow_suggestion"] == "map_0"
+    assert log["executed_id"] == "map_0"
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_HARD_REASON
+    assert log["shadow_suggestion"] == "map_1"
+    assert log.get("map_lowhp_hard") is True
+    assert log["shadow_status"] == "ok"
     assert log["shadow_hp_pressure"] == pytest.approx(2.4)
+
+
+def test_map_lowhp_hard_tags_even_when_choice_already_shop():
+    env, mask = _map_env(
+        [("SHOP", (0, 1)), ("MONSTER", (1, 1))],
+        hp=20,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 2.1},
+                "pick": {"choice": "map_0", "confidence": 0.99},
+            }
+        ]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action == _MAP_START
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_HARD_REASON
+    assert log.get("map_lowhp_hard") is True
 
 
 def test_map_lowhp_healthy_can_still_pick_monster():
@@ -1550,6 +1584,7 @@ def test_map_lowhp_healthy_can_still_pick_monster():
     assert action == _MAP_START + 1
     assert log["shadow_status"] == "ok"
     assert log["shadow_fallback_reason"] is None
+    assert not log.get("map_lowhp_hard")
 
 
 def test_map_lowhp_fight_only_keeps_full_pool_random():
@@ -1559,7 +1594,6 @@ def test_map_lowhp_fight_only_keeps_full_pool_random():
         max_hp=80,
     )
     actions = set()
-    reasons = set()
     for seed in range(32):
         adapter = ScriptedJev(
             [
@@ -1573,8 +1607,8 @@ def test_map_lowhp_fight_only_keeps_full_pool_random():
             env, mask, np.random.RandomState(seed), adapter
         )
         actions.add(action)
-        reasons.add(log["shadow_fallback_reason"])
         assert action in {_MAP_START, _MAP_START + 1}
+        assert log["shadow_fallback_reason"] != MAP_LOWHP_HARD_REASON
         assert log["shadow_fallback_reason"] != MAP_LOWHP_RANDOM_REASON
     assert actions == {_MAP_START, _MAP_START + 1}
 
@@ -1600,6 +1634,7 @@ def test_map_lowhp_off_allows_monster_random():
             env, mask, np.random.RandomState(seed), adapter, flags=flags
         )
         actions.add(action)
+        assert log["shadow_fallback_reason"] != MAP_LOWHP_HARD_REASON
         assert log["shadow_fallback_reason"] != MAP_LOWHP_RANDOM_REASON
         assert log["shadow_fallback_reason"] != MAP_LOWHP_SAFE_REASON
     assert _MAP_START + 1 in actions
@@ -1611,7 +1646,6 @@ def test_map_lowhp_prefers_rest_over_shop():
         hp=20,
         max_hp=80,
     )
-    # rest+continue already prefers rest at pressure>=2; this is that path.
     adapter = ScriptedJev(
         [
             {
@@ -1623,7 +1657,8 @@ def test_map_lowhp_prefers_rest_over_shop():
     action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
     assert action == _MAP_START + 1
     assert log["shadow_decision"] == "rest_or_continue"
-    assert "prefer rest" in (log["shadow_fallback_reason"] or "")
+    assert log["executed_id"] == "map_1"
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_HARD_REASON
 
 
 def test_map_lowhp_shop_plus_rest_override_picks_rest():
@@ -1641,12 +1676,12 @@ def test_map_lowhp_shop_plus_rest_override_picks_rest():
         ]
     )
     action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
-    # rest+shop with rest present is rest_or_continue; pressure>=2 → rest.
     assert action == _MAP_START + 1
     assert log["shadow_decision"] == "rest_or_continue"
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_HARD_REASON
 
 
-def test_map_lowhp_does_not_override_treasure():
+def test_map_lowhp_hard_overrides_treasure_to_shop():
     env, mask = _map_env(
         [("SHOP", (0, 1)), ("TREASURE", (1, 1))],
         hp=20,
@@ -1661,8 +1696,9 @@ def test_map_lowhp_does_not_override_treasure():
         ]
     )
     action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
-    assert action == _MAP_START + 1
-    assert log["shadow_fallback_reason"] != MAP_LOWHP_SAFE_REASON
+    assert action == _MAP_START
+    assert log["executed_id"] == "map_0"
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_HARD_REASON
 
 
 def test_map_lowhp_uses_local_pressure_when_score_missing():
@@ -1676,11 +1712,11 @@ def test_map_lowhp_uses_local_pressure_when_score_missing():
     )
     action, log = choose_jev_noncombat(env, mask, np.random.RandomState(3), adapter)
     assert action == _MAP_START
-    assert log["shadow_fallback_reason"] == MAP_LOWHP_RANDOM_REASON
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_HARD_REASON
     assert log["shadow_hp_pressure"] == pytest.approx(2.0)
 
 
-def test_map_lowhp_api_error_filters_to_shop():
+def test_map_lowhp_api_error_hard_selects_shop():
     env, mask = _map_env(
         [("SHOP", (0, 1)), ("MONSTER", (1, 1))],
         hp=20,
@@ -1692,8 +1728,8 @@ def test_map_lowhp_api_error_filters_to_shop():
             env, mask, np.random.RandomState(seed), adapter
         )
         assert action == _MAP_START
-        assert log["shadow_status"] == "error"
-        assert log["shadow_fallback_reason"] == MAP_LOWHP_RANDOM_REASON
+        assert log["shadow_fallback_reason"] == MAP_LOWHP_HARD_REASON
+        assert log.get("map_lowhp_hard") is True
 
 
 def test_resolve_map_lowhp_flag_default_on():

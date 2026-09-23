@@ -31,11 +31,9 @@ Unknown with confidence **< 0.80** → defer, legal random among non-Unknown,
 reason `unknown_deferred`. 0.80 is **defer-only**; Choice land threshold
 stays **0.65**.
 
-**Low-HP MAP (`map_lowhp`, hang default on):** when `hp_pressure >= 2.0`
-and `SHOP` or `REST_SITE` is legal, do not pick `MONSTER` / `ELITE` /
-`BOSS` via low-confidence or legal-random fallback (re-sample among
-shop/rest, reason `map_lowhp_random`). A confident fight pick at that
-pressure is overridden to rest-then-shop (`map_lowhp_safe`). If only
+**Low-HP MAP (`map_lowhp` v2, hang default on):** when `hp_pressure >= 2.0`
+and `SHOP` or `REST_SITE` is legal, **hard-select** rest-then-shop
+(reason `map_lowhp_hard`) regardless of Jev confidence or Choice. If only
 fight nodes remain, keep full-pool random. Disable with `--map-lowhp off`.
 PHASE_SHOP (inside the shop screen) stays legal random.
 

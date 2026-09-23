@@ -26,13 +26,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from sts2_env.eval.jev import JevAnswer, build_jev_adapter
+from sts2_env.eval.jev import MAP_LOWHP_HARD_REASON, JevAnswer, build_jev_adapter
 from sts2_env.eval.jev_policy import (
     DEFAULT_JEV_FLAGS,
     JevPolicyFlags,
@@ -74,6 +75,8 @@ def _summarize(rows: list[dict]) -> dict:
         "mean_floor": round(float(np.mean(floors)), 3) if floors else 0.0,
         "mean_hp_on_clear": round(float(np.mean([r["hp"] for r in clears])), 2) if clears else None,
         "max_floor": int(max(floors)) if floors else 0,
+        "map_lowhp_hard_n": int(sum(int(r.get("map_lowhp_hard_n") or 0) for r in rows)),
+        "map_lowhp_hard_eps": int(sum(1 for r in rows if int(r.get("map_lowhp_hard_n") or 0) > 0)),
     }
 
 
@@ -270,6 +273,7 @@ def _run_episode(
     terminated = False
     truncated = False
     last_shadow = jev_shadow_fields(info.get("phase", ""), jev_enabled=jev_enabled)
+    map_lowhp_hard_n = 0
     while not done:
         mask = info.get("action_mask")
         if mask is None:
@@ -288,6 +292,18 @@ def _run_episode(
             jev_adapter=jev_adapter,
             jev_flags=jev_flags,
         )
+        if (
+            last_shadow.get("shadow_fallback_reason") == MAP_LOWHP_HARD_REASON
+            or last_shadow.get("map_lowhp_hard")
+        ):
+            map_lowhp_hard_n += 1
+            print(
+                f"map_lowhp_hard seed={seed} n={map_lowhp_hard_n} "
+                f"executed={last_shadow.get('executed_id')} "
+                f"jev_choice={last_shadow.get('shadow_suggestion')}",
+                file=sys.stderr,
+                flush=True,
+            )
         if info.get("phase") == RunManager.PHASE_COMBAT:
             combat_steps += 1
         else:
@@ -316,6 +332,7 @@ def _run_episode(
         "shadow_confidence": last_shadow.get("shadow_confidence"),
         "shadow_hp_pressure": last_shadow.get("shadow_hp_pressure"),
         "shadow_fallback_reason": last_shadow.get("shadow_fallback_reason"),
+        "map_lowhp_hard_n": map_lowhp_hard_n,
         "jev_card_fit": last_shadow.get("jev_card_fit"),
     }
 
@@ -381,9 +398,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["on", "off"],
         default="on",
         help=(
-            "MAP low-HP constraint (hang default on). When hp_pressure>=2.0 "
-            "and shop/rest is legal, do not random-fall to monster/elite. "
-            "Set off to disable."
+            "MAP low-HP v2 hard-select (hang default on). When hp_pressure>=2.0 "
+            "and shop/rest is legal, always execute rest-then-shop "
+            "(map_lowhp_hard), even if Jev Choice is confident. Set off to disable."
         ),
     )
     ap.add_argument(
@@ -517,9 +534,9 @@ def build_report(
                 "Combat never uses Jev. --jev off: legal random + stub logs. "
                 "--jev on: Choice/Score with confidence>=0.65, hp_pressure "
                 "rest/continue, MAP UNKNOWN defer (unknown_deferred at conf<0.80 "
-                "when hp_pressure>=2), MAP low-HP constraint map_lowhp (default on: "
-                "hp_pressure>=2 + shop/rest legal → no monster/elite via "
-                "low_confidence_random; fight pick overridden map_lowhp_safe; "
+                "when hp_pressure>=2), MAP low-HP v2 map_lowhp (default on: "
+                "hp_pressure>=2 + shop/rest legal → hard-select rest-then-shop, "
+                "reason map_lowhp_hard, counted per episode as map_lowhp_hard_n; "
                 "--map-lowhp off disables), and card_fit assist on true pick_card; "
                 "potion/relic PHASE_CARD_REWARD screens legal-random "
                 "(potion_or_relic_reward_random). EVENT is off unless "
