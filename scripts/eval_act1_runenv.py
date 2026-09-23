@@ -160,13 +160,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument(
         "--combat-policy",
-        choices=["ppo", "jev"],
+        choices=["ppo", "jev", "jev-turn"],
         default="ppo",
         help=(
             "Combat source for hierarchical. Default ppo = hung bh_v1 zip "
-            "(unchanged hang path). jev is experimental (failed HOLD bypass, "
-            "not hang / not next mainline): combat_step_choice on the legal "
-            "shortlist; fail-open to bh_v1."
+            "(unchanged hang path). jev = experimental failed stepwise bypass. "
+            "jev-turn = combat_turn_plan Choice on plan_id (enumerated steps)."
         ),
     )
     ap.add_argument(
@@ -205,7 +204,7 @@ def main(argv: list[str] | None = None) -> None:
     combat_policy = str(getattr(args, "combat_policy", "ppo") or "ppo")
     combat_jev_telemetry = CombatJevTelemetry()
     combat_jev_adapter = None
-    if args.policy == "hierarchical" and combat_policy == "jev":
+    if args.policy == "hierarchical" and combat_policy in ("jev", "jev-turn"):
         combat_jev_adapter = build_jev_adapter(enabled=True)
 
     env = STS2RunEnv(character_id="Ironclad", ascension_level=0, max_steps=args.max_steps)

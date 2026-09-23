@@ -67,13 +67,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--combat-policy",
-        choices=["ppo", "jev"],
+        choices=["ppo", "jev", "jev-turn"],
         default="ppo",
         help=(
             "Combat source. Default ppo = hung bh_v1 zip (hang table). "
-            "jev is experimental (failed HOLD bypass, not hang / not next "
-            "mainline): combat_step_choice on the legal shortlist; fail-open "
-            "to the same zip."
+            "jev is experimental (failed stepwise HOLD bypass). "
+            "jev-turn = combat_turn_plan Choice on plan_id (code-enumerated "
+            "steps, replan caps); fail-open catastrophe only to bh_v1."
         ),
     )
     parser.add_argument(
@@ -223,6 +223,27 @@ def main(argv: list[str] | None = None) -> int:
             return int(local)
 
         combat_jev_summary = telemetry
+    elif workers == 1 and combat_policy == "jev-turn":
+        from sts2_env.eval.combat_turn_plan import choose_combat_turn_plan_action
+        from sts2_env.eval.jev_client import build_jev_adapter
+
+        adapter = build_jev_adapter(enabled=True)
+        rng = np.random.RandomState(0)
+
+        def choose_fn(env, obs, mask):
+            combat = getattr(env, "combat", None)
+            if combat is None:
+                return predict_fn(obs, mask)
+            local, _shadow = choose_combat_turn_plan_action(
+                combat,
+                mask,
+                rng,
+                model,
+                adapter=adapter,
+                combat_obs=obs,
+                env=env,
+            )
+            return int(local)
 
     summary = run_hold_smoke(
         predict_fn,

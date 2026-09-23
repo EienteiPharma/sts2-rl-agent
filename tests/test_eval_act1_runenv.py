@@ -733,8 +733,8 @@ def test_cli_combat_policy_default_ppo_and_jev_requires_hierarchical():
 
     src = inspect.getsource(eval_mod.parse_args)
     assert 'default="ppo"' in src
-    assert "experimental" in src
-    assert "failed HOLD bypass" in src
+    assert "experimental" in src or "jev-turn" in src
+    assert "jev-turn" in src
     bad = eval_mod.parse_args(["--policy", "random", "--combat-policy", "jev"])
     with pytest.raises(SystemExit, match="hierarchical"):
         eval_mod.validate_policy_args(bad)

@@ -12,7 +12,8 @@ No live HTTP in this module. Default hang combat remains ``--combat-policy ppo``
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 import numpy as np
@@ -23,6 +24,7 @@ from sts2_env.core.combat import CombatState
 from sts2_env.core.constants import ACTION_END_TURN
 from sts2_env.core.creature import Creature
 from sts2_env.core.enums import PowerId
+from sts2_env.eval.jev_types import JevAnswer, JevError
 from sts2_env.gym_env.action_space import (
     action_to_card_and_target,
     action_to_potion_and_target,
@@ -33,6 +35,18 @@ CHOICE_COMBAT_TURN_PLAN = "combat_turn_plan_choice"
 SEMANTIC_END_TURN = "end_turn"
 MAX_PLAN_STEPS = 8
 MAX_CANDIDATE_PLANS = 512
+MAX_REPLANS_PER_PLAYER_TURN = 3
+
+CATA_FAILOPEN_TIMEOUT = "timeout"
+CATA_FAILOPEN_ERROR = "error"
+CATA_FAILOPEN_EMPTY = "empty"
+CATA_FAILOPEN_ILLEGAL_PLAN = "illegal_plan"
+CATA_FAILOPEN_CAP = "cap_exceeded"
+
+COMBAT_TURN_PLAN_SYSTEM_RULES = (
+    "Survival first: block or prevent telegraphed enemy intent damage before "
+    "greedy damage. Prefer enumerated plan_ids only."
+)
 
 COMBAT_TURN_PLAN_INSTRUCTIONS = (
     "Choose exactly one plan_id from the legal shortlist. Each plan is a "
@@ -303,24 +317,297 @@ def build_combat_turn_plan_choice_question(
 def jev_turn_plan_questions(
     board: dict[str, Any],
     plans: Sequence[TurnPlanCandidate],
+    *,
+    prompt_config: "TurnPlanPromptConfig | None" = None,
 ) -> dict[str, dict[str, Any]]:
-    """Stub-shaped question map for a future live adapter (offline-safe)."""
-    del board  # state is passed separately to system_one; kept for call-site shape
-    return {CHOICE_COMBAT_TURN_PLAN: build_combat_turn_plan_choice_question(plans)}
+    """Question map for system_one (board may be omitted when layers are off)."""
+    del board
+    cfg = prompt_config or TurnPlanPromptConfig()
+    instructions = COMBAT_TURN_PLAN_INSTRUCTIONS
+    if cfg.system_rules:
+        instructions = COMBAT_TURN_PLAN_SYSTEM_RULES + " " + instructions
+    if cfg.human_exemplars:
+        instructions += " (See bundled exemplars in state when enabled.)"
+    return {
+        CHOICE_COMBAT_TURN_PLAN: build_combat_turn_plan_choice_question(
+            plans, instructions=instructions
+        )
+    }
+
+
+@dataclass
+class TurnPlanPromptConfig:
+    """Layered prompt toggles (defaults OFF for first smoke)."""
+
+    system_rules: bool = False
+    board_json: bool = False
+    human_exemplars: bool = False
+
+
+@dataclass
+class TurnPlanRuntime:
+    player_turn_id: int = -1
+    replans: int = 0
+    plan: TurnPlanCandidate | None = None
+    step_index: int = 0
+    intent_snapshot: dict[int, str] | None = None
+    last_shadow: dict[str, Any] = field(default_factory=dict)
+
+    def reset_player_turn(self, turn_id: int) -> None:
+        self.player_turn_id = int(turn_id)
+        self.replans = 0
+        self.clear_plan()
+
+    def clear_plan(self) -> None:
+        self.plan = None
+        self.step_index = 0
+        self.intent_snapshot = None
+
+
+def runtime_for_env(env: Any) -> TurnPlanRuntime:
+    key = "_combat_turn_plan_runtime"
+    rt = getattr(env, key, None)
+    if rt is None:
+        rt = TurnPlanRuntime()
+        setattr(env, key, rt)
+    return rt
+
+
+def player_turn_id(combat: CombatState) -> int:
+    return int(getattr(combat, "turn_count", 0) or 0)
+
+
+def living_enemy_intent_snapshot(combat: CombatState) -> dict[int, str]:
+    return {
+        int(enemy.combat_id): _intent_line(combat, enemy)
+        for enemy in combat.enemies
+        if enemy.is_alive
+    }
+
+
+def build_turn_plan_jev_state(
+    board: dict[str, Any],
+    *,
+    prompt_config: TurnPlanPromptConfig | None = None,
+) -> dict[str, Any]:
+    cfg = prompt_config or TurnPlanPromptConfig()
+    state: dict[str, Any] = {"mode": "combat_turn_plan"}
+    if cfg.board_json:
+        state["board"] = board
+    if cfg.human_exemplars:
+        state["human_exemplars"] = []
+    return state
+
+
+def _classify_adapter_error(exc: BaseException) -> str:
+    from sts2_env.eval.combat_jev import classify_jev_error
+
+    return classify_jev_error(exc)
+
+
+def _fail_open_bh_v1(
+    combat_model: Any,
+    combat_obs: np.ndarray,
+    combat_mask: np.ndarray,
+    rng: np.random.RandomState,
+) -> int:
+    from sts2_env.eval.combat_jev import fail_open_local
+
+    return int(fail_open_local(combat_model, combat_obs, combat_mask, rng))
+
+
+def _catastrophe_fail_open(
+    combat_model: Any,
+    combat_obs: np.ndarray,
+    combat_mask: np.ndarray,
+    rng: np.random.RandomState,
+    reason: str,
+    *,
+    plan_id: str | None = None,
+) -> tuple[int, dict[str, Any]]:
+    local = _fail_open_bh_v1(combat_model, combat_obs, combat_mask, rng)
+    shadow = {
+        "shadow_decision": CHOICE_COMBAT_TURN_PLAN,
+        "turn_plan_catastrophe": True,
+        "turn_plan_failopen_reason": reason,
+        "turn_plan_failopen": True,
+        "executed_id": semantic_key_for_gym_action_from_obs(local, combat_mask),
+    }
+    if plan_id is not None:
+        shadow["turn_plan_id"] = plan_id
+    return local, shadow
+
+
+def semantic_key_for_gym_action_from_obs(action: int, mask: np.ndarray) -> str:
+    del mask
+    return f"gym_a{int(action)}"
+
+
+def _pick_plan_via_jev(
+    adapter: Any,
+    board: dict[str, Any],
+    plans: Sequence[TurnPlanCandidate],
+    *,
+    prompt_config: TurnPlanPromptConfig | None = None,
+) -> tuple[TurnPlanCandidate | None, str | None]:
+    if not plans:
+        return None, CATA_FAILOPEN_EMPTY
+    by_id = {p.plan_id: p for p in plans}
+    cfg = prompt_config or TurnPlanPromptConfig()
+    state = build_turn_plan_jev_state(board, prompt_config=cfg)
+    questions = jev_turn_plan_questions(board, plans, prompt_config=cfg)
+    try:
+        answers = adapter.system_one(state, questions)
+    except JevError as e:
+        return None, _classify_adapter_error(e)
+    except Exception as e:
+        return None, _classify_adapter_error(e)
+    raw = answers.get(CHOICE_COMBAT_TURN_PLAN) if isinstance(answers, dict) else None
+    if raw is None:
+        return None, CATA_FAILOPEN_ERROR
+    if not isinstance(raw, JevAnswer):
+        raw = JevAnswer(status="ok", choice=str(getattr(raw, "choice", raw)))
+    plan_id = str(raw.choice or "").strip()
+    if plan_id not in by_id:
+        return None, CATA_FAILOPEN_ILLEGAL_PLAN
+    return by_id[plan_id], None
+
+
+def choose_combat_turn_plan_action(
+    combat: CombatState,
+    combat_mask: np.ndarray,
+    rng: np.random.RandomState,
+    combat_model: Any,
+    *,
+    adapter: Any,
+    combat_obs: np.ndarray,
+    env: Any | None = None,
+    owner: Creature | None = None,
+    prompt_config: TurnPlanPromptConfig | None = None,
+    runtime: TurnPlanRuntime | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Execute turn-plan path: pick ``plan_id``, run steps, replan on triggers.
+
+    Catastrophe fail-open (bh_v1) only for timeout/error/empty/illegal_plan/cap.
+    Low confidence does **not** fail-open. ``pending_choice`` aborts the plan and
+    uses bh_v1 fail-open (not turn_plan Choice).
+    """
+    mask = np.asarray(combat_mask)
+    if runtime is not None:
+        session = runtime
+    elif env is not None:
+        session = runtime_for_env(env)
+    else:
+        session = TurnPlanRuntime()
+    cfg = prompt_config or TurnPlanPromptConfig()
+    owner_creature = owner or combat.primary_player
+
+    if combat.pending_choice is not None:
+        session.clear_plan()
+        local = _fail_open_bh_v1(combat_model, combat_obs, mask, rng)
+        shadow = {
+            "shadow_decision": CHOICE_COMBAT_TURN_PLAN,
+            "turn_plan_aborted": "pending_choice",
+            "turn_plan_failopen": True,
+            "executed_id": semantic_key_for_gym_action_from_obs(local, mask),
+        }
+        session.last_shadow = shadow
+        return local, shadow
+
+    turn_id = player_turn_id(combat)
+    if session.player_turn_id != turn_id:
+        session.reset_player_turn(turn_id)
+
+    loops = 0
+    while loops < 32:
+        loops += 1
+        if session.replans > MAX_REPLANS_PER_PLAYER_TURN:
+            session.clear_plan()
+            local, shadow = _catastrophe_fail_open(
+                combat_model, combat_obs, mask, rng, CATA_FAILOPEN_CAP
+            )
+            session.last_shadow = shadow
+            return local, shadow
+
+        if session.plan is not None and session.step_index < len(session.plan.steps):
+            key = session.plan.steps[session.step_index]
+            legal = set(legal_semantic_keys(combat, mask, owner=owner_creature))
+            if key not in legal:
+                session.replans += 1
+                session.clear_plan()
+                continue
+            if living_enemy_intent_snapshot(combat) != (session.intent_snapshot or {}):
+                session.replans += 1
+                session.clear_plan()
+                continue
+            action = gym_action_for_semantic_key(
+                combat, mask, key, owner=owner_creature
+            )
+            if action is None:
+                session.replans += 1
+                session.clear_plan()
+                continue
+            session.step_index += 1
+            if key == SEMANTIC_END_TURN or session.step_index >= len(session.plan.steps):
+                session.clear_plan()
+            shadow = {
+                "shadow_decision": CHOICE_COMBAT_TURN_PLAN,
+                "turn_plan_step": key,
+                "turn_plan_failopen": False,
+                "executed_id": key,
+            }
+            session.last_shadow = shadow
+            return int(action), shadow
+
+        legal_keys = legal_semantic_keys(combat, mask, owner=owner_creature)
+        plans = enumerate_candidate_plans(legal_keys)
+        board = serialize_combat_board_full(combat, mask, owner=owner_creature)
+        picked, err = _pick_plan_via_jev(adapter, board, plans, prompt_config=cfg)
+        if err is not None:
+            session.clear_plan()
+            local, shadow = _catastrophe_fail_open(
+                combat_model, combat_obs, mask, rng, err
+            )
+            session.last_shadow = shadow
+            return local, shadow
+        assert picked is not None
+        session.plan = picked
+        session.intent_snapshot = living_enemy_intent_snapshot(combat)
+        session.step_index = 0
+
+    session.clear_plan()
+    local, shadow = _catastrophe_fail_open(
+        combat_model, combat_obs, mask, rng, CATA_FAILOPEN_ERROR
+    )
+    session.last_shadow = shadow
+    return local, shadow
 
 
 __all__ = [
+    "CATA_FAILOPEN_CAP",
+    "CATA_FAILOPEN_EMPTY",
+    "CATA_FAILOPEN_ERROR",
+    "CATA_FAILOPEN_ILLEGAL_PLAN",
+    "CATA_FAILOPEN_TIMEOUT",
     "CHOICE_COMBAT_TURN_PLAN",
     "COMBAT_TURN_PLAN_INSTRUCTIONS",
+    "COMBAT_TURN_PLAN_SYSTEM_RULES",
     "MAX_CANDIDATE_PLANS",
     "MAX_PLAN_STEPS",
+    "MAX_REPLANS_PER_PLAYER_TURN",
     "SEMANTIC_END_TURN",
     "TurnPlanCandidate",
+    "TurnPlanPromptConfig",
+    "TurnPlanRuntime",
     "build_combat_turn_plan_choice_question",
+    "build_turn_plan_jev_state",
+    "choose_combat_turn_plan_action",
     "enumerate_candidate_plans",
     "gym_action_for_semantic_key",
     "jev_turn_plan_questions",
     "legal_semantic_keys",
+    "living_enemy_intent_snapshot",
+    "runtime_for_env",
     "semantic_key_for_gym_action",
     "serialize_combat_board_full",
 ]

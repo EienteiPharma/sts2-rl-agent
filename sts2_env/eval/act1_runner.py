@@ -183,6 +183,22 @@ def choose_hierarchical_action(
 
     owner = _selected_combat_owner(mgr, combat)
     combat_mask = get_action_mask(combat, owner=owner)
+    if combat_policy == "jev-turn":
+        from sts2_env.eval.combat_turn_plan import choose_combat_turn_plan_action
+
+        adapter = combat_jev_adapter or jev_adapter or build_jev_adapter(enabled=True)
+        local, shadow = choose_combat_turn_plan_action(
+            combat,
+            combat_mask,
+            rng,
+            combat_model,
+            adapter=adapter,
+            combat_obs=combat_obs,
+            env=env,
+            owner=owner,
+        )
+        local = max(0, min(int(local), _COMBAT_SIZE - 1))
+        return _COMBAT_START + local, shadow
     if combat_policy == "jev":
         adapter = combat_jev_adapter or jev_adapter or build_jev_adapter(enabled=True)
         local, shadow = choose_combat_step(
@@ -423,8 +439,11 @@ def validate_policy_args(args: argparse.Namespace) -> None:
             raise SystemExit("--jev-event on is only valid with --policy hierarchical")
         if args.jev_neow == "on":
             raise SystemExit("--jev-neow on is only valid with --policy hierarchical")
-        if getattr(args, "combat_policy", "ppo") == "jev":
-            raise SystemExit("--combat-policy jev is only valid with --policy hierarchical")
+        cp = str(getattr(args, "combat_policy", "ppo") or "ppo")
+        if cp in ("jev", "jev-turn"):
+            raise SystemExit(
+                f"--combat-policy {cp} is only valid with --policy hierarchical"
+            )
     if int(getattr(args, "n", SEED_COUNT)) < 1:
         raise SystemExit("--n must be >= 1")
     args.jev_flags = resolve_jev_flags(

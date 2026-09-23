@@ -5,12 +5,17 @@ import numpy as np
 import pytest
 
 import sts2_env.eval.combat_turn_plan as turn_plan
+from sts2_env.core.constants import ACTION_END_TURN
 from sts2_env.eval.combat_turn_plan import (
+    CATA_FAILOPEN_ILLEGAL_PLAN,
     CHOICE_COMBAT_TURN_PLAN,
     MAX_PLAN_STEPS,
     SEMANTIC_END_TURN,
     TurnPlanCandidate,
+    TurnPlanPromptConfig,
     build_combat_turn_plan_choice_question,
+    build_turn_plan_jev_state,
+    choose_combat_turn_plan_action,
     enumerate_candidate_plans,
     gym_action_for_semantic_key,
     jev_turn_plan_questions,
@@ -18,7 +23,28 @@ from sts2_env.eval.combat_turn_plan import (
     semantic_key_for_gym_action,
     serialize_combat_board_full,
 )
+from sts2_env.eval.jev_types import JevAnswer
 from sts2_env.gym_env.combat_env import STS2CombatEnv
+from sts2_env.gym_env.observation import encode_observation
+
+
+class _PlanAdapter:
+    def __init__(self, plan_id: str, *, conf: float | None = 0.9):
+        self.plan_id = plan_id
+        self.conf = conf
+
+    def system_one(self, state, questions):
+        return {
+            CHOICE_COMBAT_TURN_PLAN: JevAnswer(
+                status="ok", choice=self.plan_id, confidence=self.conf
+            )
+        }
+
+
+class _Ppo:
+    def predict(self, obs, action_masks=None, deterministic=True):
+        valid = np.flatnonzero(np.asarray(action_masks) == 1)
+        return int(valid[0]), None
 
 
 def test_api_is_turn_plan_not_stepwise_combat_step():
@@ -112,3 +138,69 @@ def test_plans_from_live_legal_keys_max_steps():
     assert plans
     assert plans[0].plan_id == "plan_0000"
     assert len(plans[0].steps) >= 1
+
+
+def test_prompt_layers_default_off():
+    cfg = TurnPlanPromptConfig()
+    assert cfg.system_rules is False
+    assert cfg.board_json is False
+    assert cfg.human_exemplars is False
+    state = build_turn_plan_jev_state({"self": {"hp": 1}}, prompt_config=cfg)
+    assert "board" not in state
+    assert state["mode"] == "combat_turn_plan"
+
+
+def test_runner_executes_end_turn_plan_low_conf_ok():
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    keys = legal_semantic_keys(combat, mask)
+    end_only = next(
+        p for p in enumerate_candidate_plans(keys, max_steps=1, max_plans=64) if p.steps == (SEMANTIC_END_TURN,)
+    )
+    local, shadow = choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        _Ppo(),
+        adapter=_PlanAdapter(end_only.plan_id, conf=0.05),
+        combat_obs=obs,
+        env=env,
+    )
+    env.close()
+    assert local == ACTION_END_TURN
+    assert shadow["turn_plan_failopen"] is False
+
+
+def test_runner_illegal_plan_catastrophe_fail_open():
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    ppo = _Ppo()
+    local, shadow = choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        ppo,
+        adapter=_PlanAdapter("plan_not_in_list"),
+        combat_obs=obs,
+        env=env,
+    )
+    env.close()
+    assert int(mask[local]) == 1
+    assert shadow["turn_plan_catastrophe"] is True
+    assert shadow["turn_plan_failopen_reason"] == CATA_FAILOPEN_ILLEGAL_PLAN
+
+
+def test_eval_combat_suite_accepts_jev_turn():
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "eval_combat_suite.py"
+    spec = importlib.util.spec_from_file_location("eval_combat_suite", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    args = mod.parse_args(["--combat-policy", "jev-turn"])
+    assert args.combat_policy == "jev-turn"
+    assert mod.parse_args([]).combat_policy == "ppo"

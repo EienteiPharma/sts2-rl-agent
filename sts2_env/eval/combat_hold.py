@@ -305,8 +305,7 @@ def hold_eval_worker(payload: dict[str, Any]) -> dict[str, Any]:
 
     choose_fn = None
     telemetry = None
-    if combat_policy == "jev":
-        from sts2_env.eval.combat_jev import CombatJevTelemetry, choose_combat_step
+    if combat_policy in ("jev", "jev-turn"):
         from sts2_env.eval.jev_client import build_jev_adapter
 
         keys = load_typesafe_api_keys()
@@ -318,23 +317,45 @@ def hold_eval_worker(payload: dict[str, Any]) -> dict[str, Any]:
             api_keys=keys or None,
             key_index=worker_id,
         )
-        telemetry = CombatJevTelemetry()
         rng = np.random.RandomState(int(worker_id))
+        if combat_policy == "jev":
+            from sts2_env.eval.combat_jev import CombatJevTelemetry, choose_combat_step
 
-        def choose_fn(env, obs, mask):
-            combat = getattr(env, "combat", None)
-            if combat is None:
-                return predict_fn(obs, mask)
-            local, _shadow = choose_combat_step(
-                combat,
-                mask,
-                rng,
-                model,
-                adapter=adapter,
-                combat_obs=obs,
-                telemetry=telemetry,
-            )
-            return int(local)
+            telemetry = CombatJevTelemetry()
+
+            def choose_fn(env, obs, mask):
+                combat = getattr(env, "combat", None)
+                if combat is None:
+                    return predict_fn(obs, mask)
+                local, _shadow = choose_combat_step(
+                    combat,
+                    mask,
+                    rng,
+                    model,
+                    adapter=adapter,
+                    combat_obs=obs,
+                    telemetry=telemetry,
+                )
+                return int(local)
+        else:
+            from sts2_env.eval.combat_turn_plan import choose_combat_turn_plan_action
+
+            telemetry = None
+
+            def choose_fn(env, obs, mask):
+                combat = getattr(env, "combat", None)
+                if combat is None:
+                    return predict_fn(obs, mask)
+                local, _shadow = choose_combat_turn_plan_action(
+                    combat,
+                    mask,
+                    rng,
+                    model,
+                    adapter=adapter,
+                    combat_obs=obs,
+                    env=env,
+                )
+                return int(local)
 
     rows = run_hold_job_list(
         jobs, predict_fn, choose_fn=choose_fn, max_steps=max_steps
