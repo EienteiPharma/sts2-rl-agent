@@ -31,3 +31,5 @@ B telemetry: `jev_calls=7174`, failopen **33.8%** (mostly `low_conf`), latency p
 ### Reading (Lab)
 
 Compared to the first fail, calibration **lowered fail-open** (41.2% → 33.8%) but **win rates got worse** (B overall 18.6 → 7.8; Boss 0.6 → 0.0). The poison is **Jev-selected combat steps**, not the confidence gate alone. Abandon combat-Jev mainline again.
+
+**Track 2 (design):** advisory `bh_assist` + turn-plan Choice — **not** stepwise `combat_step_choice`. Hang execution stays `bh_v1` until turn-plan HOLD clears. Contract: `docs/BH_ASSIST_CONTRACT.md`.

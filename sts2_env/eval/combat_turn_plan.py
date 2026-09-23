@@ -4,6 +4,10 @@ Jev will later Choice among ``plan_id`` values (``combat_turn_plan_choice``),
 not stepwise ``combat_step_choice`` / opaque ``aN`` ids. Plans are
 code-enumerated only; steps are semantic keys from the current legal set.
 
+Optional advisory hints: ``bh_assist(board)`` → ranked semantics + risk notes
+(``docs/BH_ASSIST_CONTRACT.md``); **not** the hang actor; execution stays
+``bh_v1`` until turn-plan HOLD clears.
+
 No live HTTP in this module. Default hang combat remains ``--combat-policy ppo``.
 """
 from __future__ import annotations
