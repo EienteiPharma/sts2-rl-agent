@@ -117,6 +117,9 @@ python scripts/eval_act1_runenv.py --policy hierarchical --model HUNG.zip --jev 
 # EVENT Choice names (Neow still random unless --jev-neow on)
 python scripts/eval_act1_runenv.py --policy hierarchical --model HUNG.zip --jev on --jev-event on --start-with-neow
 
+# Secondary A knife (hang flags + explicit --jev-event on)
+python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on --jev-event on --jev-neow off --start-with-neow --n 100 --out evals/act1_runenv_secondary_a_n100.json
+
 # optional A/B: Jev picks Neow boon (neow_boon @ 0.65)
 python scripts/eval_act1_runenv.py --policy hierarchical --model HUNG.zip --jev on --jev-neow on --start-with-neow
 ```
@@ -155,3 +158,10 @@ Hang: `--start-with-neow --jev-neow off` (opening screen, random boon).
 Combat zip and MAP/CARD 0.65 are unchanged. MAP low-HP `map_lowhp` is
 **on** by default (v1 uncertain filter only; hard-select is opt-in `--map-lowhp-hard`
 default **off**).
+
+## Secondary A: EVENT / relic safe fallback (2026-09-23)
+
+Closes damaging random holes in non-combat choices:
+- Under `--jev-event on`, if Jev is uncertain, encounters API error, or suggests an invalid choice on `event_choice`, the runner falls back to non-damaging legal options or Leave (`event_safe_fallback`) rather than uniform random.
+- On potion/relic reward screens (`PHASE_CARD_REWARD`), the runner safely takes the reward item (`potion_or_relic_safe_fallback`).
+- Evaluated with explicit `--jev-event on`; `--jev-event` remains default **off** for hang baseline.

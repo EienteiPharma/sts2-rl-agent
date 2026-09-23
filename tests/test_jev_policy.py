@@ -17,6 +17,8 @@ from sts2_env.eval.jev import (
     CONTENT_MAP_REF,
     DEFAULT_JEV_PHASES,
     EVENT_OPTIONS_EMPTY_REASON,
+    EVENT_SAFE_FALLBACK_REASON,
+    POTION_OR_RELIC_SAFE_REASON,
     HP_PRESSURE_ASSIST_REASON,
     JEV_EVENT_OFF_REASON,
     JEV_NEOW_OFF_REASON,
@@ -372,7 +374,7 @@ def test_potion_or_relic_reward_does_not_call_card_jev():
         action, log = choose_jev_noncombat(env, mask, rng, adapter)
         assert adapter.calls == []
         assert log["shadow_decision"] == "potion_or_relic_reward"
-        assert log["shadow_fallback_reason"] == POTION_OR_RELIC_REASON
+        assert log["shadow_fallback_reason"] in (POTION_OR_RELIC_REASON, POTION_OR_RELIC_SAFE_REASON)
         assert log["shadow_status"] != "ok"
         assert mask[action] == 1
 
@@ -1030,6 +1032,58 @@ def test_jev_event_on_uses_event_choice_name():
     assert log["jev_choice_id"] == CHOICE_EVENT
     assert log["shadow_decision"] == "event_choice"
     assert CHOICE_CONFIDENCE_MIN == 0.65
+
+
+def test_jev_event_on_low_conf_uses_safe_fallback():
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "SACRIFICE",
+            "label": "Take curse",
+            "description": "Gain 100 gold, take a Curse (Decay)",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "STUDY",
+            "label": "Study",
+            "description": "Study peacefully",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "LEAVE",
+            "label": "Leave",
+            "description": "Leave safely",
+            "enabled": True,
+        },
+    ]
+    env = _event_env(actions, event_id="DarkAltar")
+    mask = _event_mask(3)
+    adapter = ScriptedJev([{CHOICE_EVENT: {"choice": "SACRIFICE", "confidence": 0.40}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+    )
+    # Uncertain Jev picks Leave instead of taking the curse
+    assert action == _EVENT_START + 2
+    assert log["shadow_fallback_reason"] == EVENT_SAFE_FALLBACK_REASON
+    assert log.get("event_safe_fallback") is True
+
+
+def test_potion_or_relic_screen_safe_fallback_takes():
+    actions = [
+        {"action": "pick_relic_reward", "relic_id": "VAJRA"},
+        {"action": "skip_relic"},
+    ]
+    env = _env(RunManager.PHASE_CARD_REWARD, actions)
+    mask = np.zeros(TOTAL_ACTIONS, dtype=np.int8)
+    mask[_CARD_RWD_START] = 1
+    mask[_CARD_RWD_START + 3] = 1
+    adapter = ScriptedJev([])
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action == _CARD_RWD_START
+    assert log["shadow_fallback_reason"] == POTION_OR_RELIC_SAFE_REASON
+    assert log.get("potion_or_relic_safe_fallback") is True
 
 
 def test_neow_boon_choice_name_when_detected():
@@ -1841,3 +1895,59 @@ def test_box_decide_noncombat_map_lowhp_low_conf(monkeypatch):
         map_lowhp_hard=True,
     )
     assert action_hard == _MAP_START
+
+
+def test_box_decide_noncombat_event_safe_fallback(monkeypatch):
+    import importlib.util
+    import sys
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "jev_noncombat.py"
+    spec = importlib.util.spec_from_file_location("jev_noncombat_event_fallback", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "SACRIFICE",
+            "label": "Take curse",
+            "description": "Gain 100 gold, take a Curse (Decay)",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "STUDY",
+            "label": "Study",
+            "description": "Study peacefully",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "LEAVE",
+            "label": "Leave",
+            "description": "Leave safely",
+            "enabled": True,
+        },
+    ]
+    env = _event_env(actions, event_id="DarkAltar")
+    mask = _event_mask(3)
+    info = {"phase": "EVENT", "hp": 40, "max_hp": 80, "floor": 6}
+
+    # Low-confidence Jev result on event
+    def fake_low_conf_jev(**_kwargs):
+        return "DarkAltar_SACRIFICE", 0.40, None, 1, "jev-1.13.0", None, None
+
+    monkeypatch.setattr(mod, "call_jev", fake_low_conf_jev)
+    action = mod.decide_noncombat(
+        env,
+        mask,
+        info,
+        mode="suggest_live",
+        rng=np.random.RandomState(0),
+        seed=0,
+        jev_event=True,
+    )
+    # Safe option picked is Leave (index 2)
+    assert action == _EVENT_START + 2

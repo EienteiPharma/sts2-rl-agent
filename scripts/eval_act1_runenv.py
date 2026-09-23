@@ -34,7 +34,16 @@ from typing import Any
 
 import numpy as np
 
-from sts2_env.eval.jev import MAP_LOWHP_HARD_REASON, JevAnswer, build_jev_adapter
+from sts2_env.eval.jev import (
+    EVENT_OPTIONS_EMPTY_REASON,
+    EVENT_SAFE_FALLBACK_REASON,
+    JEV_EVENT_OFF_REASON,
+    MAP_LOWHP_HARD_REASON,
+    POTION_OR_RELIC_REASON,
+    POTION_OR_RELIC_SAFE_REASON,
+    JevAnswer,
+    build_jev_adapter,
+)
 from sts2_env.eval.jev_policy import (
     DEFAULT_JEV_FLAGS,
     JevPolicyFlags,
@@ -78,6 +87,13 @@ def _summarize(rows: list[dict]) -> dict:
         "max_floor": int(max(floors)) if floors else 0,
         "map_lowhp_hard_n": int(sum(int(r.get("map_lowhp_hard_n") or 0) for r in rows)),
         "map_lowhp_hard_eps": int(sum(1 for r in rows if int(r.get("map_lowhp_hard_n") or 0) > 0)),
+        "event_jev_used_n": int(sum(int(r.get("event_jev_used_n") or 0) for r in rows)),
+        "event_safe_fallback_n": int(sum(int(r.get("event_safe_fallback_n") or 0) for r in rows)),
+        "event_low_conf_random_n": int(sum(int(r.get("event_low_conf_random_n") or 0) for r in rows)),
+        "event_options_empty_n": int(sum(int(r.get("event_options_empty_n") or 0) for r in rows)),
+        "event_off_random_n": int(sum(int(r.get("event_off_random_n") or 0) for r in rows)),
+        "potion_or_relic_safe_n": int(sum(int(r.get("potion_or_relic_safe_n") or 0) for r in rows)),
+        "potion_or_relic_random_n": int(sum(int(r.get("potion_or_relic_random_n") or 0) for r in rows)),
     }
 
 
@@ -275,6 +291,13 @@ def _run_episode(
     truncated = False
     last_shadow = jev_shadow_fields(info.get("phase", ""), jev_enabled=jev_enabled)
     map_lowhp_hard_n = 0
+    event_jev_used_n = 0
+    event_safe_fallback_n = 0
+    event_low_conf_random_n = 0
+    event_options_empty_n = 0
+    event_off_random_n = 0
+    potion_or_relic_safe_n = 0
+    potion_or_relic_random_n = 0
     while not done:
         mask = info.get("action_mask")
         if mask is None:
@@ -293,8 +316,11 @@ def _run_episode(
             jev_adapter=jev_adapter,
             jev_flags=jev_flags,
         )
+        reason = last_shadow.get("shadow_fallback_reason")
+        dec = last_shadow.get("shadow_decision")
+        status = last_shadow.get("shadow_status")
         if (
-            last_shadow.get("shadow_fallback_reason") == MAP_LOWHP_HARD_REASON
+            reason == MAP_LOWHP_HARD_REASON
             or last_shadow.get("map_lowhp_hard")
         ):
             map_lowhp_hard_n += 1
@@ -305,6 +331,22 @@ def _run_episode(
                 file=sys.stderr,
                 flush=True,
             )
+        if dec == "event_choice" or last_shadow.get("phase") == "EVENT":
+            if status == "ok" and not reason:
+                event_jev_used_n += 1
+            elif reason == EVENT_SAFE_FALLBACK_REASON or last_shadow.get("event_safe_fallback"):
+                event_safe_fallback_n += 1
+            elif reason == "low_confidence_random":
+                event_low_conf_random_n += 1
+            elif reason == EVENT_OPTIONS_EMPTY_REASON:
+                event_options_empty_n += 1
+            elif reason == JEV_EVENT_OFF_REASON:
+                event_off_random_n += 1
+        if dec == "potion_or_relic_reward":
+            if reason == POTION_OR_RELIC_SAFE_REASON or last_shadow.get("potion_or_relic_safe_fallback"):
+                potion_or_relic_safe_n += 1
+            elif reason == POTION_OR_RELIC_REASON:
+                potion_or_relic_random_n += 1
         if info.get("phase") == RunManager.PHASE_COMBAT:
             combat_steps += 1
         else:
@@ -334,6 +376,13 @@ def _run_episode(
         "shadow_hp_pressure": last_shadow.get("shadow_hp_pressure"),
         "shadow_fallback_reason": last_shadow.get("shadow_fallback_reason"),
         "map_lowhp_hard_n": map_lowhp_hard_n,
+        "event_jev_used_n": event_jev_used_n,
+        "event_safe_fallback_n": event_safe_fallback_n,
+        "event_low_conf_random_n": event_low_conf_random_n,
+        "event_options_empty_n": event_options_empty_n,
+        "event_off_random_n": event_off_random_n,
+        "potion_or_relic_safe_n": potion_or_relic_safe_n,
+        "potion_or_relic_random_n": potion_or_relic_random_n,
         "jev_card_fit": last_shadow.get("jev_card_fit"),
     }
 
@@ -553,9 +602,10 @@ def build_report(
                 "reason map_lowhp_random), opt-in v2 map_lowhp_hard (default off; "
                 "--map-lowhp-hard on, reason map_lowhp_hard, counted as map_lowhp_hard_n), "
                 "and card_fit assist on true pick_card; potion/relic PHASE_CARD_REWARD screens "
-                "legal-random (potion_or_relic_reward_random). EVENT is off unless "
+                "safe fallback to take reward (potion_or_relic_safe_fallback). EVENT is off unless "
                 "--jev-event on (or --jev-phases lists event); pending EVENT "
-                "choose/confirm maps to combat slots. Shop stays legal random. "
+                "choose/confirm maps to combat slots; uncertain/error EVENT falls back to safe option "
+                "(event_safe_fallback). Shop stays legal random. "
                 "Errors fall back to legal random. Not an Act1-clear gate."
             ),
         },

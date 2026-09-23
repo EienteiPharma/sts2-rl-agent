@@ -918,6 +918,30 @@ def _maybe_map_lowhp_hard(
     )
 
 
+def _event_safe_option(options: list[NoncombatOption]) -> NoncombatOption | None:
+    """When Jev is uncertain on an EVENT choice, prefer safe legal options over random."""
+    if not options:
+        return None
+    leaves = [
+        o for o in options
+        if str(o.option_id).lower() in {"leave", "event_leave"}
+        or str(o.option_id).lower().endswith("_leave")
+        or "leave" == str((o.meta or {}).get("choice_key", "")).lower()
+    ]
+    if leaves:
+        return leaves[0]
+
+    def _is_harmful(o: NoncombatOption) -> bool:
+        text = (o.label + " " + str(o.option_id) + " " + str((o.meta or {}).get("criteria", ""))).lower()
+        harmful_keywords = ["curse", "lose hp", "damage", "wound", "decay", "doubt", "regret", "writhe"]
+        return any(kw in text for kw in harmful_keywords)
+
+    safe = [o for o in options if not _is_harmful(o)]
+    if safe:
+        return safe[0]
+    return options[0]
+
+
 def _apply_hp_pressure_bias(
     phase: str,
     choice_id: str,
@@ -1121,10 +1145,18 @@ def decide_noncombat(
         mgr = getattr(env, "_mgr", None)
         acts = mgr.get_available_actions() if mgr is not None else []
         if any(a.get("action") in {"pick_potion", "pick_relic_reward"} for a in acts):
-            action = _legal_random(mask, rng)
+            from sts2_env.gym_env.run_env import _CARD_RWD_START
+
+            take_idx = _CARD_RWD_START
+            if 0 <= take_idx < len(mask) and int(mask[take_idx]) == 1:
+                action = int(take_idx)
+                reason = "potion_or_relic_safe_fallback"
+            else:
+                action = _legal_random(mask, rng)
+                reason = "potion_or_relic_reward_random"
             rec = _base_rec(
                 executed_action_index=action,
-                reason="potion_or_relic_reward_random",
+                reason=reason,
             )
             append_shadow_log(shadow_log, rec)
             return action
@@ -1299,6 +1331,16 @@ def decide_noncombat(
             reason = extra or (
                 "api_error" if error_type == "api_error" else (error_type or "jev_failed")
             )
+        elif phase == "EVENT" and not is_neow:
+            safe_opt = _event_safe_option(options)
+            if safe_opt and safe_opt.action_index < len(mask) and mask[safe_opt.action_index] == 1:
+                action = safe_opt.action_index
+                eid = safe_opt.option_id
+                reason = "event_safe_fallback"
+            else:
+                action = _legal_random(mask, rng)
+                eid = next((o.option_id for o in options if o.action_index == action), None)
+                reason = "api_error" if error_type == "api_error" else (error_type or "jev_failed")
         else:
             action = _legal_random(mask, rng)
             eligible = [i for i in legal_indices if i < len(mask) and mask[i] == 1]
@@ -1453,6 +1495,16 @@ def decide_noncombat(
                 map_lowhp_hard=map_lowhp_hard,
             )
             reason = extra or "low_confidence_random"
+        elif phase == "EVENT" and not is_neow:
+            safe_opt = _event_safe_option(options)
+            if safe_opt and safe_opt.action_index < len(mask) and mask[safe_opt.action_index] == 1:
+                action = safe_opt.action_index
+                eid = safe_opt.option_id
+                reason = "event_safe_fallback"
+            else:
+                action = int(rng.choice(legal_indices)) if legal_indices else _legal_random(mask, rng)
+                eid = next((o.option_id for o in options if o.action_index == action), None)
+                reason = "low_confidence_random"
         else:
             action = int(rng.choice(legal_indices)) if legal_indices else _legal_random(mask, rng)
             eid = next((o.option_id for o in options if o.action_index == action), None)

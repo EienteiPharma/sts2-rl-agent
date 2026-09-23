@@ -17,6 +17,8 @@ from sts2_env.eval.jev import (
     DEFAULT_JEV_PHASES,
     EVENT_CHOICE_INSTRUCTIONS,
     EVENT_OPTIONS_EMPTY_REASON,
+    EVENT_SAFE_FALLBACK_REASON,
+    POTION_OR_RELIC_SAFE_REASON,
     HP_PRESSURE_ASSIST_REASON,
     HP_PRESSURE_CONTINUE,
     HP_PRESSURE_REST,
@@ -684,6 +686,30 @@ def _non_leave_count(cands: list[Candidate]) -> int:
     return sum(1 for c in cands if not _is_leave_option(c))
 
 
+def _event_safe_candidate(cands: list[Candidate]) -> Candidate | None:
+    """When Jev is uncertain on an EVENT choice, prefer non-damaging legal options.
+
+    Avoids harmful options (curse, hp loss) if cleaner/neutral options or Leave exist.
+    """
+    if not cands:
+        return None
+    # 1. Prefer explicit Leave if present
+    leaves = [c for c in cands if _is_leave_option(c)]
+    if leaves:
+        return leaves[0]
+
+    # 2. Score candidate safety by description / option_id
+    def _is_harmful(c: Candidate) -> bool:
+        text = (c.description + " " + str(c.payload.get("option_id") or "") + " " + str(c.payload.get("label") or "")).lower()
+        harmful_keywords = ["curse", "lose hp", "damage", "wound", "decay", "doubt", "regret", "writhe"]
+        return any(kw in text for kw in harmful_keywords)
+
+    safe = [c for c in cands if not _is_harmful(c)]
+    if safe:
+        return safe[0]
+    return cands[0]
+
+
 def _is_unknown_node(cand: Candidate) -> bool:
     if cand.is_unknown:
         return True
@@ -939,6 +965,10 @@ def _augment_log(
     log["executed_id"] = executed
     if log.get("shadow_fallback_reason") == MAP_LOWHP_HARD_REASON:
         log["map_lowhp_hard"] = True
+    if log.get("shadow_fallback_reason") == EVENT_SAFE_FALLBACK_REASON:
+        log["event_safe_fallback"] = True
+    if log.get("shadow_fallback_reason") == POTION_OR_RELIC_SAFE_REASON:
+        log["potion_or_relic_safe_fallback"] = True
     if log.get("shadow_confidence") is not None:
         log["jev_confidence"] = log["shadow_confidence"]
     if choice_id:
@@ -972,13 +1002,22 @@ def choose_jev_noncombat(
     mgr = _mgr(env)
     actions = mgr.get_available_actions()
     if mgr.phase == RunManager.PHASE_CARD_REWARD and is_potion_or_relic_reward(actions):
-        valid = np.flatnonzero(np.asarray(mask) == 1)
-        action = int(rng.choice(valid)) if valid.size else 0
+        from sts2_env.gym_env.run_env import _CARD_RWD_START
+
+        take_idx = _CARD_RWD_START
+        if 0 <= take_idx < len(mask) and int(mask[take_idx]) == 1:
+            action = int(take_idx)
+            reason = POTION_OR_RELIC_SAFE_REASON
+        else:
+            valid = np.flatnonzero(np.asarray(mask) == 1)
+            action = int(rng.choice(valid)) if valid.size else 0
+            reason = POTION_OR_RELIC_REASON
         log = JevAnswer(
             status="skipped",
-            fallback_reason=POTION_OR_RELIC_REASON,
+            fallback_reason=reason,
         ).as_log()
         log["shadow_decision"] = DECISION_POTION_OR_RELIC
+        log["executed_id"] = "take" if action == take_idx else "skip"
         return action, log
 
     all_cands = collect_candidates(env, mask)
@@ -1080,6 +1119,10 @@ def choose_jev_noncombat(
                 action, answer = _map_lowhp_random(
                     cands, pressure, rng, map_lowhp=map_lowhp, pick=answer
                 )
+        elif decision == DECISION_EVENT:
+            safe_opt = _event_safe_candidate(cands)
+            action = safe_opt.run_action if safe_opt else _legal_random_from(cands, rng)
+            answer = JevAnswer(status="error", fallback_reason=EVENT_SAFE_FALLBACK_REASON)
         else:
             action = _legal_random_from(cands, rng)
             answer = JevAnswer(status="error", fallback_reason=str(e))
@@ -1236,12 +1279,24 @@ def _decide_event(
     answers = adapter.system_one(state, questions)
     pick = apply_choice_confidence(answers.get(qname) or JevAnswer(status="error"))
     if pick.status != "ok":
-        return _legal_random_from(cands, rng), pick
+        if decision == DECISION_EVENT:
+            safe_opt = _event_safe_candidate(cands)
+            action = safe_opt.run_action if safe_opt else _legal_random_from(cands, rng)
+            pick.fallback_reason = EVENT_SAFE_FALLBACK_REASON
+        else:
+            action = _legal_random_from(cands, rng)
+        return action, pick
     chosen = _lookup(cands, pick.choice)
     if chosen is None:
         pick.status = "error"
-        pick.fallback_reason = f"choice {pick.choice!r} not in legal candidates"
-        return _legal_random_from(cands, rng), pick
+        if decision == DECISION_EVENT:
+            safe_opt = _event_safe_candidate(cands)
+            action = safe_opt.run_action if safe_opt else _legal_random_from(cands, rng)
+            pick.fallback_reason = EVENT_SAFE_FALLBACK_REASON
+        else:
+            pick.fallback_reason = f"choice {pick.choice!r} not in legal candidates"
+            action = _legal_random_from(cands, rng)
+        return action, pick
     return chosen.run_action, pick
 
 

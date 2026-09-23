@@ -447,6 +447,8 @@ def test_cli_map_lowhp_default_on_and_n_flag():
     assert "map_lowhp_hard" in report["jev_shadow"]["note"]
     assert report["summary"]["map_lowhp_hard_n"] == 0
     assert report["summary"]["map_lowhp_hard_eps"] == 0
+    assert "event_safe_fallback_n" in report["summary"]
+    assert "potion_or_relic_safe_n" in report["summary"]
     bad = eval_mod.parse_args(
         ["--policy", "hierarchical", "--combat-model", "c.zip", "--n", "0"]
     )

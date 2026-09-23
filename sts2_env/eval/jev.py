@@ -34,6 +34,11 @@ Lab-hung thresholds (do not retune in this eval):
   v2 hard-select (``map_lowhp_hard``, rest-then-shop regardless of
   confidence) is **opt-in** via ``--map-lowhp-hard on`` (hang default
   **off**; froze after n100 clear 0%).
+* Secondary A (EVENT / relic safe fallback): when Jev is uncertain,
+  encounters API error, or picks not in legal candidates during EVENT choice
+  under ``--jev-event on``, falls back to non-damaging legal option or Leave
+  (``event_safe_fallback``) instead of unconstrained random. Relic/potion
+  reward screens take the reward (``potion_or_relic_safe_fallback``).
 * Strip invisible / illegal candidates before Choice
 * Act1 reward ``+`` cards are not natural drops (Smith / Neow only)
 * Card-reward Choice is Neow+early natural Act1, not mid-act fixtures
@@ -86,6 +91,8 @@ MAP_LOWHP_SAFE_REASON = "map_lowhp_safe"  # v1 fight-override; not hang-default
 MAP_LOWHP_RANDOM_REASON = "map_lowhp_random"  # v1 uncertain filter (hang default on)
 MAP_LOWHP_HARD_REASON = "map_lowhp_hard"  # v2 hard-select; --map-lowhp-hard, default off
 MAP_LOWHP_HARD_ON = False
+EVENT_SAFE_FALLBACK_REASON = "event_safe_fallback"
+POTION_OR_RELIC_SAFE_REASON = "potion_or_relic_safe_fallback"
 
 DEFAULT_JEV_PHASES = frozenset({"map", "rest", "card"})
 JEV_PHASE_TOKENS = frozenset({"map", "rest", "card", "event"})
@@ -194,6 +201,8 @@ class JevAnswer:
         if self.card_fit is not None:
             log["jev_card_fit"] = self.card_fit
         log["map_lowhp_hard"] = self.fallback_reason == MAP_LOWHP_HARD_REASON
+        log["event_safe_fallback"] = self.fallback_reason == EVENT_SAFE_FALLBACK_REASON
+        log["potion_or_relic_safe_fallback"] = self.fallback_reason == POTION_OR_RELIC_SAFE_REASON
         return log
 
 
