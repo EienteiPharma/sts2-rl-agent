@@ -30,8 +30,11 @@ from sts2_env.eval.jev import (
     MAP_LOWHP_ON,
     MAP_LOWHP_RANDOM_REASON,
     MAP_LOWHP_SAFE_REASON,
+    MAP_LOWHP_SOFT_B_ON,
+    MAP_LOWHP_SOFT_B_REASON,
     local_hp_pressure,
     map_lowhp_filter,
+    map_lowhp_filter_with_reason,
     map_lowhp_hard_item,
     map_lowhp_safe_items,
 )
@@ -886,8 +889,10 @@ def _sample_map_lowhp(
     *,
     map_lowhp: bool,
     map_lowhp_hard: bool = False,
+    map_lowhp_soft_b: bool = MAP_LOWHP_SOFT_B_ON,
+    act_map: Any = None,
 ) -> tuple[int, str | None, str | None]:
-    """Hard-select only when opt-in; else v1 uncertain shop/rest filter."""
+    """Hard-select only when opt-in; else soft-B / v1 uncertain shop/rest filter."""
     legal = _legal_opts(options, mask)
     if map_lowhp_hard:
         preferred = map_lowhp_hard_item(
@@ -895,11 +900,16 @@ def _sample_map_lowhp(
         )
         if preferred is not None:
             return preferred.action_index, preferred.option_id, MAP_LOWHP_HARD_REASON
-    filtered = map_lowhp_filter(
-        legal, _opt_point_type, hp_pressure, enabled=map_lowhp
+    filtered, reason = map_lowhp_filter_with_reason(
+        legal,
+        _opt_point_type,
+        hp_pressure,
+        enabled=map_lowhp,
+        soft_b=map_lowhp_soft_b,
+        act_map=act_map,
     )
     pool = filtered if filtered else legal
-    extra = MAP_LOWHP_RANDOM_REASON if filtered else None
+    extra = reason
     if not pool:
         return _legal_random(mask, rng), None, extra
     pick = pool[int(rng.randint(0, len(pool)))]
@@ -1069,6 +1079,7 @@ def decide_noncombat(
     jev_neow: bool = False,
     map_lowhp: bool = MAP_LOWHP_ON,
     map_lowhp_hard: bool = MAP_LOWHP_HARD_ON,
+    map_lowhp_soft_b: bool = MAP_LOWHP_SOFT_B_ON,
 ) -> int:
     """Decide a RunEnv action for non-combat phases under the Jev switch contract.
 
@@ -1076,6 +1087,8 @@ def decide_noncombat(
     ``hp_pressure >= 2.0`` and a legal shop/rest node resamples among those
     (``map_lowhp_random``). ``map_lowhp_hard`` (hang default **off**) is the
     v2 rest-then-shop override regardless of Jev confidence.
+    ``map_lowhp_soft_b`` (hang default on): soft bias against danger nodes (elite/boss)
+    when low-HP.
     """
     if mode not in MODES:
         mode = "force_random"
@@ -1320,6 +1333,9 @@ def decide_noncombat(
 
     if error_type or choice_id is None or conf is None:
         if phase == "MAP_CHOICE":
+            act_map = getattr(env, "_mgr", None)
+            act_map = getattr(act_map, "_run_state", None) if act_map else None
+            act_map = getattr(act_map, "map", None) if act_map else None
             action, eid, extra = _sample_map_lowhp(
                 options,
                 mask,
@@ -1327,6 +1343,8 @@ def decide_noncombat(
                 map_pressure,
                 map_lowhp=map_lowhp,
                 map_lowhp_hard=map_lowhp_hard,
+                map_lowhp_soft_b=map_lowhp_soft_b,
+                act_map=act_map,
             )
             reason = extra or (
                 "api_error" if error_type == "api_error" else (error_type or "jev_failed")
@@ -1365,6 +1383,9 @@ def decide_noncombat(
     chosen = by_id.get(choice_id)
     if chosen is None:
         if phase == "MAP_CHOICE":
+            act_map = getattr(env, "_mgr", None)
+            act_map = getattr(act_map, "_run_state", None) if act_map else None
+            act_map = getattr(act_map, "map", None) if act_map else None
             action, eid, extra = _sample_map_lowhp(
                 options,
                 mask,
@@ -1372,6 +1393,8 @@ def decide_noncombat(
                 map_pressure,
                 map_lowhp=map_lowhp,
                 map_lowhp_hard=map_lowhp_hard,
+                map_lowhp_soft_b=map_lowhp_soft_b,
+                act_map=act_map,
             )
             reason = extra or "choice_not_in_legal"
         else:
@@ -1486,6 +1509,9 @@ def decide_noncombat(
     # suggest_live
     if not confident:
         if phase == "MAP_CHOICE":
+            act_map = getattr(env, "_mgr", None)
+            act_map = getattr(act_map, "_run_state", None) if act_map else None
+            act_map = getattr(act_map, "map", None) if act_map else None
             action, eid, extra = _sample_map_lowhp(
                 options,
                 mask,
@@ -1493,6 +1519,8 @@ def decide_noncombat(
                 map_pressure,
                 map_lowhp=map_lowhp,
                 map_lowhp_hard=map_lowhp_hard,
+                map_lowhp_soft_b=map_lowhp_soft_b,
+                act_map=act_map,
             )
             reason = extra or "low_confidence_random"
         elif phase == "EVENT" and not is_neow:

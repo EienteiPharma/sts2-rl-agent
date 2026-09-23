@@ -45,9 +45,11 @@ When `hp_pressure >= 2.0` (same band as rest prefer; local fallback
 * If **only fight nodes** remain, keep full-pool random (documented; no
   tag). `--jev off` full-legal-random is unchanged.
 * Knob: `--map-lowhp on|off` (CLI default **on** for soft uncertain filter).
-  `--map-lowhp-hard on|off` (CLI default **off** for hard override). Constant
-  `MAP_LOWHP_ON = True`, `MAP_LOWHP_HARD_ON = False` in `sts2_env/eval/jev.py`.
-  Eval counts `map_lowhp_hard_n` per episode if hard is opted in.
+  `--map-lowhp-hard on|off` (CLI default **off** for hard override).
+  `--map-lowhp-soft-b on|off` (CLI default **on** for elite/Boss danger soft bias).
+  Constant `MAP_LOWHP_ON = True`, `MAP_LOWHP_HARD_ON = False`, `MAP_LOWHP_SOFT_B_ON = True`
+  in `sts2_env/eval/jev.py`. Eval counts `map_lowhp_hard_n` per episode if hard is opted in,
+  and `map_lowhp_soft_b_n` for soft-B danger avoidance.
 
 ## EVENT (`--jev-event on`)
 
@@ -165,3 +167,10 @@ Closes damaging random holes in non-combat choices:
 - Under `--jev-event on`, if Jev is uncertain, encounters API error, or suggests an invalid choice on `event_choice`, the runner falls back to non-damaging legal options or Leave (`event_safe_fallback`) rather than uniform random.
 - On potion/relic reward screens (`PHASE_CARD_REWARD`), the runner safely takes the reward item (`potion_or_relic_safe_fallback`).
 - Evaluated with explicit `--jev-event on`; `--jev-event` remains default **off** for hang baseline.
+
+## Soft B: MAP elite/Boss low-HP soft bias (2026-09-23)
+
+- Under `hp_pressure >= 2.0`, if an elite or Boss is ahead on the fork, uncertain/error decisions soft-prefer safe shop/rest nodes (`map_lowhp_soft_b`).
+- Controlled by `--map-lowhp-soft-b on|off` (default **`on`**; killable via `--map-lowhp-soft-b off`).
+- Hard-select remains opt-in **off** (`--map-lowhp-hard off`).
+- Counted in eval summary as `map_lowhp_soft_b_n` and `map_lowhp_soft_b_eps`.

@@ -31,6 +31,8 @@ from sts2_env.eval.jev import (
     MAP_LOWHP_HARD_REASON,
     MAP_LOWHP_ON,
     MAP_LOWHP_RANDOM_REASON,
+    MAP_LOWHP_SOFT_B_ON,
+    MAP_LOWHP_SOFT_B_REASON,
     NEOW_BOON_INSTRUCTIONS,
     NEOW_EARLY_CARD_INSTRUCTIONS,
     NON_JEV_PHASE_REASON,
@@ -52,6 +54,7 @@ from sts2_env.eval.jev import (
     apply_choice_confidence,
     local_hp_pressure,
     map_lowhp_filter,
+    map_lowhp_filter_with_reason,
     map_lowhp_hard_item,
     map_lowhp_safe_items,
     rest_or_continue_override,
@@ -112,6 +115,7 @@ class JevPolicyFlags:
     neow: bool | None = None
     map_lowhp: bool = MAP_LOWHP_ON
     map_lowhp_hard: bool = MAP_LOWHP_HARD_ON
+    map_lowhp_soft_b: bool = MAP_LOWHP_SOFT_B_ON
 
     def resolved_phases(self) -> frozenset[str]:
         phases = set(self.phases)
@@ -150,6 +154,7 @@ def resolve_jev_flags(
     jev_neow: str | None = None,
     map_lowhp: str | None = None,
     map_lowhp_hard: str | None = None,
+    map_lowhp_soft_b: str | None = None,
 ) -> JevPolicyFlags:
     phases = parse_jev_phases(jev_phases)
     event = jev_event == "on" or "event" in phases
@@ -162,12 +167,14 @@ def resolve_jev_flags(
         neow = jev_neow == "on"
     lowhp = MAP_LOWHP_ON if map_lowhp is None else map_lowhp == "on"
     hard = MAP_LOWHP_HARD_ON if map_lowhp_hard is None else map_lowhp_hard == "on"
+    soft_b = MAP_LOWHP_SOFT_B_ON if map_lowhp_soft_b is None else map_lowhp_soft_b == "on"
     return JevPolicyFlags(
         phases=phases,
         event=event,
         neow=neow,
         map_lowhp=lowhp,
         map_lowhp_hard=hard,
+        map_lowhp_soft_b=soft_b,
     )
 
 
@@ -765,16 +772,22 @@ def _map_lowhp_random(
     rng: np.random.RandomState,
     *,
     map_lowhp: bool,
+    map_lowhp_soft_b: bool = MAP_LOWHP_SOFT_B_ON,
+    act_map: Any = None,
     pick: JevAnswer,
 ) -> tuple[int, JevAnswer]:
-    """v1 uncertain filter: resample among shop/rest when the constraint fires."""
-    filtered = map_lowhp_filter(
-        cands, _cand_point_type, pressure, enabled=map_lowhp
+    """Soft filter on uncertain/error map forks under hp_pressure >= 2.0.
+
+    When soft_b is enabled and an elite/Boss is ahead, avoids danger forks.
+    Falls back to v1 shop/rest filter if enabled.
+    """
+    filtered, reason = map_lowhp_filter_with_reason(
+        cands, _cand_point_type, pressure, enabled=map_lowhp, soft_b=map_lowhp_soft_b, act_map=act_map
     )
     pool = filtered if filtered else cands
     action = _legal_random_from(pool, rng)
-    if filtered:
-        pick.fallback_reason = MAP_LOWHP_RANDOM_REASON
+    if reason:
+        pick.fallback_reason = reason
     return action, pick
 
 
@@ -965,6 +978,8 @@ def _augment_log(
     log["executed_id"] = executed
     if log.get("shadow_fallback_reason") == MAP_LOWHP_HARD_REASON:
         log["map_lowhp_hard"] = True
+    if log.get("shadow_fallback_reason") == MAP_LOWHP_SOFT_B_REASON:
+        log["map_lowhp_soft_b"] = True
     if log.get("shadow_fallback_reason") == EVENT_SAFE_FALLBACK_REASON:
         log["event_safe_fallback"] = True
     if log.get("shadow_fallback_reason") == POTION_OR_RELIC_SAFE_REASON:
@@ -999,6 +1014,7 @@ def choose_jev_noncombat(
     flags = flags or DEFAULT_JEV_FLAGS
     map_lowhp = bool(getattr(flags, "map_lowhp", MAP_LOWHP_ON))
     map_lowhp_hard = bool(getattr(flags, "map_lowhp_hard", MAP_LOWHP_HARD_ON))
+    map_lowhp_soft_b = bool(getattr(flags, "map_lowhp_soft_b", MAP_LOWHP_SOFT_B_ON))
     mgr = _mgr(env)
     actions = mgr.get_available_actions()
     if mgr.phase == RunManager.PHASE_CARD_REWARD and is_potion_or_relic_reward(actions):
@@ -1101,6 +1117,7 @@ def choose_jev_noncombat(
             rng,
             map_lowhp=map_lowhp,
             map_lowhp_hard=map_lowhp_hard,
+            map_lowhp_soft_b=map_lowhp_soft_b,
         )
     except JevError as e:
         logger.error("Jev %s error; falling back to legal random: %s", decision, e)
@@ -1116,8 +1133,15 @@ def choose_jev_noncombat(
             if hard is not None:
                 action, answer = hard
             else:
+                act_map = getattr(mgr.run_state, "map", None) if hasattr(mgr, "run_state") else None
                 action, answer = _map_lowhp_random(
-                    cands, pressure, rng, map_lowhp=map_lowhp, pick=answer
+                    cands,
+                    pressure,
+                    rng,
+                    map_lowhp=map_lowhp,
+                    map_lowhp_soft_b=map_lowhp_soft_b,
+                    act_map=act_map,
+                    pick=answer,
                 )
         elif decision == DECISION_EVENT:
             safe_opt = _event_safe_candidate(cands)
@@ -1172,6 +1196,7 @@ def _decide(
     *,
     map_lowhp: bool = MAP_LOWHP_ON,
     map_lowhp_hard: bool = MAP_LOWHP_HARD_ON,
+    map_lowhp_soft_b: bool = MAP_LOWHP_SOFT_B_ON,
 ) -> tuple[int, JevAnswer]:
     if decision == DECISION_REST_OR_CONTINUE:
         return _decide_rest_or_continue(
@@ -1182,6 +1207,7 @@ def _decide(
             rng,
             map_lowhp=map_lowhp,
             map_lowhp_hard=map_lowhp_hard,
+            map_lowhp_soft_b=map_lowhp_soft_b,
         )
     if decision == DECISION_REST_SITE:
         return _decide_rest_site(cands, state, adapter, mgr, rng)
@@ -1198,6 +1224,7 @@ def _decide(
             rng,
             map_lowhp=map_lowhp,
             map_lowhp_hard=map_lowhp_hard,
+            map_lowhp_soft_b=map_lowhp_soft_b,
         )
     instructions = _instructions_for(decision)
     questions = {
@@ -1227,6 +1254,7 @@ def _decide_map_fork(
     *,
     map_lowhp: bool = MAP_LOWHP_ON,
     map_lowhp_hard: bool = MAP_LOWHP_HARD_ON,
+    map_lowhp_soft_b: bool = MAP_LOWHP_SOFT_B_ON,
 ) -> tuple[int, JevAnswer]:
     has_unknown = any(_is_unknown_node(c) for c in cands)
     instructions = _instructions_for(DECISION_MAP_FORK)
@@ -1247,16 +1275,29 @@ def _decide_map_fork(
     )
     if hard is not None:
         return hard
+    act_map = getattr(mgr.run_state, "map", None) if hasattr(mgr, "run_state") else None
     if pick.status != "ok":
         return _map_lowhp_random(
-            cands, pressure, rng, map_lowhp=map_lowhp, pick=pick
+            cands,
+            pressure,
+            rng,
+            map_lowhp=map_lowhp,
+            map_lowhp_soft_b=map_lowhp_soft_b,
+            act_map=act_map,
+            pick=pick,
         )
     chosen = _lookup(cands, pick.choice)
     if chosen is None:
         pick.status = "error"
         pick.fallback_reason = f"choice {pick.choice!r} not in legal candidates"
         return _map_lowhp_random(
-            cands, pressure, rng, map_lowhp=map_lowhp, pick=pick
+            cands,
+            pressure,
+            rng,
+            map_lowhp=map_lowhp,
+            map_lowhp_soft_b=map_lowhp_soft_b,
+            act_map=act_map,
+            pick=pick,
         )
     deferred = _maybe_defer_unknown(cands, chosen, pick, pressure, rng)
     if deferred is not None:
@@ -1361,6 +1402,7 @@ def _decide_rest_or_continue(
     *,
     map_lowhp: bool = MAP_LOWHP_ON,
     map_lowhp_hard: bool = MAP_LOWHP_HARD_ON,
+    map_lowhp_soft_b: bool = MAP_LOWHP_SOFT_B_ON,
 ) -> tuple[int, JevAnswer]:
     rest_cands = [c for c in cands if c.is_rest]
     continue_cands = [c for c in cands if not c.is_rest]
@@ -1433,16 +1475,29 @@ def _decide_rest_or_continue(
             )
         return action, cont_pick
 
+    act_map = getattr(mgr.run_state, "map", None) if hasattr(mgr, "run_state") else None
     if pick.status != "ok":
         return _map_lowhp_random(
-            cands, pressure, rng, map_lowhp=map_lowhp, pick=pick
+            cands,
+            pressure,
+            rng,
+            map_lowhp=map_lowhp,
+            map_lowhp_soft_b=map_lowhp_soft_b,
+            act_map=act_map,
+            pick=pick,
         )
     chosen = _lookup(cands, pick.choice)
     if chosen is None:
         pick.status = "error"
         pick.fallback_reason = f"choice {pick.choice!r} not in legal candidates"
         return _map_lowhp_random(
-            cands, pressure, rng, map_lowhp=map_lowhp, pick=pick
+            cands,
+            pressure,
+            rng,
+            map_lowhp=map_lowhp,
+            map_lowhp_soft_b=map_lowhp_soft_b,
+            act_map=act_map,
+            pick=pick,
         )
     pick.score = pressure
     deferred = _maybe_defer_unknown(cands, chosen, pick, pressure, rng)

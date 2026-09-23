@@ -282,10 +282,12 @@ def test_cli_jev_default_off_and_strategic_alias():
     assert on.jev_event == "off"
     assert on.map_lowhp == "on"
     assert on.map_lowhp_hard == "off"
+    assert on.map_lowhp_soft_b == "on"
     assert on.jev_flags.allows_event() is False
     assert on.jev_flags.allows_neow() is False
     assert on.jev_flags.map_lowhp is True
     assert on.jev_flags.map_lowhp_hard is False
+    assert on.jev_flags.map_lowhp_soft_b is True
     alias = eval_mod.parse_args(
         ["--policy", "hierarchical", "--combat-model", "c.zip", "--strategic", "jev"]
     )
@@ -404,9 +406,11 @@ def test_cli_map_lowhp_default_on_and_n_flag():
     eval_mod.validate_policy_args(off)
     assert off.map_lowhp == "on"
     assert off.map_lowhp_hard == "off"
+    assert off.map_lowhp_soft_b == "on"
     assert off.n == 50
     assert off.jev_flags.map_lowhp is True
     assert off.jev_flags.map_lowhp_hard is False
+    assert off.jev_flags.map_lowhp_soft_b is True
     disabled = eval_mod.parse_args(
         [
             "--policy",
@@ -419,6 +423,8 @@ def test_cli_map_lowhp_default_on_and_n_flag():
             "off",
             "--map-lowhp-hard",
             "on",
+            "--map-lowhp-soft-b",
+            "off",
             "--n",
             "100",
         ]
@@ -426,8 +432,10 @@ def test_cli_map_lowhp_default_on_and_n_flag():
     eval_mod.validate_policy_args(disabled)
     assert disabled.map_lowhp == "off"
     assert disabled.map_lowhp_hard == "on"
+    assert disabled.map_lowhp_soft_b == "off"
     assert disabled.jev_flags.map_lowhp is False
     assert disabled.jev_flags.map_lowhp_hard is True
+    assert disabled.jev_flags.map_lowhp_soft_b is False
     assert disabled.n == 100
     report = eval_mod.build_report(
         policy="hierarchical",
@@ -438,15 +446,18 @@ def test_cli_map_lowhp_default_on_and_n_flag():
         jev="on",
         map_lowhp="on",
         map_lowhp_hard="off",
+        map_lowhp_soft_b="on",
         seed_count=100,
     )
     assert report["map_lowhp"] == "on"
     assert report["map_lowhp_hard"] == "off"
+    assert report["map_lowhp_soft_b"] == "on"
     assert report["seeds"]["count"] == 100
     assert "map_lowhp" in report["jev_shadow"]["note"]
     assert "map_lowhp_hard" in report["jev_shadow"]["note"]
     assert report["summary"]["map_lowhp_hard_n"] == 0
     assert report["summary"]["map_lowhp_hard_eps"] == 0
+    assert "map_lowhp_soft_b_n" in report["summary"]
     assert "event_safe_fallback_n" in report["summary"]
     assert "potion_or_relic_safe_n" in report["summary"]
     bad = eval_mod.parse_args(

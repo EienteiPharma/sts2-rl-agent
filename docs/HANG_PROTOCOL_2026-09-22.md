@@ -20,3 +20,5 @@ Opening Neow does **not** drag; Jev picking the boon **does**. Hang keeps the Ne
 REST calibration code may remain; no win claim from it. Strategic claims frozen (EVENT off, neow Jev off) until the lab unfreezes.
 
 **Secondary A (EVENT / relic knife):** evaluated with explicit `--jev-event on` (hang default remains `--jev-event off`). Closes low-conf / API error holes in EVENT and relic picks with safe fallback (`event_safe_fallback`, `potion_or_relic_safe_fallback`).
+
+**Soft B (MAP elite/Boss low-HP soft bias):** `--map-lowhp-soft-b on` (default **on**, easily killable via `--map-lowhp-soft-b off`). When `hp_pressure >= 2.0` and an elite/Boss is ahead on the fork, uncertain/error decisions soft-prefer safe shop/rest nodes (`map_lowhp_soft_b`). Hard-select remains opt-in off (`--map-lowhp-hard off`).

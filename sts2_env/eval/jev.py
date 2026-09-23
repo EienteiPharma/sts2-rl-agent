@@ -34,6 +34,9 @@ Lab-hung thresholds (do not retune in this eval):
   v2 hard-select (``map_lowhp_hard``, rest-then-shop regardless of
   confidence) is **opt-in** via ``--map-lowhp-hard on`` (hang default
   **off**; froze after n100 clear 0%).
+  Soft-B (``map_lowhp_soft_b``, hang default on): when elite/Boss is ahead
+  on a fork under high pressure, uncertain decisions soft-prefer safe nodes
+  (``map_lowhp_soft_b``).
 * Secondary A (EVENT / relic safe fallback): when Jev is uncertain,
   encounters API error, or picks not in legal candidates during EVENT choice
   under ``--jev-event on``, falls back to non-damaging legal option or Leave
@@ -91,6 +94,8 @@ MAP_LOWHP_SAFE_REASON = "map_lowhp_safe"  # v1 fight-override; not hang-default
 MAP_LOWHP_RANDOM_REASON = "map_lowhp_random"  # v1 uncertain filter (hang default on)
 MAP_LOWHP_HARD_REASON = "map_lowhp_hard"  # v2 hard-select; --map-lowhp-hard, default off
 MAP_LOWHP_HARD_ON = False
+MAP_LOWHP_SOFT_B_REASON = "map_lowhp_soft_b"  # soft bias away from elite/boss under pressure
+MAP_LOWHP_SOFT_B_ON = True
 EVENT_SAFE_FALLBACK_REASON = "event_safe_fallback"
 POTION_OR_RELIC_SAFE_REASON = "potion_or_relic_safe_fallback"
 
@@ -201,6 +206,7 @@ class JevAnswer:
         if self.card_fit is not None:
             log["jev_card_fit"] = self.card_fit
         log["map_lowhp_hard"] = self.fallback_reason == MAP_LOWHP_HARD_REASON
+        log["map_lowhp_soft_b"] = self.fallback_reason == MAP_LOWHP_SOFT_B_REASON
         log["event_safe_fallback"] = self.fallback_reason == EVENT_SAFE_FALLBACK_REASON
         log["potion_or_relic_safe_fallback"] = self.fallback_reason == POTION_OR_RELIC_SAFE_REASON
         return log
@@ -652,6 +658,80 @@ def map_lowhp_filter(items, point_type_of, hp_pressure, *, enabled: bool = MAP_L
         return None
     safe = map_lowhp_safe_items(items, point_type_of)
     return safe or None
+
+
+def cand_has_elite_or_boss_ahead(item, point_type_of, act_map: Any = None) -> bool:
+    """True if item is or directly leads into an ELITE or BOSS."""
+    pt = normalize_map_point_type(point_type_of(item))
+    if pt in {"ELITE", "BOSS"}:
+        return True
+    if act_map is None:
+        return False
+    coord = None
+    if hasattr(item, "payload") and isinstance(item.payload, dict):
+        coord = item.payload.get("coord")
+    elif hasattr(item, "meta") and isinstance(item.meta, dict):
+        coord = item.meta.get("coord")
+    if not coord or len(coord) < 2:
+        return False
+    from sts2_env.core.enums import MapPointType
+    from sts2_env.map.generator import MapCoord
+
+    try:
+        mp = act_map.get_point(MapCoord(coord[0], coord[1]))
+        if mp is None:
+            return False
+        if getattr(mp, "point_type", None) in (MapPointType.ELITE, MapPointType.BOSS):
+            return True
+        frontier = list(getattr(mp, "children", []))
+        for _ in range(2):
+            next_frontier = []
+            for child in frontier:
+                if getattr(child, "point_type", None) in (MapPointType.ELITE, MapPointType.BOSS):
+                    return True
+                next_frontier.extend(getattr(child, "children", []))
+            frontier = next_frontier
+    except Exception:
+        pass
+    return False
+
+
+def map_lowhp_filter_with_reason(
+    items,
+    point_type_of,
+    hp_pressure,
+    *,
+    enabled: bool = MAP_LOWHP_ON,
+    soft_b: bool = MAP_LOWHP_SOFT_B_ON,
+    act_map: Any = None,
+) -> tuple[Any | None, str | None]:
+    """Soft filter on uncertain/error map forks under hp_pressure >= 2.0.
+
+    When soft_b is enabled and an elite/Boss is ahead on any fork option,
+    and a safe node (SHOP/REST_SITE) is present, soft-prefers the safe node(s)
+    to avoid heading into elite/boss under dangerous HP pressure.
+    Falls back to v1 safe-node filter if enabled.
+    Returns (filtered_pool, reason) or (None, None).
+    """
+    if not map_lowhp_active(hp_pressure, enabled=enabled or soft_b):
+        return None, None
+
+    safe = map_lowhp_safe_items(items, point_type_of)
+    if not safe:
+        # If only fight nodes remain, keep full-pool random
+        return None, None
+
+    danger = [it for it in items if cand_has_elite_or_boss_ahead(it, point_type_of, act_map)]
+    if soft_b and danger:
+        safe_non_danger = [it for it in safe if it not in danger]
+        pool = safe_non_danger or safe
+        if pool:
+            return pool, MAP_LOWHP_SOFT_B_REASON
+
+    if enabled and safe:
+        return safe, MAP_LOWHP_RANDOM_REASON
+
+    return None, None
 
 
 def map_lowhp_hard_item(items, point_type_of, hp_pressure, *, enabled: bool = MAP_LOWHP_HARD_ON):

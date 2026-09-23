@@ -39,6 +39,7 @@ from sts2_env.eval.jev import (
     EVENT_SAFE_FALLBACK_REASON,
     JEV_EVENT_OFF_REASON,
     MAP_LOWHP_HARD_REASON,
+    MAP_LOWHP_SOFT_B_REASON,
     POTION_OR_RELIC_REASON,
     POTION_OR_RELIC_SAFE_REASON,
     JevAnswer,
@@ -87,6 +88,8 @@ def _summarize(rows: list[dict]) -> dict:
         "max_floor": int(max(floors)) if floors else 0,
         "map_lowhp_hard_n": int(sum(int(r.get("map_lowhp_hard_n") or 0) for r in rows)),
         "map_lowhp_hard_eps": int(sum(1 for r in rows if int(r.get("map_lowhp_hard_n") or 0) > 0)),
+        "map_lowhp_soft_b_n": int(sum(int(r.get("map_lowhp_soft_b_n") or 0) for r in rows)),
+        "map_lowhp_soft_b_eps": int(sum(1 for r in rows if int(r.get("map_lowhp_soft_b_n") or 0) > 0)),
         "event_jev_used_n": int(sum(int(r.get("event_jev_used_n") or 0) for r in rows)),
         "event_safe_fallback_n": int(sum(int(r.get("event_safe_fallback_n") or 0) for r in rows)),
         "event_low_conf_random_n": int(sum(int(r.get("event_low_conf_random_n") or 0) for r in rows)),
@@ -291,6 +294,7 @@ def _run_episode(
     truncated = False
     last_shadow = jev_shadow_fields(info.get("phase", ""), jev_enabled=jev_enabled)
     map_lowhp_hard_n = 0
+    map_lowhp_soft_b_n = 0
     event_jev_used_n = 0
     event_safe_fallback_n = 0
     event_low_conf_random_n = 0
@@ -326,6 +330,18 @@ def _run_episode(
             map_lowhp_hard_n += 1
             print(
                 f"map_lowhp_hard seed={seed} n={map_lowhp_hard_n} "
+                f"executed={last_shadow.get('executed_id')} "
+                f"jev_choice={last_shadow.get('shadow_suggestion')}",
+                file=sys.stderr,
+                flush=True,
+            )
+        if (
+            reason == MAP_LOWHP_SOFT_B_REASON
+            or last_shadow.get("map_lowhp_soft_b")
+        ):
+            map_lowhp_soft_b_n += 1
+            print(
+                f"map_lowhp_soft_b seed={seed} n={map_lowhp_soft_b_n} "
                 f"executed={last_shadow.get('executed_id')} "
                 f"jev_choice={last_shadow.get('shadow_suggestion')}",
                 file=sys.stderr,
@@ -376,6 +392,7 @@ def _run_episode(
         "shadow_hp_pressure": last_shadow.get("shadow_hp_pressure"),
         "shadow_fallback_reason": last_shadow.get("shadow_fallback_reason"),
         "map_lowhp_hard_n": map_lowhp_hard_n,
+        "map_lowhp_soft_b_n": map_lowhp_soft_b_n,
         "event_jev_used_n": event_jev_used_n,
         "event_safe_fallback_n": event_safe_fallback_n,
         "event_low_conf_random_n": event_low_conf_random_n,
@@ -464,6 +481,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     ap.add_argument(
+        "--map-lowhp-soft-b",
+        choices=["on", "off"],
+        default="on",
+        help=(
+            "MAP low-HP soft-B bias (default on). When hp_pressure>=2.0 and an elite/Boss "
+            "is ahead on the fork, soft-prefers safer non-elite/safe options on uncertain/error "
+            "(map_lowhp_soft_b). Set off to kill."
+        ),
+    )
+    ap.add_argument(
         "--n",
         type=int,
         default=SEED_COUNT,
@@ -527,6 +554,7 @@ def validate_policy_args(args: argparse.Namespace) -> None:
         jev_neow=args.jev_neow,
         map_lowhp=getattr(args, "map_lowhp", "on"),
         map_lowhp_hard=getattr(args, "map_lowhp_hard", "off"),
+        map_lowhp_soft_b=getattr(args, "map_lowhp_soft_b", "on"),
     )
 
 
@@ -563,6 +591,7 @@ def build_report(
     start_with_neow: bool = False,
     map_lowhp: str = "on",
     map_lowhp_hard: str = "off",
+    map_lowhp_soft_b: str = "on",
     seed_count: int | None = None,
 ) -> dict:
     summary = _summarize(rows)
@@ -581,6 +610,7 @@ def build_report(
         "start_with_neow": bool(start_with_neow),
         "map_lowhp": map_lowhp,
         "map_lowhp_hard": map_lowhp_hard,
+        "map_lowhp_soft_b": map_lowhp_soft_b,
         "character": "Ironclad",
         "ascension": 0,
         "seeds": {
@@ -601,6 +631,8 @@ def build_report(
                 "hp_pressure>=2 + shop/rest legal → uncertain/error resamples among safe nodes, "
                 "reason map_lowhp_random), opt-in v2 map_lowhp_hard (default off; "
                 "--map-lowhp-hard on, reason map_lowhp_hard, counted as map_lowhp_hard_n), "
+                "soft-B danger avoidance (default on: --map-lowhp-soft-b on, reason map_lowhp_soft_b, "
+                "counted as map_lowhp_soft_b_n), "
                 "and card_fit assist on true pick_card; potion/relic PHASE_CARD_REWARD screens "
                 "safe fallback to take reward (potion_or_relic_safe_fallback). EVENT is off unless "
                 "--jev-event on (or --jev-phases lists event); pending EVENT "
@@ -669,6 +701,7 @@ def main(argv: list[str] | None = None) -> None:
         start_with_neow=bool(getattr(args, "start_with_neow", False)),
         map_lowhp=getattr(args, "map_lowhp", "on") if args.policy == "hierarchical" else "on",
         map_lowhp_hard=getattr(args, "map_lowhp_hard", "off") if args.policy == "hierarchical" else "off",
+        map_lowhp_soft_b=getattr(args, "map_lowhp_soft_b", "on") if args.policy == "hierarchical" else "on",
         seed_count=n,
     )
     out = Path(args.out)

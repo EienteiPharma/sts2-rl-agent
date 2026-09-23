@@ -28,6 +28,8 @@ from sts2_env.eval.jev import (
     MAP_LOWHP_PRESSURE,
     MAP_LOWHP_RANDOM_REASON,
     MAP_LOWHP_SAFE_REASON,
+    MAP_LOWHP_SOFT_B_ON,
+    MAP_LOWHP_SOFT_B_REASON,
     NEOW_EARLY_CARD_INSTRUCTIONS,
     NEOW_OPTIONS_EMPTY_REASON,
     PLUS_CARD_CRITERION,
@@ -1825,12 +1827,16 @@ def test_map_lowhp_api_error_default_soft_selects_shop():
 def test_resolve_map_lowhp_flag_default_on():
     assert resolve_jev_flags().map_lowhp is True
     assert resolve_jev_flags().map_lowhp_hard is False
+    assert resolve_jev_flags().map_lowhp_soft_b is True
     assert resolve_jev_flags(map_lowhp="on").map_lowhp is True
     assert resolve_jev_flags(map_lowhp="off").map_lowhp is False
     assert resolve_jev_flags(map_lowhp_hard="on").map_lowhp_hard is True
     assert resolve_jev_flags(map_lowhp_hard="off").map_lowhp_hard is False
+    assert resolve_jev_flags(map_lowhp_soft_b="on").map_lowhp_soft_b is True
+    assert resolve_jev_flags(map_lowhp_soft_b="off").map_lowhp_soft_b is False
     assert DEFAULT_JEV_FLAGS.map_lowhp is True
     assert DEFAULT_JEV_FLAGS.map_lowhp_hard is False
+    assert DEFAULT_JEV_FLAGS.map_lowhp_soft_b is True
 
 
 def test_box_decide_noncombat_map_lowhp_low_conf(monkeypatch):
@@ -1895,6 +1901,56 @@ def test_box_decide_noncombat_map_lowhp_low_conf(monkeypatch):
         map_lowhp_hard=True,
     )
     assert action_hard == _MAP_START
+
+
+def test_map_lowhp_soft_b_avoids_elite_ahead():
+    # Fork with ELITE and SHOP (map_fork, not rest_or_continue)
+    env, mask = _map_env(
+        [("ELITE", (0, 6)), ("SHOP", (1, 6))],
+        hp=20,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 2.5},
+                "pick": {"choice": "map_0", "confidence": 0.40},  # uncertain
+            }
+        ]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    # Uncertain on danger fork soft-prefers safe non-elite (SHOP)
+    assert action == _MAP_START + 1
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_SOFT_B_REASON
+    assert log.get("map_lowhp_soft_b") is True
+
+
+def test_map_lowhp_soft_b_killable():
+    env, mask = _map_env(
+        [("ELITE", (0, 6)), ("SHOP", (1, 6))],
+        hp=20,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 2.5},
+                "pick": {"choice": "map_0", "confidence": 0.40},
+            }
+        ]
+    )
+    # With soft_b enabled, low HP avoids elite, picks shop with reason map_lowhp_soft_b
+    action_b, log_b = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action_b == _MAP_START + 1
+    assert log_b["shadow_fallback_reason"] == MAP_LOWHP_SOFT_B_REASON
+
+    # With soft_b killed and map_lowhp killed, falls back to full-pool random
+    flags_killed = JevPolicyFlags(map_lowhp=False, map_lowhp_soft_b=False)
+    actions = set()
+    for s in range(30):
+        act, _ = choose_jev_noncombat(env, mask, np.random.RandomState(s), adapter, flags=flags_killed)
+        actions.add(act)
+    assert actions == {_MAP_START, _MAP_START + 1}
 
 
 def test_box_decide_noncombat_event_safe_fallback(monkeypatch):
