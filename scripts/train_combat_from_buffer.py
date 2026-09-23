@@ -29,11 +29,13 @@ from typing import Any
 from sts2_env.eval.combat_hold import HOLD_BOSS_MIN, HOLD_OVERALL_MIN, run_hold_smoke
 from sts2_env.gym_env.combat_buffer import (
     FROZEN_OUTDIR_NAMES,
-    CombatReplayEnv,
     hang_protocol_meta,
     load_combat_buffer,
     refuse_frozen_path,
     synthetic_combat_buffer,
+)
+from sts2_env.gym_env.combat_replay import (
+    CombatReplayEnv,
 )
 from sts2_env.gym_env.runenv_antiforget import (
     DEFAULT_MIX_BY_BUFFER,

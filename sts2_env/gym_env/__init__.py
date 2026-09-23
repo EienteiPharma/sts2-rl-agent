@@ -23,7 +23,7 @@ def __getattr__(name: str):
 
         return MixedHangLoadoutEnv
     if name == "CombatReplayEnv":
-        from sts2_env.gym_env.combat_buffer import CombatReplayEnv
+        from sts2_env.gym_env.combat_replay import CombatReplayEnv
 
         return CombatReplayEnv
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

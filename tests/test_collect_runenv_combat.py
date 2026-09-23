@@ -581,3 +581,23 @@ def test_train_from_buffer_mix_by_cli(capsys):
     assert "--mix-by" in help_text
     assert "{steps,episodes}" in help_text
     assert "steps (default)" in help_text
+
+
+def test_combat_buffer_layering_split_parity():
+    """Verify split modules (combat_collect, combat_replay) and combat_buffer re-export parity."""
+    import sts2_env.gym_env.combat_buffer as buf_mod
+    import sts2_env.gym_env.combat_collect as col_mod
+    import sts2_env.gym_env.combat_replay as rep_mod
+    import sts2_env.gym_env as gym_pkg
+
+    # Collect symbols
+    for name in col_mod.__all__:
+        assert hasattr(buf_mod, name), f"combat_buffer missing re-export of {name}"
+        assert getattr(buf_mod, name) is getattr(col_mod, name)
+
+    # Replay symbols
+    for name in rep_mod.__all__:
+        assert hasattr(buf_mod, name), f"combat_buffer missing re-export of {name}"
+        assert getattr(buf_mod, name) is getattr(rep_mod, name)
+        assert getattr(gym_pkg, name) is getattr(rep_mod, name)
+

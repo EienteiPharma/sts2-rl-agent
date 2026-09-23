@@ -30,9 +30,11 @@ from typing import Any
 
 from sts2_env.gym_env.combat_buffer import (
     HUNG_OUTDIR_NAME,
-    collect_parallel,
     hang_protocol_meta,
     refuse_frozen_path,
+)
+from sts2_env.gym_env.combat_collect import (
+    collect_parallel,
     split_worker_steps,
 )
 from sts2_env.gym_env.runenv_onpolicy_combat import (

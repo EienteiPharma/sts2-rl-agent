@@ -164,7 +164,7 @@ class MixedHangLoadoutEnvMaker:
     def __call__(self):
         runenv_env = None
         if self.buffer_path:
-            from sts2_env.gym_env.combat_buffer import CombatReplayEnv
+            from sts2_env.gym_env.combat_replay import CombatReplayEnv
 
             runenv_env = CombatReplayEnv.from_path(self.buffer_path, seed=self.seed)
         return MixedHangLoadoutEnv(
