@@ -34,14 +34,14 @@ from typing import Any
 
 import numpy as np
 
-from sts2_env.eval.jev import (
+from sts2_env.eval.jev_client import build_jev_adapter
+from sts2_env.eval.jev_types import (
     EVENT_OPTIONS_EMPTY_REASON,
     EVENT_SAFE_FALLBACK_REASON,
     JEV_EVENT_OFF_REASON,
     POTION_OR_RELIC_REASON,
     POTION_OR_RELIC_SAFE_REASON,
     JevAnswer,
-    build_jev_adapter,
 )
 from sts2_env.eval.map_lowhp import (
     MAP_LOWHP_HARD_REASON,

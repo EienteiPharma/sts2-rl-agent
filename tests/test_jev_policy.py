@@ -2030,3 +2030,28 @@ def test_map_lowhp_reexport_parity():
         assert getattr(eval_pkg, name) is getattr(lowhp_mod, name), f"eval pkg mismatch on {name}"
 
 
+def test_client_surface_split_reexport_parity():
+    """Verify that all split modules re-export identically through jev.py and sts2_env.eval."""
+    import sts2_env.eval.jev as jev_mod
+    import sts2_env.eval as eval_pkg
+    import sts2_env.eval.jev_types as types_mod
+    import sts2_env.eval.jev_telemetry as telemetry_mod
+    import sts2_env.eval.jev_keys as keys_mod
+    import sts2_env.eval.jev_client as client_mod
+    import sts2_env.eval.jev_fallback as fallback_mod
+
+    for mod, mod_name in [
+        (types_mod, "jev_types"),
+        (telemetry_mod, "jev_telemetry"),
+        (keys_mod, "jev_keys"),
+        (client_mod, "jev_client"),
+        (fallback_mod, "jev_fallback"),
+    ]:
+        for name in mod.__all__:
+            assert hasattr(jev_mod, name), f"jev.py missing re-export of {name} from {mod_name}"
+            assert getattr(jev_mod, name) is getattr(mod, name), f"jev.py mismatch on {name} from {mod_name}"
+            assert hasattr(eval_pkg, name), f"eval pkg missing re-export of {name} from {mod_name}"
+            assert getattr(eval_pkg, name) is getattr(mod, name), f"eval pkg mismatch on {name} from {mod_name}"
+
+
+

@@ -24,7 +24,7 @@ from typing import Any
 
 import numpy as np
 
-from sts2_env.eval.jev import (
+from sts2_env.eval.jev_fallback import (
     local_hp_pressure,
 )
 from sts2_env.eval.map_lowhp import (

@@ -7,7 +7,13 @@ from typing import Any
 
 import numpy as np
 
-from sts2_env.eval.jev import (
+from sts2_env.eval.jev_client import JevClient
+from sts2_env.eval.jev_fallback import (
+    apply_choice_confidence,
+    local_hp_pressure,
+    rest_or_continue_override,
+)
+from sts2_env.eval.jev_types import (
     CARD_FIT_ASSIST_MIN,
     CARD_FIT_ASSIST_REASON,
     CARD_FIT_SCORE_CRITERIA,
@@ -18,20 +24,22 @@ from sts2_env.eval.jev import (
     EVENT_CHOICE_INSTRUCTIONS,
     EVENT_OPTIONS_EMPTY_REASON,
     EVENT_SAFE_FALLBACK_REASON,
-    POTION_OR_RELIC_SAFE_REASON,
     HP_PRESSURE_ASSIST_REASON,
     HP_PRESSURE_CONTINUE,
     HP_PRESSURE_REST,
     HP_PRESSURE_SCORE_CRITERIA,
     JEV_EVENT_OFF_REASON,
     JEV_NEOW_OFF_REASON,
-    NEOW_OPTIONS_EMPTY_REASON,
     JEV_PHASE_TOKENS,
+    JevAnswer,
+    JevError,
     NEOW_BOON_INSTRUCTIONS,
     NEOW_EARLY_CARD_INSTRUCTIONS,
+    NEOW_OPTIONS_EMPTY_REASON,
     NON_JEV_PHASE_REASON,
     PLUS_CARD_CRITERION,
     POTION_OR_RELIC_REASON,
+    POTION_OR_RELIC_SAFE_REASON,
     REST_CHOICE_MIN_CONFIDENCE,
     REST_HEAL_ASSIST_CONF,
     REST_SITE_HP_PRESSURE_CRITERIA,
@@ -42,12 +50,6 @@ from sts2_env.eval.jev import (
     UNKNOWN_DEFER_CONF,
     UNKNOWN_DEFERRED_REASON,
     UNKNOWN_MAP_CRITERION,
-    JevAnswer,
-    JevClient,
-    JevError,
-    apply_choice_confidence,
-    local_hp_pressure,
-    rest_or_continue_override,
 )
 from sts2_env.eval.map_lowhp import (
     MAP_LOWHP_HARD_ON,
