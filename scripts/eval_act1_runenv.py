@@ -485,8 +485,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["on", "off"],
         default="on",
         help=(
-            "MAP low-HP soft-B bias (default on). When hp_pressure>=1.5 and an elite/Boss "
-            "is ahead within 4 floors, soft-prefers safer non-elite/safe options on uncertain/error "
+            "MAP low-HP soft-B bias (default on). When hp_pressure>=2.0 and an elite/Boss "
+            "is ahead on the fork, soft-prefers safer non-elite/safe options on uncertain/error "
             "(map_lowhp_soft_b). Set off to kill."
         ),
     )
@@ -632,7 +632,7 @@ def build_report(
                 "reason map_lowhp_random), opt-in v2 map_lowhp_hard (default off; "
                 "--map-lowhp-hard on, reason map_lowhp_hard, counted as map_lowhp_hard_n), "
                 "soft-B danger avoidance (default on: --map-lowhp-soft-b on, reason map_lowhp_soft_b, "
-                "active when hp_pressure>=1.5 with elite/Boss ahead, counted as map_lowhp_soft_b_n), "
+                "counted as map_lowhp_soft_b_n), "
                 "and card_fit assist on true pick_card; potion/relic PHASE_CARD_REWARD screens "
                 "safe fallback to take reward (potion_or_relic_safe_fallback). EVENT is off unless "
                 "--jev-event on (or --jev-phases lists event); pending EVENT "

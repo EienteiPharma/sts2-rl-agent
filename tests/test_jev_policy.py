@@ -1679,8 +1679,6 @@ def test_map_lowhp_fight_only_keeps_full_pool_random():
         hp=10,
         max_hp=80,
     )
-    # With soft-B killed, fight-only forks keep full-pool random
-    flags_no_soft_b = JevPolicyFlags(map_lowhp_soft_b=False)
     actions = set()
     for seed in range(32):
         adapter = ScriptedJev(
@@ -1692,7 +1690,7 @@ def test_map_lowhp_fight_only_keeps_full_pool_random():
             ]
         )
         action, log = choose_jev_noncombat(
-            env, mask, np.random.RandomState(seed), adapter, flags=flags_no_soft_b
+            env, mask, np.random.RandomState(seed), adapter
         )
         actions.add(action)
         assert action in {_MAP_START, _MAP_START + 1}
@@ -1953,27 +1951,6 @@ def test_map_lowhp_soft_b_killable():
         act, _ = choose_jev_noncombat(env, mask, np.random.RandomState(s), adapter, flags=flags_killed)
         actions.add(act)
     assert actions == {_MAP_START, _MAP_START + 1}
-
-
-def test_map_lowhp_soft_b_expanded_pressure_gate():
-    # Fork with ELITE and SHOP, hp_pressure = 1.6 (between 1.5 and 2.0)
-    env, mask = _map_env(
-        [("ELITE", (0, 6)), ("SHOP", (1, 6))],
-        hp=50,
-        max_hp=80,
-    )
-    adapter = ScriptedJev(
-        [
-            {
-                "hp_pressure": {"score": 1.6},
-                "pick": {"choice": "map_0", "confidence": 0.40},  # uncertain
-            }
-        ]
-    )
-    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
-    assert action == _MAP_START + 1
-    assert log["shadow_fallback_reason"] == MAP_LOWHP_SOFT_B_REASON
-    assert log.get("map_lowhp_soft_b") is True
 
 
 def test_box_decide_noncombat_event_safe_fallback(monkeypatch):

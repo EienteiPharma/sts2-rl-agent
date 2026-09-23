@@ -32,7 +32,7 @@
 
 UNKNOWN 只走 `map_fork`，不要在 EVENT 相位伪造 Unknown。
 
-**MAP low-HP (`map_lowhp` v1 默认 on，v2 hard 默认 off，soft B 默认 on):** `hp_pressure>=2` 且合法含 shop/rest 时，低置信度/错误重抽 safe 点（`map_lowhp_random`）。前方有精英/Boss 时触发 soft B 避开危险点（`map_lowhp_soft_b`，`--map-lowhp-soft-b on|off`，默认 on；扩大至 `hp_pressure>=1.5` 与 4 层深度）。自信决策不覆写。硬选 rest-then-shop（`map_lowhp_hard`）仅为可选 `--map-lowhp-hard on`（默认关；实验室在 n100 clear 0% 后冻结）。仅剩 fight 则全池随机。`--map-lowhp off` 关软过滤。EVENT 仍默认 off。
+**MAP low-HP (`map_lowhp` v1 默认 on，v2 hard 默认 off，soft B 默认 on):** `hp_pressure>=2` 且合法含 shop/rest 时，低置信度/错误重抽 safe 点（`map_lowhp_random`）。前方有精英/Boss 时触发 soft B 避开危险点（`map_lowhp_soft_b`，`--map-lowhp-soft-b on|off`，默认 on；主线止于 `58db7d0`，弃用 `4c85dbd` 扩展）。自信决策不覆写。硬选 rest-then-shop（`map_lowhp_hard`）仅为可选 `--map-lowhp-hard on`（默认关；实验室在 n100 clear 0% 后冻结）。仅剩 fight 则全池随机。`--map-lowhp off` 关软过滤。EVENT 仍默认 off。
 
 ## B) EVENT（`--jev-event on`，默认 off）
 
