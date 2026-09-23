@@ -38,6 +38,61 @@ def parse_runenv_frac(value: float | str) -> float:
     return frac
 
 
+def action_mask_fn(env):
+    """Module-level mask fn so SubprocVecEnv / cloudpickle can find it."""
+    return env.action_masks()
+
+
+class MixedHangLoadoutEnvMaker:
+    """Pickle-friendly env_fn for DummyVecEnv / SubprocVecEnv.
+
+    Nested closures in ``scripts/`` fail stdlib pickle (spawn). This maker
+    stores only ints/floats/optional buffer path. ``--n-envs > 1`` still
+    hang-protocol Jev on a live RunEnv half; pass ``buffer_path`` to replay
+    collected combat segments instead (TypeSafe off the learn path).
+    """
+
+    def __init__(
+        self,
+        seed: int = 0,
+        runenv_frac: float = DEFAULT_RUNENV_FRAC,
+        max_steps: int = 2000,
+        buffer_path: str | None = None,
+    ):
+        self.seed = int(seed)
+        self.runenv_frac = parse_runenv_frac(runenv_frac)
+        self.max_steps = int(max_steps)
+        self.buffer_path = buffer_path
+
+    def __call__(self):
+        runenv_env = None
+        if self.buffer_path:
+            from sts2_env.gym_env.combat_buffer import CombatReplayEnv
+
+            runenv_env = CombatReplayEnv.from_path(self.buffer_path, seed=self.seed)
+        return MixedHangLoadoutEnv(
+            runenv_frac=self.runenv_frac,
+            loadout_provider=make_loadout_v1_provider(offset=self.seed),
+            max_steps=self.max_steps,
+            seed_offset=self.seed,
+            runenv_env=runenv_env,
+        )
+
+
+class MaskedEnvMaker:
+    """Wrap a pickleable env maker with sb3 ActionMasker (optional)."""
+
+    def __init__(self, inner: Callable, ActionMasker: Any = None):
+        self.inner = inner
+        self.ActionMasker = ActionMasker
+
+    def __call__(self):
+        env = self.inner()
+        if self.ActionMasker is not None:
+            env = self.ActionMasker(env, action_mask_fn)
+        return env
+
+
 class MixedHangLoadoutEnv(gymnasium.Env):
     """One Gym env; episode source is sampled on reset."""
 
@@ -52,6 +107,7 @@ class MixedHangLoadoutEnv(gymnasium.Env):
         seed_offset: int = 0,
         jev_adapter: Any | None = None,
         render_mode: str | None = None,
+        runenv_env: gymnasium.Env | None = None,
     ):
         super().__init__()
         self.runenv_frac = parse_runenv_frac(runenv_frac)
@@ -64,7 +120,7 @@ class MixedHangLoadoutEnv(gymnasium.Env):
             dtype=np.float32,
         )
         self.action_space = spaces.Discrete(ACTION_SPACE_SIZE)
-        self._runenv = RunEnvOnPolicyCombatEnv(
+        self._runenv = runenv_env or RunEnvOnPolicyCombatEnv(
             max_steps=max_steps,
             seed_offset=seed_offset,
             jev_adapter=jev_adapter,

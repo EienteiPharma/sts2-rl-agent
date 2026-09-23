@@ -1,6 +1,6 @@
 # RunEnv on-policy combat micro
 
-**Frozen recipe:** `combat_runenv_onpolicy_v1` (500k **pure** hang-protocol RunEnv from `bh_v1`) hit Act1 **4%/med7** but loadout_v1 HOLD **FAIL**. Do not rerun that pure 500k. Hang zip stays `bh_v1`. Next knife: `docs/RUNENV_ONPOLICY_ANTIFORGET.md`.
+**Frozen recipe:** `combat_runenv_onpolicy_v1` (500k **pure** hang-protocol RunEnv from `bh_v1`) hit Act1 **4%/med7** but loadout_v1 HOLD **FAIL**. Do not rerun that pure 500k. Hang zip stays `bh_v1`. Mix: `docs/RUNENV_ONPOLICY_ANTIFORGET.md`. Offline collect+learn (Jev off the learn path): `docs/RUNENV_COMBAT_OFFLINE.md`.
 
 Fine-tune the hung combat zip on **hang-protocol `STS2RunEnv` rollouts**, learning **combat-phase transitions only**.
 

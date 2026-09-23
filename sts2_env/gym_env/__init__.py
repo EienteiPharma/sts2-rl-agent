@@ -8,6 +8,7 @@ __all__ = [
     "STS2RunEnv",
     "RunEnvOnPolicyCombatEnv",
     "MixedHangLoadoutEnv",
+    "CombatReplayEnv",
 ]
 
 
@@ -21,4 +22,8 @@ def __getattr__(name: str):
         from sts2_env.gym_env.runenv_antiforget import MixedHangLoadoutEnv
 
         return MixedHangLoadoutEnv
+    if name == "CombatReplayEnv":
+        from sts2_env.gym_env.combat_buffer import CombatReplayEnv
+
+        return CombatReplayEnv
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

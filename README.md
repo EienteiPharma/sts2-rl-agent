@@ -213,6 +213,8 @@ sts2-rl-agent/
 |   |-- eval_act1_runenv.py        # Frozen Act1 RunEnv eval (random/model/hierarchical)
 |   |-- jev_noncombat.py           # CARD_REWARD Jev wiring (potion/relic skip, card_fit)
 |   |-- train_combat.py            # Combat-only training (`--loadout bare|neow_early|loadout_v1|mix_neow_v1`)
+|   |-- collect_runenv_combat.py   # Hang-protocol combat-only buffer (n_envs collectors)
+|   |-- train_combat_from_buffer.py  # Continue-from bh_v1 on collected segments
 |   |-- fixtures/neow_early/       # LOCKED Neow+early (`neow_early_*.json`)
 |   |-- fixtures/loadout_v1/       # LOCKED loadout_v1 mid-act decks
 |   +-- train_full_run.py          # Full-run training

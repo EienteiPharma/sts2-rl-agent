@@ -40,7 +40,7 @@ Continue-from **`bh_v1`**, not `onpolicy_v1` (that zip already failed HOLD). `on
 | `--runenv-frac` | `0.7` | P(RunEnv episode); rest `loadout_v1` |
 | `--lr` | `3e-5` | Same fine-tune LR as frozen on-policy |
 | `--total-timesteps` | `2048` | Smoke; first full recipe **250000** |
-| `--n-envs` | `1` | Box CPU |
+| `--n-envs` | `1` | `>1` uses `SubprocVecEnv` of pickle-friendly `MixedHangLoadoutEnvMaker`. Each worker still hang-protocol Jev on the RunEnv half (TypeSafe stays on the learn path — that is the ~8fps). Prefer `docs/RUNENV_COMBAT_OFFLINE.md` to collect combat segments first. |
 | `--hold-freq` | `0` | `0` skips HOLD callback |
 | `--hold-n-eps` | `1` | Smoke HOLD |
 | `--hold-stop` | off | Optional fail-closed |
@@ -74,3 +74,9 @@ python scripts/train_combat_runenv_antiforget.py \
 If HOLD holds but Act1 clear is still &lt;5%, bump `--total-timesteps 500000` **with the mix** (do not go back to pure RunEnv). If HOLD drops, raise loadout replay (`--runenv-frac 0.5`) rather than another fixture-only `train_combat.py` run.
 
 After train: hang-protocol Act1 eval on the new zip **and** loadout_v1 HOLD. 评测哨兵 owns both gates. Hang stays `bh_v1` until both pass.
+
+## Parallel envs
+
+`--n-envs > 1` is `SubprocVecEnv(makers)` of `MixedHangLoadoutEnvMaker` (not nested script closures). Linux spawn/fork can pickle that maker. **Each** process still auto-steps MAP/REST/CARD with hang Jev. Raising `n_envs` parallelizes collection; it does not turn Jev off.
+
+To keep TypeSafe off `MaskablePPO.learn`, use the two-phase path in `docs/RUNENV_COMBAT_OFFLINE.md` (`collect_runenv_combat.py` then `train_combat_from_buffer.py`). Online mix above remains valid when Surplus wants live on-policy RunEnv.
