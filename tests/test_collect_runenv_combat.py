@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import pickle
 import sys
 from pathlib import Path
@@ -173,6 +174,28 @@ def test_collect_dry_run_hang_flags():
     assert report["worker_quotas"] == [25, 25, 25, 25]
     assert report["start_with_neow"] is True
     assert report["keys"] == list(REQUIRED_KEYS)
+    assert report["recommended_n_envs_max"] == 4
+    assert "typesafe_key_count" in report
+    assert isinstance(report["typesafe_key_count"], int)
+    assert report["n_envs_note"] is None
+    report16 = collect_mod.dry_run(
+        collect_mod.parse_args(
+            [
+                "--dry-run",
+                "--out",
+                "output/runenv_combat_buffer/dry16.npz",
+                "--n-envs",
+                "16",
+                "--n-steps",
+                "16",
+            ]
+        )
+    )
+    assert report16["n_envs_note"] is not None
+    assert "2-4" in report16["n_envs_note"]
+    dumped = json.dumps(report16)
+    assert "TYPESAFE_API_KEY=" not in dumped
+    assert "pool-k" not in dumped
 
 
 def test_collect_dry_run_refuses_bh_v1():

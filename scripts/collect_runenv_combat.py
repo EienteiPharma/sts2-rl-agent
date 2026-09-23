@@ -69,7 +69,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--n-envs",
         type=int,
         default=1,
-        help="Parallel hang-protocol collectors (each worker still Jev noncombat)",
+        help=(
+            "Parallel hang-protocol collectors (each worker still Jev). "
+            "First recipe 2-4, not 16. Optional TypeSafe key pool: one key per env."
+        ),
     )
     parser.add_argument(
         "--policy",
@@ -96,23 +99,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     from sts2_env.core.constants import ACTION_SPACE_SIZE
+    from sts2_env.eval.jev import load_typesafe_api_keys, typesafe_key_pool_summary, warn_n_envs
     from sts2_env.gym_env.observation import OBS_SIZE
     from sts2_env.gym_env.runenv_onpolicy_combat import RunEnvOnPolicyCombatEnv
 
     out = refuse_frozen_path(args.out, what="buffer")
     flags = hang_jev_flags()
+    load_typesafe_api_keys()
     env = RunEnvOnPolicyCombatEnv(max_steps=min(int(args.max_steps), 80), seed_offset=0)
     obs, info = env.reset(seed=0)
     mask = env.action_masks()
     proto = env.hang_protocol()
     env.close()
     quotas = split_worker_steps(int(args.n_steps), int(args.n_envs))
+    pool = typesafe_key_pool_summary()
     return {
         "protocol": PROTOCOL_ID,
         "dry_run": True,
         "out": str(out),
         "n_steps": int(args.n_steps),
         "n_envs": int(args.n_envs),
+        "n_envs_note": warn_n_envs(args.n_envs),
         "worker_quotas": quotas,
         "policy": args.policy,
         "model": args.model,
@@ -135,6 +142,9 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "start_with_neow": info.get("start_with_neow"),
         "loadout": info.get("loadout"),
         "keys": ["obs", "next_obs", "action", "reward", "done", "action_mask"],
+        "typesafe_key_count": pool["typesafe_key_count"],
+        "typesafe_key_pool": pool["typesafe_key_pool"],
+        "recommended_n_envs_max": pool["recommended_n_envs_max"],
         "note": "Jev stays on collect; train_combat_from_buffer.py is the learn half",
     }
 
@@ -144,13 +154,20 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
     if args.policy == "model" and not Path(args.model).is_file():
         raise SystemExit(f"collect --policy model zip not found: {args.model}")
     flags = hang_jev_flags()
+    from sts2_env.eval.jev import load_typesafe_api_keys, typesafe_key_pool_summary, warn_n_envs
+
+    pool = typesafe_key_pool_summary(load_typesafe_api_keys())
+    note = warn_n_envs(args.n_envs)
     print("Collecting hang-protocol RunEnv combat segments")
     print("  out:       ", out)
     print("  n_steps:   ", args.n_steps)
     print("  n_envs:    ", args.n_envs)
+    if note:
+        print("  n_envs:    ", note)
     print("  policy:    ", args.policy)
     print("  hang:      jev on / event off / neow off / start_with_neow")
     print("  allows_event:", flags.allows_event(), "allows_neow", flags.allows_neow())
+    print("  typesafe keys:", pool["typesafe_key_count"], "(values not printed)")
     print()
     result = collect_parallel(
         out_path=out,

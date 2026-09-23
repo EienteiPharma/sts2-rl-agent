@@ -20,7 +20,7 @@ import numpy as np
 from gymnasium import spaces
 
 from sts2_env.core.constants import ACTION_SPACE_SIZE
-from sts2_env.eval.jev import build_jev_adapter
+from sts2_env.eval.jev import build_jev_adapter, typesafe_key_pool_summary
 from sts2_env.eval.jev_policy import (
     JevPolicyFlags,
     choose_jev_noncombat,
@@ -145,6 +145,7 @@ class RunEnvOnPolicyCombatEnv(gymnasium.Env):
         max_reset_retries: int = DEFAULT_MAX_RESET_RETRIES,
         jev_adapter: Any | None = None,
         jev_flags: JevPolicyFlags | None = None,
+        jev_key_index: int = 0,
         render_mode: str | None = None,
         seed_offset: int = 0,
     ):
@@ -161,7 +162,9 @@ class RunEnvOnPolicyCombatEnv(gymnasium.Env):
         self.seed_offset = int(seed_offset)
         self.render_mode = render_mode
         self.jev_flags = jev_flags or hang_jev_flags()
-        self.jev_adapter = jev_adapter or build_jev_adapter(enabled=True)
+        self.jev_adapter = jev_adapter or build_jev_adapter(
+            enabled=True, key_index=int(jev_key_index)
+        )
         self.inner = STS2RunEnv(
             character_id=HANG_CHARACTER,
             ascension_level=HANG_ASCENSION,
@@ -187,6 +190,7 @@ class RunEnvOnPolicyCombatEnv(gymnasium.Env):
             "allows_neow": self.jev_flags.allows_neow(),
             "combat_obs_size": OBS_SIZE,
             "combat_action_size": ACTION_SPACE_SIZE,
+            **typesafe_key_pool_summary(),
         }
 
     def reset(self, seed=None, options=None):

@@ -289,6 +289,7 @@ def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
     env = RunEnvOnPolicyCombatEnv(
         max_steps=max_steps,
         seed_offset=seed + worker_id,
+        jev_key_index=worker_id,
     )
     model = None
     if policy == "model":
@@ -352,8 +353,14 @@ def collect_parallel(
     max_steps: int = 2000,
 ) -> dict[str, Any]:
     """Collect hang combat transitions, optionally across ``n_envs`` workers."""
+    from sts2_env.eval.jev import load_typesafe_api_keys, typesafe_key_pool_summary, warn_n_envs
+
     out = refuse_frozen_path(out_path, what="buffer")
     n_envs = max(1, int(n_envs))
+    load_typesafe_api_keys()
+    note = warn_n_envs(n_envs)
+    if note:
+        print(note)
     quotas = [q for q in split_worker_steps(n_steps, n_envs) if q > 0]
     shard_dir = out.parent / f".{out.stem}_shards"
     shard_dir.mkdir(parents=True, exist_ok=True)
@@ -391,6 +398,7 @@ def collect_parallel(
             "n_steps_requested": int(n_steps),
             "seed": int(seed),
             "shards": [r["shard"] for r in results],
+            **typesafe_key_pool_summary(),
         }
     )
     save_combat_buffer(out, merged, meta)
@@ -400,6 +408,7 @@ def collect_parallel(
         "n_envs": len(payloads),
         "policy": policy,
         "hang": hang_protocol_meta(),
+        **typesafe_key_pool_summary(),
     }
 
 

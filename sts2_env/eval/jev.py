@@ -47,7 +47,8 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from pathlib import Path
+from typing import Any, Mapping, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +80,15 @@ CHOICE_NEOW_BOON = "neow_boon"
 TYPESAFE_API_URL = "https://api.typesafe.ai/v1/systemone"
 TYPESAFE_MODEL = "jev-1.13.0"
 TYPESAFE_API_KEY_ENV = "TYPESAFE_API_KEY"
+TYPESAFE_API_KEYS_ENV = "TYPESAFE_API_KEYS"
+TYPESAFE_NUMBERED_KEY_MAX = 16
 # Cloudflare error 1010 blocks the default Python-urllib User-Agent.
 TYPESAFE_HTTP_USER_AGENT = "sts2-rl-agent-jev/1.0"
 CLOUDFLARE_1010_MIN_INTERVAL_S = 1.0
 CONTENT_MAP_REF = "docs/act1_content_map.md"
 HTTP_TIMEOUT_S = 20.0
+BOX_SECRETS_PATH = Path("/home/box/agent-data/box-secrets.json")
+RECOMMENDED_N_ENVS_MAX = 4
 
 HP_PRESSURE_SCORE_CRITERIA = [
     "0 — comfortable HP; keep pushing, a rest site is not needed",
@@ -208,22 +213,202 @@ def is_cloudflare_1010(http_code: int, body: str) -> bool:
     return int(http_code) == 403 and "1010" in (body or "")
 
 
+def is_typesafe_forbidden(http_code: int) -> bool:
+    return int(http_code) == 403
+
+
+def numbered_typesafe_key_env_names() -> tuple[str, ...]:
+    names = [TYPESAFE_API_KEY_ENV]
+    names.extend(
+        f"{TYPESAFE_API_KEY_ENV}_{i}" for i in range(2, TYPESAFE_NUMBERED_KEY_MAX + 1)
+    )
+    return tuple(names)
+
+
+def _dedupe_keys(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in values:
+        key = str(raw or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
+def parse_typesafe_keys_blob(raw: str) -> list[str]:
+    """Parse TYPESAFE_API_KEYS: JSON list or comma-separated. Never logs values."""
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    if text[:1] in "[{":
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, list):
+            return _dedupe_keys([str(x) for x in data])
+    return _dedupe_keys(text.split(","))
+
+
+def apply_box_secrets_to_environ(
+    environ: Any | None = None,
+    secrets_path: str | Path | None = None,
+) -> bool:
+    """Copy TypeSafe keys from box-secrets into env if missing. Never logs values."""
+    env = os.environ if environ is None else environ
+    path = Path(secrets_path) if secrets_path is not None else BOX_SECRETS_PATH
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    card = data.get("card") if isinstance(data, dict) else None
+    if not isinstance(card, dict):
+        return False
+    wrote = False
+    for name in numbered_typesafe_key_env_names():
+        val = card.get(name)
+        if isinstance(val, str) and val.strip() and not str(env.get(name) or "").strip():
+            env[name] = val.strip()
+            wrote = True
+    blob = card.get(TYPESAFE_API_KEYS_ENV)
+    if isinstance(blob, list):
+        blob = ",".join(str(x) for x in blob if str(x).strip())
+    if (
+        isinstance(blob, str)
+        and blob.strip()
+        and not str(env.get(TYPESAFE_API_KEYS_ENV) or "").strip()
+    ):
+        env[TYPESAFE_API_KEYS_ENV] = blob.strip()
+        wrote = True
+    return wrote
+
+
+def load_typesafe_api_keys(
+    environ: Mapping[str, str] | None = None,
+    *,
+    secrets_path: str | Path | None = None,
+    hydrate_box_secrets: bool = True,
+) -> list[str]:
+    """Load optional TypeSafe key pool. Default is a single TYPESAFE_API_KEY.
+
+    Sources (deduped, order preserved): ``TYPESAFE_API_KEYS`` (JSON list or
+    comma-separated), then ``TYPESAFE_API_KEY``, ``TYPESAFE_API_KEY_2`` …
+    ``TYPESAFE_API_KEY_16``. Missing env falls back to box-secrets ``card``.
+    Never returns or logs key values to stdout.
+    """
+    env: Mapping[str, str]
+    if environ is None:
+        env = os.environ
+    else:
+        env = environ
+    keys: list[str] = []
+    keys.extend(parse_typesafe_keys_blob(str(env.get(TYPESAFE_API_KEYS_ENV) or "")))
+    for name in numbered_typesafe_key_env_names():
+        val = env.get(name)
+        if val:
+            keys.append(str(val))
+    keys = _dedupe_keys(keys)
+    if keys:
+        _sync_primary_key_env(keys, env)
+        return keys
+    if hydrate_box_secrets:
+        apply_box_secrets_to_environ(env, secrets_path)  # type: ignore[arg-type]
+        return load_typesafe_api_keys(
+            env, secrets_path=secrets_path, hydrate_box_secrets=False
+        )
+    return []
+
+
+def _sync_primary_key_env(keys: list[str], env: Mapping[str, str]) -> None:
+    if not keys:
+        return
+    try:
+        if not str(env.get(TYPESAFE_API_KEY_ENV) or "").strip():
+            env[TYPESAFE_API_KEY_ENV] = keys[0]  # type: ignore[index]
+    except (TypeError, KeyError):
+        pass
+
+
+def key_for_worker(keys: list[str], worker_id: int) -> str:
+    if not keys:
+        return ""
+    return keys[int(worker_id) % len(keys)]
+
+
+def typesafe_key_pool_summary(keys: list[str] | None = None) -> dict[str, Any]:
+    pool = list(keys) if keys is not None else load_typesafe_api_keys()
+    return {
+        "typesafe_key_count": len(pool),
+        "typesafe_key_pool": len(pool) > 1,
+        "recommended_n_envs_max": RECOMMENDED_N_ENVS_MAX,
+    }
+
+
+def warn_n_envs(n_envs: int) -> str | None:
+    n = int(n_envs)
+    if n > RECOMMENDED_N_ENVS_MAX:
+        return (
+            f"n_envs={n} exceeds first-recipe cap {RECOMMENDED_N_ENVS_MAX}; "
+            "use 2-4 (not 16)"
+        )
+    return None
+
+
 class LiveJevClient:
     """Live TypeSafe System One call.
 
     Prefers ``typesafe-sdk`` if installed; otherwise POSTs the public HTTP API.
     Missing key or transport/parse errors raise :class:`JevError`.
+
+    Optional key pool: on HTTP 403 / Cloudflare 1010 rotate to the next key
+    and back off. MAP/CARD stay on Jev (do not switch to random to buy fps).
+    Default is a single ``TYPESAFE_API_KEY``.
     """
 
-    def __init__(self, api_key: str | None = None, model: str = TYPESAFE_MODEL):
-        self.api_key = api_key if api_key is not None else os.environ.get(TYPESAFE_API_KEY_ENV, "")
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = TYPESAFE_MODEL,
+        *,
+        api_keys: list[str] | None = None,
+        key_index: int = 0,
+    ):
+        if api_keys is not None:
+            pool = _dedupe_keys([str(k) for k in api_keys])
+        elif api_key is not None:
+            pool = _dedupe_keys([api_key] if api_key else [])
+        else:
+            pool = load_typesafe_api_keys()
+        self._keys = pool
+        self._idx = int(key_index) % len(pool) if pool else 0
+        self.api_key = pool[self._idx] if pool else ""
         self.model = model
-        if not self.api_key:
+        if self.api_key:
+            os.environ[TYPESAFE_API_KEY_ENV] = self.api_key
+        else:
             logger.warning(
                 "%s unset; --jev on will log error and fall back to legal random "
                 "at each non-combat decision (combat zip path unchanged)",
                 TYPESAFE_API_KEY_ENV,
             )
+
+    def _rotate_key(self) -> bool:
+        if len(self._keys) <= 1:
+            return False
+        prev = self._idx
+        self._idx = (self._idx + 1) % len(self._keys)
+        self.api_key = self._keys[self._idx]
+        if self.api_key:
+            os.environ[TYPESAFE_API_KEY_ENV] = self.api_key
+        logger.warning(
+            "TypeSafe HTTP 403; rotated key pool index %s -> %s (count=%s)",
+            prev,
+            self._idx,
+            len(self._keys),
+        )
+        return True
 
     def system_one(
         self,
@@ -256,14 +441,16 @@ class LiveJevClient:
         body = json.dumps(
             {"model": self.model, "state": state, "questions": questions}
         ).encode("utf-8")
-        req = urllib.request.Request(
-            TYPESAFE_API_URL,
-            data=body,
-            method="POST",
-            headers=typesafe_http_headers(self.api_key),
-        )
         last_http: JevError | None = None
-        for attempt in range(2):
+        payload: Any = None
+        attempts = max(2, len(self._keys) + 1)
+        for attempt in range(attempts):
+            req = urllib.request.Request(
+                TYPESAFE_API_URL,
+                data=body,
+                method="POST",
+                headers=typesafe_http_headers(self.api_key),
+            )
             try:
                 with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
                     payload = json.loads(resp.read().decode("utf-8"))
@@ -271,13 +458,18 @@ class LiveJevClient:
             except urllib.error.HTTPError as e:
                 detail = e.read().decode("utf-8", errors="replace")[:400]
                 last_http = JevError(f"typesafe HTTP {e.code}: {detail}")
-                if attempt == 0 and is_cloudflare_1010(e.code, detail):
-                    logger.warning(
-                        "TypeSafe HTTP 403 Cloudflare 1010; retry in %.1ss",
-                        CLOUDFLARE_1010_MIN_INTERVAL_S,
-                    )
-                    time.sleep(CLOUDFLARE_1010_MIN_INTERVAL_S)
-                    continue
+                forbidden = is_typesafe_forbidden(e.code)
+                hit_1010 = is_cloudflare_1010(e.code, detail)
+                if forbidden:
+                    rotated = self._rotate_key()
+                    if attempt + 1 < attempts and (rotated or hit_1010):
+                        logger.warning(
+                            "TypeSafe HTTP 403%s; backoff %.1ss then retry (no random MAP/CARD)",
+                            " Cloudflare 1010" if hit_1010 else "",
+                            CLOUDFLARE_1010_MIN_INTERVAL_S,
+                        )
+                        time.sleep(CLOUDFLARE_1010_MIN_INTERVAL_S)
+                        continue
                 raise last_http from e
             except urllib.error.URLError as e:
                 raise JevError(f"typesafe network error: {e}") from e
@@ -322,12 +514,18 @@ class LiveJevClient:
         return dumped
 
 
-def build_jev_adapter(*, enabled: bool, client: JevClient | None = None) -> JevClient:
+def build_jev_adapter(
+    *,
+    enabled: bool,
+    client: JevClient | None = None,
+    key_index: int = 0,
+    api_keys: list[str] | None = None,
+) -> JevClient:
     if client is not None:
         return client
     if not enabled:
         return StubJevClient()
-    return LiveJevClient()
+    return LiveJevClient(api_keys=api_keys, key_index=key_index)
 
 
 def _parse_answer(payload: dict[str, Any]) -> JevAnswer:

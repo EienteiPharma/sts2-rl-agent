@@ -77,6 +77,6 @@ After train: hang-protocol Act1 eval on the new zip **and** loadout_v1 HOLD. 评
 
 ## Parallel envs
 
-`--n-envs > 1` is `SubprocVecEnv(makers)` of `MixedHangLoadoutEnvMaker` (not nested script closures). Linux spawn/fork can pickle that maker. **Each** process still auto-steps MAP/REST/CARD with hang Jev. Raising `n_envs` parallelizes collection; it does not turn Jev off.
+`--n-envs > 1` is `SubprocVecEnv(makers)` of `MixedHangLoadoutEnvMaker` (not nested script closures). Linux spawn/fork can pickle that maker. **Each** process still auto-steps MAP/REST/CARD with hang Jev. Raising `n_envs` parallelizes collection; it does not turn Jev off. Optional TypeSafe key pool (see `docs/RUNENV_COMBAT_OFFLINE.md`) assigns `keys[worker % n]`. **Do not stop a running `combat_runenv_antiforget_v1` (`n_envs=1`) to apply this.**
 
-To keep TypeSafe off `MaskablePPO.learn`, use the two-phase path in `docs/RUNENV_COMBAT_OFFLINE.md` (`collect_runenv_combat.py` then `train_combat_from_buffer.py`). Online mix above remains valid when Surplus wants live on-policy RunEnv.
+To keep TypeSafe off `MaskablePPO.learn`, use the two-phase path in `docs/RUNENV_COMBAT_OFFLINE.md` (`collect_runenv_combat.py` then `train_combat_from_buffer.py`). Online mix above remains valid when Surplus wants live on-policy RunEnv. First collect recipe: `--n-envs 2–4`, not 16.

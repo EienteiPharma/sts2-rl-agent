@@ -535,6 +535,93 @@ def test_cloudflare_1010_retries_once(monkeypatch):
     assert not is_cloudflare_1010(500, "1010")
 
 
+def test_typesafe_key_pool_from_env_and_json():
+    from sts2_env.eval.jev import (
+        key_for_worker,
+        load_typesafe_api_keys,
+        parse_typesafe_keys_blob,
+        warn_n_envs,
+    )
+
+    assert parse_typesafe_keys_blob("a, b, a") == ["a", "b"]
+    assert parse_typesafe_keys_blob('["x", "y", "x"]') == ["x", "y"]
+    env = {
+        "TYPESAFE_API_KEYS": "p1,p2",
+        "TYPESAFE_API_KEY": "p1",
+        "TYPESAFE_API_KEY_2": "p3",
+    }
+    keys = load_typesafe_api_keys(env, hydrate_box_secrets=False)
+    assert keys == ["p1", "p2", "p3"]
+    assert key_for_worker(keys, 0) == "p1"
+    assert key_for_worker(keys, 1) == "p2"
+    assert key_for_worker(keys, 3) == "p1"
+    assert warn_n_envs(4) is None
+    assert warn_n_envs(2) is None
+    assert "2-4" in (warn_n_envs(16) or "")
+    assert load_typesafe_api_keys({}, hydrate_box_secrets=False) == []
+
+
+def test_typesafe_box_secrets_hydrate(tmp_path):
+    from sts2_env.eval.jev import load_typesafe_api_keys
+
+    secrets = tmp_path / "box-secrets.json"
+    secrets.write_text(
+        '{"card": {"TYPESAFE_API_KEY": "box1", "TYPESAFE_API_KEY_2": "box2"}}\n'
+    )
+    env: dict[str, str] = {}
+    keys = load_typesafe_api_keys(env, secrets_path=secrets, hydrate_box_secrets=True)
+    assert keys == ["box1", "box2"]
+    assert env["TYPESAFE_API_KEY"] == "box1"
+    assert env["TYPESAFE_API_KEY_2"] == "box2"
+
+
+def test_pool_rotates_on_http_403(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+    from email.message import Message
+
+    auths: list[str] = []
+    calls = {"n": 0}
+
+    class FakeResp:
+        def read(self):
+            return b'{"answers": {"pick": {"choice": "a"}}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        calls["n"] += 1
+        auths.append(req.get_header("Authorization") or "")
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError(
+                req.full_url,
+                403,
+                "Forbidden",
+                Message(),
+                io.BytesIO(b"error code: 1010"),
+            )
+        return FakeResp()
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.delenv("TYPESAFE_API_KEYS", raising=False)
+    client = LiveJevClient(api_keys=["pool-k1", "pool-k2"])
+    monkeypatch.setattr(client, "_try_sdk", lambda *a, **k: None)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("sts2_env.eval.jev.time.sleep", lambda s: None)
+    payload = client._call({}, {"pick": {"type": "choice"}})
+    assert calls["n"] == 2
+    assert client.api_key == "pool-k2"
+    assert "pool-k1" in auths[0]
+    assert "pool-k2" in auths[1]
+    assert payload["answers"]["pick"]["choice"] == "a"
+    assert "Bearer pool-k1" not in str(payload)
+
+
 def test_content_map_ref_is_the_stub_doc():
     root = Path(__file__).resolve().parents[1]
     assert CONTENT_MAP_REF == "docs/act1_content_map.md"

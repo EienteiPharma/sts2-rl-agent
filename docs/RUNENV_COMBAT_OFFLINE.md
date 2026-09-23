@@ -16,6 +16,31 @@ See `docs/HANG_PROTOCOL_2026-09-22.md`.
 - MAP / REST / CARD Jev (`--jev on`; box `suggest_live`)
 - `--jev-event off` `--jev-neow off` `--start-with-neow`
 - Collector uses `RunEnvOnPolicyCombatEnv` / `choose_jev_noncombat` (same as online). Each `--n-envs` worker is still hang-protocol Jev.
+- First collect recipe: **`--n-envs 2–4`**, not 16.
+
+## TypeSafe key pool (optional)
+
+Default is still one `TYPESAFE_API_KEY`. For parallel collect, Surplus can inject a **pool** so each worker has a key (round-robin: `keys[worker_id % len(keys)]`). On Cloudflare **1010** / HTTP **403** the client rotates to the next key and backs off ~1s. It does **not** replace MAP/CARD with random to buy fps.
+
+**Do not paste keys into chat.** Inject only through env or box-secrets:
+
+1. **Cursor secret-request / cloud environment** — set secrets on the run so the process sees them. Never put values in the agent prompt.
+   - `TYPESAFE_API_KEY` (required for Jev)
+   - optional `TYPESAFE_API_KEY_2` … `TYPESAFE_API_KEY_16`
+   - and/or `TYPESAFE_API_KEYS` = comma-separated **or** JSON list (`["…","…"]`)
+2. **Box file** `/home/box/agent-data/box-secrets.json` `card` object, same names. Collector hydrates missing env from this file. Logs **count only**, never values.
+
+```bash
+# Surplus box (keys already in env or box-secrets — do not echo them)
+python scripts/collect_runenv_combat.py \
+  --out output/runenv_combat_buffer/transitions.npz \
+  --n-envs 4 --n-steps 50000 --policy model \
+  --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip
+```
+
+`--n-envs 4` with 2 keys round-robins. Prefer `n_envs <= key_count` when the pool is small. `--n-envs > 4` prints a warning; first recipe stays 2–4.
+
+Do **not** stop a running `combat_runenv_antiforget_v1` job to apply the pool. Online mix still defaults `--n-envs 1`. Pool is for collect (and a later mix restart if Surplus wants).
 
 ## Buffer
 
@@ -53,10 +78,10 @@ python scripts/collect_runenv_combat.py \
 |------|---------|--------|
 | `--out` | `output/runenv_combat_buffer/transitions.npz` | refuses `bh_v1` / `combat_runenv_onpolicy_v1` |
 | `--n-steps` | `256` | Combat transitions (not noncombat auto-steps) |
-| `--n-envs` | `1` | Parallel collectors; **each** still hang Jev |
+| `--n-envs` | `1` | Parallel collectors; **each** still hang Jev. First recipe **2–4**, not 16 |
 | `--policy` | `random` | `random` = legal mask (no torch). Surplus full collect: `model` |
 | `--model` | hung `bh_v1` zip | Used only with `--policy model` |
-| `--dry-run` | off | Hang env + flags; no npz |
+| `--dry-run` | off | Hang env + flags + key **count**; no npz |
 
 `--policy random` is smoke / CA. Surplus collect that should match `bh_v1` on-policy combat: `--policy model`.
 
@@ -89,6 +114,6 @@ python scripts/train_combat_from_buffer.py \
 | `train_combat_runenv_antiforget.py` | On every RunEnv episode (`--n-envs` SubprocVecEnv, each worker hang Jev) | Live on-policy mix; ~8fps if TypeSafe is in `step` |
 | collect + `train_combat_from_buffer.py` | Collect only | Prefer for Surplus fps; re-collect as the zip moves |
 
-`--n-envs` on the **online** trainer already works (`SubprocVecEnv` + `MixedHangLoadoutEnvMaker`). That parallelizes Jev; it does not remove it. Do not set `--jev off` on hang eval to chase fps.
+`--n-envs` on the **online** trainer already works (`SubprocVecEnv` + `MixedHangLoadoutEnvMaker`). That parallelizes Jev; it does not remove it. Do not set `--jev off` on hang eval to chase fps. Do **not** interrupt a running `antiforget_v1` (`--n-envs 1`) to apply a key pool; collect is the parallel path.
 
 After train: hang-protocol Act1 eval on the **new** zip **and** loadout_v1 HOLD. 评测哨兵 owns both gates.

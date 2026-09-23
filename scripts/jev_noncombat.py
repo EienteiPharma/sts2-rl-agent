@@ -67,22 +67,14 @@ def ensure_typesafe_api_key(
     *,
     secrets_path: Path | str = BOX_SECRETS_PATH,
 ) -> bool:
-    """Ensure os.environ['TYPESAFE_API_KEY'] is set. Prefer existing env; else box-secrets.
+    """Ensure a TypeSafe key (or pool) is in the environment.
 
-    Never prints/logs the key value. Returns True if a non-empty key is available.
+    Prefer existing env; else box-secrets ``card``. Never prints/logs key values.
+    Returns True if at least one non-empty key is available.
     """
-    existing = os.environ.get("TYPESAFE_API_KEY")
-    if existing:
-        return True
-    try:
-        data = json.loads(Path(secrets_path).read_text(encoding="utf-8"))
-        key = (data.get("card") or {}).get("TYPESAFE_API_KEY")
-    except Exception:
-        return False
-    if not isinstance(key, str) or not key.strip():
-        return False
-    os.environ["TYPESAFE_API_KEY"] = key
-    return True
+    from sts2_env.eval.jev import load_typesafe_api_keys
+
+    return bool(load_typesafe_api_keys(secrets_path=secrets_path))
 
 
 def _read_api_key() -> str | None:

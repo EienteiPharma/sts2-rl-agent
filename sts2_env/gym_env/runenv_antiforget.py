@@ -76,6 +76,7 @@ class MixedHangLoadoutEnvMaker:
             max_steps=self.max_steps,
             seed_offset=self.seed,
             runenv_env=runenv_env,
+            jev_key_index=self.seed,
         )
 
 
@@ -108,6 +109,7 @@ class MixedHangLoadoutEnv(gymnasium.Env):
         jev_adapter: Any | None = None,
         render_mode: str | None = None,
         runenv_env: gymnasium.Env | None = None,
+        jev_key_index: int = 0,
     ):
         super().__init__()
         self.runenv_frac = parse_runenv_frac(runenv_frac)
@@ -124,6 +126,7 @@ class MixedHangLoadoutEnv(gymnasium.Env):
             max_steps=max_steps,
             seed_offset=seed_offset,
             jev_adapter=jev_adapter,
+            jev_key_index=jev_key_index,
             render_mode=render_mode,
         )
         self._loadout = STS2CombatEnv(loadout_provider=loadout_provider)
