@@ -27,12 +27,13 @@ Lab-hung thresholds (do not retune in this eval):
   is random (``neow_jev_off_random``). REST 0.50 / heal/smith assists
   do not apply to Neow. Otherwise skip that name
 * Shop stays legal random (not in default ``JEV_PHASES``)
-* MAP low-HP v2 (``map_lowhp``, hang default **on**): when
-  ``hp_pressure >= 2.0`` and a legal map node is ``SHOP`` or ``REST_SITE``,
-  **hard-select** rest-then-shop (reason ``map_lowhp_hard``) regardless of
-  Jev confidence, Choice pick, or random. Treasure / unknown / fight are
-  all overridden. If only fight nodes remain, keep full-pool random.
-  ``--map-lowhp off`` disables. Logged on ok-path and counted in eval.
+* MAP low-HP (``map_lowhp``, hang default **on**): v1 **uncertain filter
+  only**. When ``hp_pressure >= 2.0`` and shop/rest is legal, low-conf /
+  API-error / choice-not-in-legal re-samples among shop/rest
+  (``map_lowhp_random``). Does **not** override a confident Choice.
+  v2 hard-select (``map_lowhp_hard``, rest-then-shop regardless of
+  confidence) is **opt-in** via ``--map-lowhp-hard on`` (hang default
+  **off**; froze after n100 clear 0%).
 * Strip invisible / illegal candidates before Choice
 * Act1 reward ``+`` cards are not natural drops (Smith / Neow only)
 * Card-reward Choice is Neow+early natural Act1, not mid-act fixtures
@@ -81,9 +82,10 @@ MAP_LOWHP_ON = True
 MAP_LOWHP_PRESSURE = HP_PRESSURE_REST  # 2.0; same band as rest_or_continue prefer-rest
 MAP_SAFE_POINT_TYPES = frozenset({"SHOP", "REST_SITE"})
 MAP_FIGHT_POINT_TYPES = frozenset({"MONSTER", "ELITE", "BOSS"})
-MAP_LOWHP_SAFE_REASON = "map_lowhp_safe"  # v1; v2 emits map_lowhp_hard
-MAP_LOWHP_RANDOM_REASON = "map_lowhp_random"  # v1 uncertain filter; v2 hard-selects
-MAP_LOWHP_HARD_REASON = "map_lowhp_hard"
+MAP_LOWHP_SAFE_REASON = "map_lowhp_safe"  # v1 fight-override; not hang-default
+MAP_LOWHP_RANDOM_REASON = "map_lowhp_random"  # v1 uncertain filter (hang default on)
+MAP_LOWHP_HARD_REASON = "map_lowhp_hard"  # v2 hard-select; --map-lowhp-hard, default off
+MAP_LOWHP_HARD_ON = False
 
 DEFAULT_JEV_PHASES = frozenset({"map", "rest", "card"})
 JEV_PHASE_TOKENS = frozenset({"map", "rest", "card", "event"})
@@ -643,11 +645,12 @@ def map_lowhp_filter(items, point_type_of, hp_pressure, *, enabled: bool = MAP_L
     return safe or None
 
 
-def map_lowhp_hard_item(items, point_type_of, hp_pressure, *, enabled: bool = MAP_LOWHP_ON):
+def map_lowhp_hard_item(items, point_type_of, hp_pressure, *, enabled: bool = MAP_LOWHP_HARD_ON):
     """Rest-then-shop pick when the v2 hard-select fires; else None.
 
     None means the caller keeps Choice / full-pool random (only-fight forks,
-    pressure below threshold, or ``--map-lowhp off``).
+    pressure below threshold, ``--map-lowhp-hard off``, or hang default).
+    Hang default is **off** (``MAP_LOWHP_HARD_ON = False``).
     """
     if not map_lowhp_active(hp_pressure, enabled=enabled):
         return None

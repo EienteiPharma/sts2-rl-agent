@@ -15,7 +15,8 @@ Policies
   ``encode_observation(CombatState)`` + combat ``get_action_mask``.
   Non-combat default (``--jev off``): legal random, Jev shadow only (no
   action change). ``--jev on`` calls TypeSafe/Jev Choice. Jev never runs
-  in combat. MAP low-HP ``--map-lowhp`` default on.
+  in combat. MAP low-HP ``--map-lowhp`` default on (v1 uncertain filter).
+  ``--map-lowhp-hard`` default **off**.
 
 Never feed RunEnv observations into the combat model.
 
@@ -398,9 +399,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["on", "off"],
         default="on",
         help=(
-            "MAP low-HP v2 hard-select (hang default on). When hp_pressure>=2.0 "
-            "and shop/rest is legal, always execute rest-then-shop "
-            "(map_lowhp_hard), even if Jev Choice is confident. Set off to disable."
+            "MAP low-HP v1 uncertain filter (hang default on). When hp_pressure>=2.0 "
+            "and shop/rest is legal, low-confidence/error Jev resamples among safe nodes "
+            "(map_lowhp_random). Does not override confident Choice. Set off to disable."
+        ),
+    )
+    ap.add_argument(
+        "--map-lowhp-hard",
+        choices=["on", "off"],
+        default="off",
+        help=(
+            "MAP low-HP v2 hard-select (default off; opt-in only). When hp_pressure>=2.0 "
+            "and shop/rest is legal, always executes rest-then-shop (map_lowhp_hard), "
+            "even if Jev Choice is confident. Frozen by Lab after regression."
         ),
     )
     ap.add_argument(
@@ -466,6 +477,7 @@ def validate_policy_args(args: argparse.Namespace) -> None:
         jev_phases=args.jev_phases,
         jev_neow=args.jev_neow,
         map_lowhp=getattr(args, "map_lowhp", "on"),
+        map_lowhp_hard=getattr(args, "map_lowhp_hard", "off"),
     )
 
 
@@ -501,6 +513,7 @@ def build_report(
     jev_neow: str | None = None,
     start_with_neow: bool = False,
     map_lowhp: str = "on",
+    map_lowhp_hard: str = "off",
     seed_count: int | None = None,
 ) -> dict:
     summary = _summarize(rows)
@@ -518,6 +531,7 @@ def build_report(
         "jev_neow": jev_neow if jev_neow is not None else "off",
         "start_with_neow": bool(start_with_neow),
         "map_lowhp": map_lowhp,
+        "map_lowhp_hard": map_lowhp_hard,
         "character": "Ironclad",
         "ascension": 0,
         "seeds": {
@@ -534,12 +548,12 @@ def build_report(
                 "Combat never uses Jev. --jev off: legal random + stub logs. "
                 "--jev on: Choice/Score with confidence>=0.65, hp_pressure "
                 "rest/continue, MAP UNKNOWN defer (unknown_deferred at conf<0.80 "
-                "when hp_pressure>=2), MAP low-HP v2 map_lowhp (default on: "
-                "hp_pressure>=2 + shop/rest legal → hard-select rest-then-shop, "
-                "reason map_lowhp_hard, counted per episode as map_lowhp_hard_n; "
-                "--map-lowhp off disables), and card_fit assist on true pick_card; "
-                "potion/relic PHASE_CARD_REWARD screens legal-random "
-                "(potion_or_relic_reward_random). EVENT is off unless "
+                "when hp_pressure>=2), MAP low-HP v1 map_lowhp (default on: "
+                "hp_pressure>=2 + shop/rest legal → uncertain/error resamples among safe nodes, "
+                "reason map_lowhp_random), opt-in v2 map_lowhp_hard (default off; "
+                "--map-lowhp-hard on, reason map_lowhp_hard, counted as map_lowhp_hard_n), "
+                "and card_fit assist on true pick_card; potion/relic PHASE_CARD_REWARD screens "
+                "legal-random (potion_or_relic_reward_random). EVENT is off unless "
                 "--jev-event on (or --jev-phases lists event); pending EVENT "
                 "choose/confirm maps to combat slots. Shop stays legal random. "
                 "Errors fall back to legal random. Not an Act1-clear gate."
@@ -604,6 +618,7 @@ def main(argv: list[str] | None = None) -> None:
         jev_neow=args.jev_neow if args.policy == "hierarchical" else "off",
         start_with_neow=bool(getattr(args, "start_with_neow", False)),
         map_lowhp=getattr(args, "map_lowhp", "on") if args.policy == "hierarchical" else "on",
+        map_lowhp_hard=getattr(args, "map_lowhp_hard", "off") if args.policy == "hierarchical" else "off",
         seed_count=n,
     )
     out = Path(args.out)

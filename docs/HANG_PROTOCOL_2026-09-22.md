@@ -9,7 +9,7 @@
 (Box `--jev-mode suggest_live` is the same live Choice path as PR `--jev on`.)
 
 **Jev:** MAP / REST / CARD on; EVENT off; Neow random (`--jev-neow` default off).  
-MAP low-HP routing (`--map-lowhp`, default **on**, v2 **hard-select**): thin HP + shop/rest legal → always rest-then-shop (`map_lowhp_hard`), even if Jev Choice is confident. Hang zip and EVENT-off flags unchanged.
+MAP low-HP routing (`--map-lowhp`, default **on**, v1 uncertain filter only): thin HP (`hp_pressure >= 2.0`) + shop/rest legal → low-confidence/error Jev resamples among safe nodes (`map_lowhp_random`). Confident Choice is not overridden. Hard-select (`--map-lowhp-hard`, reason `map_lowhp_hard`) is **opt-in only** (default **off**; froze after n100 clear 0%). Hang protocol does not use hard. Hang zip and EVENT-off flags unchanged.
 
 Opening Neow does **not** drag; Jev picking the boon **does**. Hang keeps the Neow screen (`--start-with-neow`) and randomizes the boon.
 

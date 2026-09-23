@@ -11,7 +11,7 @@ Eval: `scripts/eval_act1_runenv.py`.
 
 | Phase | Choice / Score | Notes |
 |-------|----------------|-------|
-| `MAP_CHOICE` | `map_fork` or `rest_or_continue` + `hp_pressure` | Strip `UNASSIGNED`. `UNKNOWN` is legal/visible. **map_lowhp v2** (hang default **on**): `hp_pressure>=2` + shop/rest legal → **hard-select** rest-then-shop (`map_lowhp_hard`), even if Jev Choice is confident fight. Counted in eval (`map_lowhp_hard_n`, stderr). Only-fight forks keep full-pool random. `--map-lowhp off` disables. |
+| `MAP_CHOICE` | `map_fork` or `rest_or_continue` + `hp_pressure` | Strip `UNASSIGNED`. `UNKNOWN` is legal/visible. **map_lowhp** (hang default **on**): `hp_pressure>=2` + shop/rest legal → uncertain/error resamples among shop/rest (`map_lowhp_random`). Confident Choice is not overridden. Hard-select (`--map-lowhp-hard`, reason `map_lowhp_hard`) is **opt-in only** (default **off**; froze after n100 clear 0%). Only-fight forks keep full-pool random. `--map-lowhp off` disables soft filter. |
 | `REST_SITE` | rest-site Choice | heal / smith / relic options; pending `choose`/`confirm_choice` → combat slots (same as EVENT) |
 | `CARD_REWARD` | `card_reward` Choice + `card_fit` Score | potion/relic screens do **not** call CARD Jev (`potion_or_relic_reward_random`) |
 | `EVENT` | **off** | legal random, `jev_event_off_random` |
@@ -30,22 +30,24 @@ When legal map options include `point_type=UNKNOWN`:
   reason `unknown_deferred`. Logged on the shadow record.
 * 0.80 is **only** this defer; the Choice land threshold stays **0.65**.
 
-## MAP low-HP (`map_lowhp`, hang default on, v2 hard-select)
+## MAP low-HP (`map_lowhp`, hang default on, uncertain filter only)
 
 When `hp_pressure >= 2.0` (same band as rest prefer; local fallback
 `max_hp/hp` when Score is missing) and a legal map node is `SHOP` or
 `REST_SITE`:
 
-* **Hard-select** rest-then-shop (`map_lowhp_hard`) regardless of Jev
-  confidence, Choice pick, or random. Monster / elite / boss / treasure /
-  unknown are all overridden. If Choice already picked shop/rest, still
-  tag so sentry can count (v1 ok-path was silent).
+* **Uncertain filter** (`map_lowhp_random`): when Jev Choice is uncertain,
+  encounters API error, or picks an option not in legal candidates, resample
+  among legal shop/rest nodes. Confident Choice (>=0.65) is **not** overridden.
+* **Hard-select opt-in** (`--map-lowhp-hard on`, default **off**): always executes
+  rest-then-shop (`map_lowhp_hard`) regardless of Jev confidence. Line B hard is
+  frozen by Lab after n100 clear 0%; hang/mainline does not use hard.
 * If **only fight nodes** remain, keep full-pool random (documented; no
   tag). `--jev off` full-legal-random is unchanged.
-* Knob: `--map-lowhp on|off` (CLI default **on**). Constant
-  `MAP_LOWHP_ON` / `MAP_LOWHP_PRESSURE = 2.0` in `sts2_env/eval/jev.py`.
-  Hang `--jev on` uses this path in `choose_jev_noncombat`. Eval counts
-  `map_lowhp_hard_n` per episode and prints `map_lowhp_hard ...` on stderr.
+* Knob: `--map-lowhp on|off` (CLI default **on** for soft uncertain filter).
+  `--map-lowhp-hard on|off` (CLI default **off** for hard override). Constant
+  `MAP_LOWHP_ON = True`, `MAP_LOWHP_HARD_ON = False` in `sts2_env/eval/jev.py`.
+  Eval counts `map_lowhp_hard_n` per episode if hard is opted in.
 
 ## EVENT (`--jev-event on`)
 
@@ -151,5 +153,5 @@ REST_SITE-only and **do not** apply to Neow.
 
 Hang: `--start-with-neow --jev-neow off` (opening screen, random boon).
 Combat zip and MAP/CARD 0.65 are unchanged. MAP low-HP `map_lowhp` is
-**on** by default (v2 **hard-select** rest-then-shop under pressure;
-`--map-lowhp off` to disable).
+**on** by default (v1 uncertain filter only; hard-select is opt-in `--map-lowhp-hard`
+default **off**).

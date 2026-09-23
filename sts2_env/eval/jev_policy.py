@@ -25,8 +25,10 @@ from sts2_env.eval.jev import (
     JEV_NEOW_OFF_REASON,
     NEOW_OPTIONS_EMPTY_REASON,
     JEV_PHASE_TOKENS,
+    MAP_LOWHP_HARD_ON,
     MAP_LOWHP_HARD_REASON,
     MAP_LOWHP_ON,
+    MAP_LOWHP_RANDOM_REASON,
     NEOW_BOON_INSTRUCTIONS,
     NEOW_EARLY_CARD_INSTRUCTIONS,
     NON_JEV_PHASE_REASON,
@@ -47,6 +49,7 @@ from sts2_env.eval.jev import (
     JevError,
     apply_choice_confidence,
     local_hp_pressure,
+    map_lowhp_filter,
     map_lowhp_hard_item,
     map_lowhp_safe_items,
     rest_or_continue_override,
@@ -98,12 +101,15 @@ class JevPolicyFlags:
 
     EVENT is off unless ``event`` / ``--jev-event on``. Neow is off unless
     ``neow`` is True / ``--jev-neow on`` (independent of EVENT; hang default).
+    ``map_lowhp`` is the v1 uncertain shop/rest filter (hang default on).
+    ``map_lowhp_hard`` is the v2 rest-then-shop override (hang default **off**).
     """
 
     phases: frozenset[str] = DEFAULT_JEV_PHASES
     event: bool = False
     neow: bool | None = None
     map_lowhp: bool = MAP_LOWHP_ON
+    map_lowhp_hard: bool = MAP_LOWHP_HARD_ON
 
     def resolved_phases(self) -> frozenset[str]:
         phases = set(self.phases)
@@ -141,6 +147,7 @@ def resolve_jev_flags(
     jev_phases: str | None = None,
     jev_neow: str | None = None,
     map_lowhp: str | None = None,
+    map_lowhp_hard: str | None = None,
 ) -> JevPolicyFlags:
     phases = parse_jev_phases(jev_phases)
     event = jev_event == "on" or "event" in phases
@@ -152,7 +159,14 @@ def resolve_jev_flags(
     else:
         neow = jev_neow == "on"
     lowhp = MAP_LOWHP_ON if map_lowhp is None else map_lowhp == "on"
-    return JevPolicyFlags(phases=phases, event=event, neow=neow, map_lowhp=lowhp)
+    hard = MAP_LOWHP_HARD_ON if map_lowhp_hard is None else map_lowhp_hard == "on"
+    return JevPolicyFlags(
+        phases=phases,
+        event=event,
+        neow=neow,
+        map_lowhp=lowhp,
+        map_lowhp_hard=hard,
+    )
 
 
 @dataclass
@@ -692,15 +706,16 @@ def _apply_map_lowhp_hard(
     pick: JevAnswer,
     pressure: float | None,
     *,
-    map_lowhp: bool,
+    map_lowhp_hard: bool,
 ) -> tuple[int, JevAnswer] | None:
-    """Hard-select rest-then-shop whenever pressure+safe-legal, even on ok-path.
+    """Opt-in rest-then-shop whenever pressure+safe-legal, even on ok-path.
 
-    Leaves ``pick.choice`` as Jev's original suggestion so shadow logs still
-    show the Choice; executed action is the safe node. Tags ``map_lowhp_hard``.
+    Hang default is **off**. Leaves ``pick.choice`` as Jev's original suggestion
+    so shadow logs still show the Choice; executed action is the safe node.
+    Tags ``map_lowhp_hard``.
     """
     preferred = map_lowhp_hard_item(
-        cands, _cand_point_type, pressure, enabled=map_lowhp
+        cands, _cand_point_type, pressure, enabled=map_lowhp_hard
     )
     if preferred is None:
         return None
@@ -716,6 +731,25 @@ def _apply_map_lowhp_hard(
         _cand_point_type(preferred),
     )
     return preferred.run_action, pick
+
+
+def _map_lowhp_random(
+    cands: list[Candidate],
+    pressure: float | None,
+    rng: np.random.RandomState,
+    *,
+    map_lowhp: bool,
+    pick: JevAnswer,
+) -> tuple[int, JevAnswer]:
+    """v1 uncertain filter: resample among shop/rest when the constraint fires."""
+    filtered = map_lowhp_filter(
+        cands, _cand_point_type, pressure, enabled=map_lowhp
+    )
+    pool = filtered if filtered else cands
+    action = _legal_random_from(pool, rng)
+    if filtered:
+        pick.fallback_reason = MAP_LOWHP_RANDOM_REASON
+    return action, pick
 
 
 def _run_state_blob(mgr: RunManager) -> dict[str, Any]:
@@ -934,6 +968,7 @@ def choose_jev_noncombat(
     """
     flags = flags or DEFAULT_JEV_FLAGS
     map_lowhp = bool(getattr(flags, "map_lowhp", MAP_LOWHP_ON))
+    map_lowhp_hard = bool(getattr(flags, "map_lowhp_hard", MAP_LOWHP_HARD_ON))
     mgr = _mgr(env)
     actions = mgr.get_available_actions()
     if mgr.phase == RunManager.PHASE_CARD_REWARD and is_potion_or_relic_reward(actions):
@@ -1019,7 +1054,14 @@ def choose_jev_noncombat(
 
     try:
         action, answer = _decide(
-            decision, cands, state, adapter, mgr, rng, map_lowhp=map_lowhp
+            decision,
+            cands,
+            state,
+            adapter,
+            mgr,
+            rng,
+            map_lowhp=map_lowhp,
+            map_lowhp_hard=map_lowhp_hard,
         )
     except JevError as e:
         logger.error("Jev %s error; falling back to legal random: %s", decision, e)
@@ -1030,12 +1072,14 @@ def choose_jev_noncombat(
             )
             answer = JevAnswer(status="error", fallback_reason=str(e), score=pressure)
             hard = _apply_map_lowhp_hard(
-                cands, answer, pressure, map_lowhp=map_lowhp
+                cands, answer, pressure, map_lowhp_hard=map_lowhp_hard
             )
             if hard is not None:
                 action, answer = hard
             else:
-                action = _legal_random_from(cands, rng)
+                action, answer = _map_lowhp_random(
+                    cands, pressure, rng, map_lowhp=map_lowhp, pick=answer
+                )
         else:
             action = _legal_random_from(cands, rng)
             answer = JevAnswer(status="error", fallback_reason=str(e))
@@ -1084,10 +1128,17 @@ def _decide(
     rng: np.random.RandomState,
     *,
     map_lowhp: bool = MAP_LOWHP_ON,
+    map_lowhp_hard: bool = MAP_LOWHP_HARD_ON,
 ) -> tuple[int, JevAnswer]:
     if decision == DECISION_REST_OR_CONTINUE:
         return _decide_rest_or_continue(
-            cands, state, adapter, mgr, rng, map_lowhp=map_lowhp
+            cands,
+            state,
+            adapter,
+            mgr,
+            rng,
+            map_lowhp=map_lowhp,
+            map_lowhp_hard=map_lowhp_hard,
         )
     if decision == DECISION_REST_SITE:
         return _decide_rest_site(cands, state, adapter, mgr, rng)
@@ -1097,7 +1148,13 @@ def _decide(
         return _decide_event(decision, cands, state, adapter, rng)
     if decision == DECISION_MAP_FORK:
         return _decide_map_fork(
-            cands, state, adapter, mgr, rng, map_lowhp=map_lowhp
+            cands,
+            state,
+            adapter,
+            mgr,
+            rng,
+            map_lowhp=map_lowhp,
+            map_lowhp_hard=map_lowhp_hard,
         )
     instructions = _instructions_for(decision)
     questions = {
@@ -1126,6 +1183,7 @@ def _decide_map_fork(
     rng: np.random.RandomState,
     *,
     map_lowhp: bool = MAP_LOWHP_ON,
+    map_lowhp_hard: bool = MAP_LOWHP_HARD_ON,
 ) -> tuple[int, JevAnswer]:
     has_unknown = any(_is_unknown_node(c) for c in cands)
     instructions = _instructions_for(DECISION_MAP_FORK)
@@ -1141,16 +1199,22 @@ def _decide_map_fork(
     )
     pick = apply_choice_confidence(answers.get("pick") or JevAnswer(status="error"))
     pick.score = pressure
-    hard = _apply_map_lowhp_hard(cands, pick, pressure, map_lowhp=map_lowhp)
+    hard = _apply_map_lowhp_hard(
+        cands, pick, pressure, map_lowhp_hard=map_lowhp_hard
+    )
     if hard is not None:
         return hard
     if pick.status != "ok":
-        return _legal_random_from(cands, rng), pick
+        return _map_lowhp_random(
+            cands, pressure, rng, map_lowhp=map_lowhp, pick=pick
+        )
     chosen = _lookup(cands, pick.choice)
     if chosen is None:
         pick.status = "error"
         pick.fallback_reason = f"choice {pick.choice!r} not in legal candidates"
-        return _legal_random_from(cands, rng), pick
+        return _map_lowhp_random(
+            cands, pressure, rng, map_lowhp=map_lowhp, pick=pick
+        )
     deferred = _maybe_defer_unknown(cands, chosen, pick, pressure, rng)
     if deferred is not None:
         return deferred
@@ -1241,6 +1305,7 @@ def _decide_rest_or_continue(
     rng: np.random.RandomState,
     *,
     map_lowhp: bool = MAP_LOWHP_ON,
+    map_lowhp_hard: bool = MAP_LOWHP_HARD_ON,
 ) -> tuple[int, JevAnswer]:
     rest_cands = [c for c in cands if c.is_rest]
     continue_cands = [c for c in cands if not c.is_rest]
@@ -1267,7 +1332,9 @@ def _decide_rest_or_continue(
     override = rest_or_continue_override(pressure)
     merged = pick
     merged.score = pressure
-    hard = _apply_map_lowhp_hard(cands, merged, pressure, map_lowhp=map_lowhp)
+    hard = _apply_map_lowhp_hard(
+        cands, merged, pressure, map_lowhp_hard=map_lowhp_hard
+    )
     if hard is not None:
         return hard
     if override == "rest" and rest_cands:
@@ -1312,12 +1379,16 @@ def _decide_rest_or_continue(
         return action, cont_pick
 
     if pick.status != "ok":
-        return _legal_random_from(cands, rng), pick
+        return _map_lowhp_random(
+            cands, pressure, rng, map_lowhp=map_lowhp, pick=pick
+        )
     chosen = _lookup(cands, pick.choice)
     if chosen is None:
         pick.status = "error"
         pick.fallback_reason = f"choice {pick.choice!r} not in legal candidates"
-        return _legal_random_from(cands, rng), pick
+        return _map_lowhp_random(
+            cands, pressure, rng, map_lowhp=map_lowhp, pick=pick
+        )
     pick.score = pressure
     deferred = _maybe_defer_unknown(cands, chosen, pick, pressure, rng)
     if deferred is not None:

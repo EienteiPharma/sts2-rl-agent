@@ -32,7 +32,7 @@
 
 UNKNOWN 只走 `map_fork`，不要在 EVENT 相位伪造 Unknown。
 
-**MAP low-HP (`map_lowhp` v2，hang 默认 on):** `hp_pressure>=2` 且合法含 shop/rest 时 **hard-select** rest-then-shop（`map_lowhp_hard`），不论 Jev 自信与否。仅剩 fight 则全池随机。`--map-lowhp off` 关。EVENT 仍默认 off。
+**MAP low-HP (`map_lowhp` v1 默认 on，v2 hard 默认 off):** `hp_pressure>=2` 且合法含 shop/rest 时，低置信度/错误重抽 safe 点（`map_lowhp_random`），自信决策不覆写。硬选 rest-then-shop（`map_lowhp_hard`）仅为可选 `--map-lowhp-hard on`（默认关；实验室在 n100 clear 0% 后冻结）。仅剩 fight 则全池随机。`--map-lowhp off` 关软过滤。EVENT 仍默认 off。
 
 ## B) EVENT（`--jev-event on`，默认 off）
 
