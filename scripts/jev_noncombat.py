@@ -35,9 +35,8 @@ from sts2_env.eval.map_lowhp import (
     MAP_LOWHP_SAFE_REASON,
     MAP_LOWHP_SOFT_B_ON,
     MAP_LOWHP_SOFT_B_REASON,
-    map_lowhp_filter,
-    map_lowhp_filter_with_reason,
-    map_lowhp_hard_item,
+    apply_map_lowhp_hard_policy,
+    apply_map_lowhp_random_policy,
     map_lowhp_safe_items,
 )
 
@@ -896,26 +895,35 @@ def _sample_map_lowhp(
 ) -> tuple[int, str | None, str | None]:
     """Hard-select only when opt-in; else soft-B / v1 uncertain shop/rest filter."""
     legal = _legal_opts(options, mask)
+    dummy_pick = type("DummyPick", (), {"status": "ok", "fallback_reason": None})()
     if map_lowhp_hard:
-        preferred = map_lowhp_hard_item(
-            legal, _opt_point_type, hp_pressure, enabled=True
+        hard_res = apply_map_lowhp_hard_policy(
+            legal, dummy_pick, hp_pressure, map_lowhp_hard=True
         )
-        if preferred is not None:
-            return preferred.action_index, preferred.option_id, MAP_LOWHP_HARD_REASON
-    filtered, reason = map_lowhp_filter_with_reason(
+        if hard_res is not None:
+            action, ans = hard_res
+            eid = next((o.option_id for o in legal if o.action_index == action), None)
+            return action, eid, MAP_LOWHP_HARD_REASON
+
+    def _sample_legal(pool, r):
+        return pool[int(r.randint(0, len(pool)))] if pool else None
+
+    if not legal:
+        return _legal_random(mask, rng), None, None
+
+    action_obj, ans = apply_map_lowhp_random_policy(
         legal,
-        _opt_point_type,
         hp_pressure,
-        enabled=map_lowhp,
-        soft_b=map_lowhp_soft_b,
+        rng,
+        map_lowhp=map_lowhp,
+        map_lowhp_soft_b=map_lowhp_soft_b,
         act_map=act_map,
+        pick=dummy_pick,
+        select_fn=_sample_legal,
     )
-    pool = filtered if filtered else legal
-    extra = reason
-    if not pool:
-        return _legal_random(mask, rng), None, extra
-    pick = pool[int(rng.randint(0, len(pool)))]
-    return pick.action_index, pick.option_id, extra
+    if action_obj is not None:
+        return action_obj.action_index, action_obj.option_id, ans.fallback_reason
+    return _legal_random(mask, rng), None, None
 
 
 def _maybe_map_lowhp_hard(
@@ -925,9 +933,14 @@ def _maybe_map_lowhp_hard(
     map_lowhp_hard: bool,
 ) -> NoncombatOption | None:
     """Opt-in rest-then-shop when HP is thin and those nodes are legal."""
-    return map_lowhp_hard_item(
-        options, _opt_point_type, hp_pressure, enabled=map_lowhp_hard
+    dummy_pick = type("DummyPick", (), {"status": "ok", "fallback_reason": None})()
+    res = apply_map_lowhp_hard_policy(
+        options, dummy_pick, hp_pressure, map_lowhp_hard=map_lowhp_hard
     )
+    if res is not None:
+        action, ans = res
+        return next((o for o in options if o.action_index == action), None)
+    return None
 
 
 def _event_safe_option(options: list[NoncombatOption]) -> NoncombatOption | None:

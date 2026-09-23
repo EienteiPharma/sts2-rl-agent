@@ -20,6 +20,8 @@ from sts2_env.eval.map_lowhp import (
     map_lowhp_prefer,
     map_lowhp_safe_items,
     normalize_map_point_type,
+    apply_map_lowhp_hard_policy,
+    apply_map_lowhp_random_policy,
 )
 from sts2_env.eval.jev_types import (
     CARD_FIT_ASSIST_MIN,
@@ -101,4 +103,10 @@ from sts2_env.eval.jev_fallback import (
     apply_choice_confidence,
     local_hp_pressure,
     rest_or_continue_override,
+)
+from sts2_env.eval.jev_config import (
+    DEFAULT_JEV_FLAGS,
+    JevPolicyFlags,
+    parse_jev_phases,
+    resolve_jev_flags,
 )

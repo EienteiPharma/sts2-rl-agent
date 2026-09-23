@@ -47,11 +47,13 @@ from sts2_env.eval.map_lowhp import (
     MAP_LOWHP_HARD_REASON,
     MAP_LOWHP_SOFT_B_REASON,
 )
-from sts2_env.eval.jev_policy import (
+from sts2_env.eval.jev_config import (
     DEFAULT_JEV_FLAGS,
     JevPolicyFlags,
-    choose_jev_noncombat,
     resolve_jev_flags,
+)
+from sts2_env.eval.jev_policy import (
+    choose_jev_noncombat,
 )
 from sts2_env.gym_env.action_space import get_action_mask
 from sts2_env.gym_env.observation import OBS_SIZE, encode_observation

@@ -57,9 +57,12 @@ from sts2_env.eval.jev import (
     rest_or_continue_override,
     typesafe_http_headers,
 )
-from sts2_env.eval.jev_policy import (
+from sts2_env.eval.jev_config import (
     DEFAULT_JEV_FLAGS,
     JevPolicyFlags,
+    resolve_jev_flags,
+)
+from sts2_env.eval.jev_policy import (
     build_event_options,
     build_options,
     build_rest_options,
@@ -67,7 +70,6 @@ from sts2_env.eval.jev_policy import (
     choose_jev_noncombat,
     collect_candidates,
     is_potion_or_relic_reward,
-    resolve_jev_flags,
     strip_illegal_invisible,
 )
 from sts2_env.gym_env.run_env import (
@@ -2039,6 +2041,7 @@ def test_client_surface_split_reexport_parity():
     import sts2_env.eval.jev_keys as keys_mod
     import sts2_env.eval.jev_client as client_mod
     import sts2_env.eval.jev_fallback as fallback_mod
+    import sts2_env.eval.jev_config as config_mod
 
     for mod, mod_name in [
         (types_mod, "jev_types"),
@@ -2046,12 +2049,29 @@ def test_client_surface_split_reexport_parity():
         (keys_mod, "jev_keys"),
         (client_mod, "jev_client"),
         (fallback_mod, "jev_fallback"),
+        (config_mod, "jev_config"),
     ]:
         for name in mod.__all__:
             assert hasattr(jev_mod, name), f"jev.py missing re-export of {name} from {mod_name}"
             assert getattr(jev_mod, name) is getattr(mod, name), f"jev.py mismatch on {name} from {mod_name}"
             assert hasattr(eval_pkg, name), f"eval pkg missing re-export of {name} from {mod_name}"
             assert getattr(eval_pkg, name) is getattr(mod, name), f"eval pkg mismatch on {name} from {mod_name}"
+
+
+def test_policy_config_split_parity():
+    """Verify JevPolicyFlags and helpers can be imported from jev_config, jev_policy, jev, and eval pkg."""
+    import sts2_env.eval.jev_config as config_mod
+    import sts2_env.eval.jev_policy as policy_mod
+    import sts2_env.eval.jev as jev_mod
+    import sts2_env.eval as eval_pkg
+
+    for name in config_mod.__all__:
+        val = getattr(config_mod, name)
+        assert getattr(policy_mod, name) is val, f"policy_mod mismatch {name}"
+        assert getattr(jev_mod, name) is val, f"jev_mod mismatch {name}"
+        assert getattr(eval_pkg, name) is val, f"eval_pkg mismatch {name}"
+
+
 
 
 

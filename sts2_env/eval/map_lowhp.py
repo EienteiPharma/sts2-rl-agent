@@ -43,6 +43,8 @@ __all__ = [
     "map_lowhp_prefer",
     "map_lowhp_safe_items",
     "normalize_map_point_type",
+    "apply_map_lowhp_hard_policy",
+    "apply_map_lowhp_random_policy",
 ]
 
 
@@ -196,3 +198,71 @@ def map_lowhp_prefer(items, point_type_of):
     if shops:
         return shops[0]
     return items[0]
+
+
+def _cand_point_type(cand: Any) -> str:
+    if hasattr(cand, "meta") and isinstance(cand.meta, dict):
+        pt = str(cand.meta.get("point_type") or "")
+        if pt:
+            return pt
+    pt = str(getattr(cand, "payload", {}).get("point_type") or "")
+    if pt:
+        return pt
+    if getattr(cand, "is_rest", False):
+        return "REST_SITE"
+    if getattr(cand, "is_unknown", False):
+        return "UNKNOWN"
+    return ""
+
+
+def apply_map_lowhp_hard_policy(
+    cands: list[Any],
+    pick: Any,
+    pressure: float | None,
+    *,
+    map_lowhp_hard: bool,
+) -> tuple[int, Any] | None:
+    """Opt-in rest-then-shop whenever pressure+safe-legal, even on ok-path.
+
+    Hang default is off. Leaves pick.choice as Jev's original suggestion so
+    shadow logs show the Choice; executed action is the safe node.
+    Tags map_lowhp_hard.
+    """
+    preferred = map_lowhp_hard_item(
+        cands, _cand_point_type, pressure, enabled=map_lowhp_hard
+    )
+    if preferred is None:
+        return None
+    pick.status = "ok"
+    pick.fallback_reason = MAP_LOWHP_HARD_REASON
+    if pressure is not None:
+        pick.score = float(pressure)
+    action_idx = getattr(preferred, "run_action", getattr(preferred, "action_index", 0))
+    return action_idx, pick
+
+
+def apply_map_lowhp_random_policy(
+    cands: list[Any],
+    pressure: float | None,
+    rng: Any,
+    *,
+    map_lowhp: bool,
+    map_lowhp_soft_b: bool = MAP_LOWHP_SOFT_B_ON,
+    act_map: Any = None,
+    pick: Any,
+    select_fn: Any,
+) -> tuple[int, Any]:
+    """Soft filter on uncertain/error map forks under hp_pressure >= 2.0.
+
+    When soft_b is enabled and an elite/Boss is ahead, avoids danger forks.
+    Falls back to v1 shop/rest filter if enabled.
+    """
+    filtered, reason = map_lowhp_filter_with_reason(
+        cands, _cand_point_type, pressure, enabled=map_lowhp, soft_b=map_lowhp_soft_b, act_map=act_map
+    )
+    pool = filtered if filtered else cands
+    action = select_fn(pool, rng)
+    if reason:
+        pick.fallback_reason = reason
+    return action, pick
+

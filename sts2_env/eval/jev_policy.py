@@ -7,6 +7,12 @@ from typing import Any
 
 import numpy as np
 
+from sts2_env.eval.jev_config import (
+    DEFAULT_JEV_FLAGS,
+    JevPolicyFlags,
+    parse_jev_phases,
+    resolve_jev_flags,
+)
 from sts2_env.eval.jev_client import JevClient
 from sts2_env.eval.jev_fallback import (
     apply_choice_confidence,
@@ -55,12 +61,10 @@ from sts2_env.eval.map_lowhp import (
     MAP_LOWHP_HARD_ON,
     MAP_LOWHP_HARD_REASON,
     MAP_LOWHP_ON,
-    MAP_LOWHP_RANDOM_REASON,
     MAP_LOWHP_SOFT_B_ON,
     MAP_LOWHP_SOFT_B_REASON,
-    map_lowhp_filter,
-    map_lowhp_filter_with_reason,
-    map_lowhp_hard_item,
+    apply_map_lowhp_hard_policy,
+    apply_map_lowhp_random_policy,
     map_lowhp_safe_items,
 )
 from sts2_env.gym_env.run_env import (
@@ -102,85 +106,6 @@ UNKNOWN_POINT_TYPES = frozenset({"UNKNOWN", "Unknown", "unknown"})
 POTION_OR_RELIC_ACTIONS = frozenset({"pick_potion", "pick_relic_reward"})
 SKIP_ACTIONS = frozenset({"skip"})
 PENDING_CHOICE_ACTIONS = frozenset({"choose", "confirm_choice"})
-
-
-@dataclass(frozen=True)
-class JevPolicyFlags:
-    """Which non-combat phases call Jev. Default preserves MAP/REST/CARD tables.
-
-    EVENT is off unless ``event`` / ``--jev-event on``. Neow is off unless
-    ``neow`` is True / ``--jev-neow on`` (independent of EVENT; hang default).
-    ``map_lowhp`` is the v1 uncertain shop/rest filter (hang default on).
-    ``map_lowhp_hard`` is the v2 rest-then-shop override (hang default **off**).
-    ``map_lowhp_soft_b`` is the elite/Boss low-HP soft bias (hang default **off**, opt-in).
-    """
-
-    phases: frozenset[str] = DEFAULT_JEV_PHASES
-    event: bool = False
-    neow: bool | None = None
-    map_lowhp: bool = MAP_LOWHP_ON
-    map_lowhp_hard: bool = MAP_LOWHP_HARD_ON
-    map_lowhp_soft_b: bool = MAP_LOWHP_SOFT_B_ON
-
-    def resolved_phases(self) -> frozenset[str]:
-        phases = set(self.phases)
-        if self.event:
-            phases.add("event")
-        return frozenset(phases)
-
-    def allows_event(self) -> bool:
-        return "event" in self.resolved_phases()
-
-    def allows_neow(self) -> bool:
-        # Hang default: Neow random unless --jev-neow on.
-        if self.neow is None:
-            return False
-        return bool(self.neow)
-
-
-DEFAULT_JEV_FLAGS = JevPolicyFlags()
-
-
-def parse_jev_phases(text: str | None) -> frozenset[str]:
-    raw = (text or "").strip()
-    if not raw:
-        return DEFAULT_JEV_PHASES
-    parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
-    bad = [p for p in parts if p not in JEV_PHASE_TOKENS]
-    if bad:
-        raise SystemExit(f"unknown --jev-phases token(s): {bad}; expected {sorted(JEV_PHASE_TOKENS)}")
-    return frozenset(parts)
-
-
-def resolve_jev_flags(
-    *,
-    jev_event: str = "off",
-    jev_phases: str | None = None,
-    jev_neow: str | None = None,
-    map_lowhp: str | None = None,
-    map_lowhp_hard: str | None = None,
-    map_lowhp_soft_b: str | None = None,
-) -> JevPolicyFlags:
-    phases = parse_jev_phases(jev_phases)
-    event = jev_event == "on" or "event" in phases
-    if event:
-        phases = phases | {"event"}
-    neow: bool | None
-    if jev_neow is None:
-        neow = None
-    else:
-        neow = jev_neow == "on"
-    lowhp = MAP_LOWHP_ON if map_lowhp is None else map_lowhp == "on"
-    hard = MAP_LOWHP_HARD_ON if map_lowhp_hard is None else map_lowhp_hard == "on"
-    soft_b = MAP_LOWHP_SOFT_B_ON if map_lowhp_soft_b is None else map_lowhp_soft_b == "on"
-    return JevPolicyFlags(
-        phases=phases,
-        event=event,
-        neow=neow,
-        map_lowhp=lowhp,
-        map_lowhp_hard=hard,
-        map_lowhp_soft_b=soft_b,
-    )
 
 
 @dataclass
@@ -746,29 +671,19 @@ def _apply_map_lowhp_hard(
     *,
     map_lowhp_hard: bool,
 ) -> tuple[int, JevAnswer] | None:
-    """Opt-in rest-then-shop whenever pressure+safe-legal, even on ok-path.
-
-    Hang default is **off**. Leaves ``pick.choice`` as Jev's original suggestion
-    so shadow logs still show the Choice; executed action is the safe node.
-    Tags ``map_lowhp_hard``.
-    """
-    preferred = map_lowhp_hard_item(
-        cands, _cand_point_type, pressure, enabled=map_lowhp_hard
+    res = apply_map_lowhp_hard_policy(
+        cands, pick, pressure, map_lowhp_hard=map_lowhp_hard
     )
-    if preferred is None:
-        return None
-    pick.status = "ok"
-    pick.fallback_reason = MAP_LOWHP_HARD_REASON
-    if pressure is not None:
-        pick.score = float(pressure)
-    logger.warning(
-        "map_lowhp_hard pressure=%s jev_choice=%s executed=%s point_type=%s",
-        pressure,
-        pick.choice,
-        preferred.key,
-        _cand_point_type(preferred),
-    )
-    return preferred.run_action, pick
+    if res is not None:
+        action, ans = res
+        logger.warning(
+            "map_lowhp_hard pressure=%s jev_choice=%s executed_action=%s",
+            pressure,
+            pick.choice,
+            action,
+        )
+        return res
+    return None
 
 
 def _map_lowhp_random(
@@ -781,19 +696,16 @@ def _map_lowhp_random(
     act_map: Any = None,
     pick: JevAnswer,
 ) -> tuple[int, JevAnswer]:
-    """Soft filter on uncertain/error map forks under hp_pressure >= 2.0.
-
-    When soft_b is enabled and an elite/Boss is ahead, avoids danger forks.
-    Falls back to v1 shop/rest filter if enabled.
-    """
-    filtered, reason = map_lowhp_filter_with_reason(
-        cands, _cand_point_type, pressure, enabled=map_lowhp, soft_b=map_lowhp_soft_b, act_map=act_map
+    return apply_map_lowhp_random_policy(
+        cands,
+        pressure,
+        rng,
+        map_lowhp=map_lowhp,
+        map_lowhp_soft_b=map_lowhp_soft_b,
+        act_map=act_map,
+        pick=pick,
+        select_fn=_legal_random_from,
     )
-    pool = filtered if filtered else cands
-    action = _legal_random_from(pool, rng)
-    if reason:
-        pick.fallback_reason = reason
-    return action, pick
 
 
 def _run_state_blob(mgr: RunManager) -> dict[str, Any]:
