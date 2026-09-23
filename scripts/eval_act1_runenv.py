@@ -483,11 +483,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument(
         "--map-lowhp-soft-b",
         choices=["on", "off"],
-        default="on",
+        default="off",
         help=(
-            "MAP low-HP soft-B bias (default on). When hp_pressure>=2.0 and an elite/Boss "
-            "is ahead on the fork, soft-prefers safer non-elite/safe options on uncertain/error "
-            "(map_lowhp_soft_b). Set off to kill."
+            "MAP low-HP soft-B bias (default off; opt-in only). When hp_pressure>=2.0 "
+            "and an elite/Boss is ahead on the fork, soft-prefers safer non-elite/safe options "
+            "on uncertain/error (map_lowhp_soft_b). Set on to enable."
         ),
     )
     ap.add_argument(
@@ -554,7 +554,7 @@ def validate_policy_args(args: argparse.Namespace) -> None:
         jev_neow=args.jev_neow,
         map_lowhp=getattr(args, "map_lowhp", "on"),
         map_lowhp_hard=getattr(args, "map_lowhp_hard", "off"),
-        map_lowhp_soft_b=getattr(args, "map_lowhp_soft_b", "on"),
+        map_lowhp_soft_b=getattr(args, "map_lowhp_soft_b", "off"),
     )
 
 
@@ -591,7 +591,7 @@ def build_report(
     start_with_neow: bool = False,
     map_lowhp: str = "on",
     map_lowhp_hard: str = "off",
-    map_lowhp_soft_b: str = "on",
+    map_lowhp_soft_b: str = "off",
     seed_count: int | None = None,
 ) -> dict:
     summary = _summarize(rows)
@@ -631,7 +631,7 @@ def build_report(
                 "hp_pressure>=2 + shop/rest legal → uncertain/error resamples among safe nodes, "
                 "reason map_lowhp_random), opt-in v2 map_lowhp_hard (default off; "
                 "--map-lowhp-hard on, reason map_lowhp_hard, counted as map_lowhp_hard_n), "
-                "soft-B danger avoidance (default on: --map-lowhp-soft-b on, reason map_lowhp_soft_b, "
+                "opt-in soft-B danger avoidance (default off: --map-lowhp-soft-b on, reason map_lowhp_soft_b, "
                 "counted as map_lowhp_soft_b_n), "
                 "and card_fit assist on true pick_card; potion/relic PHASE_CARD_REWARD screens "
                 "safe fallback to take reward (potion_or_relic_safe_fallback). EVENT is off unless "
@@ -701,7 +701,7 @@ def main(argv: list[str] | None = None) -> None:
         start_with_neow=bool(getattr(args, "start_with_neow", False)),
         map_lowhp=getattr(args, "map_lowhp", "on") if args.policy == "hierarchical" else "on",
         map_lowhp_hard=getattr(args, "map_lowhp_hard", "off") if args.policy == "hierarchical" else "off",
-        map_lowhp_soft_b=getattr(args, "map_lowhp_soft_b", "on") if args.policy == "hierarchical" else "on",
+        map_lowhp_soft_b=getattr(args, "map_lowhp_soft_b", "off") if args.policy == "hierarchical" else "off",
         seed_count=n,
     )
     out = Path(args.out)

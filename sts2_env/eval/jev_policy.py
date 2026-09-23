@@ -108,6 +108,7 @@ class JevPolicyFlags:
     ``neow`` is True / ``--jev-neow on`` (independent of EVENT; hang default).
     ``map_lowhp`` is the v1 uncertain shop/rest filter (hang default on).
     ``map_lowhp_hard`` is the v2 rest-then-shop override (hang default **off**).
+    ``map_lowhp_soft_b`` is the elite/Boss low-HP soft bias (hang default **off**, opt-in).
     """
 
     phases: frozenset[str] = DEFAULT_JEV_PHASES

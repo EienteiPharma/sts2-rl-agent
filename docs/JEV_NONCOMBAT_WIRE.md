@@ -46,10 +46,10 @@ When `hp_pressure >= 2.0` (same band as rest prefer; local fallback
   tag). `--jev off` full-legal-random is unchanged.
 * Knob: `--map-lowhp on|off` (CLI default **on** for soft uncertain filter).
   `--map-lowhp-hard on|off` (CLI default **off** for hard override).
-  `--map-lowhp-soft-b on|off` (CLI default **on** for elite/Boss danger soft bias).
-  Constant `MAP_LOWHP_ON = True`, `MAP_LOWHP_HARD_ON = False`, `MAP_LOWHP_SOFT_B_ON = True`
+  `--map-lowhp-soft-b on|off` (CLI default **off** for elite/Boss danger soft bias, opt-in).
+  Constant `MAP_LOWHP_ON = True`, `MAP_LOWHP_HARD_ON = False`, `MAP_LOWHP_SOFT_B_ON = False`
   in `sts2_env/eval/jev.py`. Eval counts `map_lowhp_hard_n` per episode if hard is opted in,
-  and `map_lowhp_soft_b_n` for soft-B danger avoidance.
+  and `map_lowhp_soft_b_n` if soft-B is opted in.
 
 ## EVENT (`--jev-event on`)
 
@@ -171,7 +171,7 @@ Closes damaging random holes in non-combat choices:
 ## Soft B: MAP elite/Boss low-HP soft bias (2026-09-23)
 
 - Under `hp_pressure >= 2.0`, if an elite or Boss is ahead on the fork, uncertain/error decisions soft-prefer safe shop/rest nodes (`map_lowhp_soft_b`).
-- Controlled by `--map-lowhp-soft-b on|off` (default **`on`**; killable via `--map-lowhp-soft-b off`).
+- Controlled by `--map-lowhp-soft-b on|off` (default **`off`**; opt-in via `--map-lowhp-soft-b on`).
 - Hard-select remains opt-in **off** (`--map-lowhp-hard off`).
-- Hang mainline stops at narrow soft-B (`58db7d0`); expand `4c85dbd` was abandoned.
+- Hang mainline stops at narrow soft-B lineage (`58db7d0`/`dcc44b3`) with soft-B **off** by default; expand `4c85dbd` remains abandoned.
 - Counted in eval summary as `map_lowhp_soft_b_n` and `map_lowhp_soft_b_eps`.

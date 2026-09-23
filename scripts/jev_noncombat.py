@@ -1087,7 +1087,7 @@ def decide_noncombat(
     ``hp_pressure >= 2.0`` and a legal shop/rest node resamples among those
     (``map_lowhp_random``). ``map_lowhp_hard`` (hang default **off**) is the
     v2 rest-then-shop override regardless of Jev confidence.
-    ``map_lowhp_soft_b`` (hang default on): soft bias against danger nodes (elite/boss)
+    ``map_lowhp_soft_b`` (hang default **off**, opt-in): soft bias against danger nodes (elite/boss)
     when low-HP.
     """
     if mode not in MODES:

@@ -34,9 +34,9 @@ Lab-hung thresholds (do not retune in this eval):
   v2 hard-select (``map_lowhp_hard``, rest-then-shop regardless of
   confidence) is **opt-in** via ``--map-lowhp-hard on`` (hang default
   **off**; froze after n100 clear 0%).
-  Soft-B (``map_lowhp_soft_b``, hang default on): when elite/Boss is ahead
-  on a fork under high pressure, uncertain decisions soft-prefer safe nodes
-  (``map_lowhp_soft_b``).
+  Soft-B (``map_lowhp_soft_b``, opt-in via ``--map-lowhp-soft-b on``, hang
+  default **off**): when elite/Boss is ahead on a fork under high pressure,
+  uncertain decisions soft-prefer safe nodes (``map_lowhp_soft_b``).
 * Secondary A (EVENT / relic safe fallback): when Jev is uncertain,
   encounters API error, or picks not in legal candidates during EVENT choice
   under ``--jev-event on``, falls back to non-damaging legal option or Leave
@@ -95,7 +95,7 @@ MAP_LOWHP_RANDOM_REASON = "map_lowhp_random"  # v1 uncertain filter (hang defaul
 MAP_LOWHP_HARD_REASON = "map_lowhp_hard"  # v2 hard-select; --map-lowhp-hard, default off
 MAP_LOWHP_HARD_ON = False
 MAP_LOWHP_SOFT_B_REASON = "map_lowhp_soft_b"  # soft bias away from elite/boss under pressure
-MAP_LOWHP_SOFT_B_ON = True
+MAP_LOWHP_SOFT_B_ON = False
 EVENT_SAFE_FALLBACK_REASON = "event_safe_fallback"
 POTION_OR_RELIC_SAFE_REASON = "potion_or_relic_safe_fallback"
 

@@ -33,9 +33,9 @@ stays **0.65**.
 
 **Low-HP MAP (`map_lowhp`, hang default on):** when `hp_pressure >= 2.0`
 and `SHOP` or `REST_SITE` is legal, low-confidence/error Jev resamples
-among safe nodes (reason `map_lowhp_random`). Soft-B (`--map-lowhp-soft-b on`, default on)
+among safe nodes (reason `map_lowhp_random`). Soft-B (`--map-lowhp-soft-b on`, default off, opt-in)
 soft-prefers safe nodes specifically when an elite/Boss is ahead (reason `map_lowhp_soft_b`;
-hang tip stops at `58db7d0`, expand `4c85dbd` abandoned).
+hang tip stops at `58db7d0`/`dcc44b3` lineage, expand `4c85dbd` abandoned).
 Confident Choice is not overridden. Hard-select rest-then-shop (`--map-lowhp-hard on`, reason
 `map_lowhp_hard`) is **opt-in only** (hang default off; froze after n100 clear 0%).
 If only fight nodes remain, keep full-pool random. Disable with `--map-lowhp off`.

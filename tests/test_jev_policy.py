@@ -1827,7 +1827,7 @@ def test_map_lowhp_api_error_default_soft_selects_shop():
 def test_resolve_map_lowhp_flag_default_on():
     assert resolve_jev_flags().map_lowhp is True
     assert resolve_jev_flags().map_lowhp_hard is False
-    assert resolve_jev_flags().map_lowhp_soft_b is True
+    assert resolve_jev_flags().map_lowhp_soft_b is False
     assert resolve_jev_flags(map_lowhp="on").map_lowhp is True
     assert resolve_jev_flags(map_lowhp="off").map_lowhp is False
     assert resolve_jev_flags(map_lowhp_hard="on").map_lowhp_hard is True
@@ -1836,7 +1836,7 @@ def test_resolve_map_lowhp_flag_default_on():
     assert resolve_jev_flags(map_lowhp_soft_b="off").map_lowhp_soft_b is False
     assert DEFAULT_JEV_FLAGS.map_lowhp is True
     assert DEFAULT_JEV_FLAGS.map_lowhp_hard is False
-    assert DEFAULT_JEV_FLAGS.map_lowhp_soft_b is True
+    assert DEFAULT_JEV_FLAGS.map_lowhp_soft_b is False
 
 
 def test_box_decide_noncombat_map_lowhp_low_conf(monkeypatch):
@@ -1918,7 +1918,14 @@ def test_map_lowhp_soft_b_avoids_elite_ahead():
             }
         ]
     )
-    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    # Default is soft-B off: falls back to v1 map_lowhp_random (which picks SHOP since it's the safe node)
+    action_def, log_def = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action_def == _MAP_START + 1
+    assert log_def["shadow_fallback_reason"] == MAP_LOWHP_RANDOM_REASON
+
+    # With opt-in soft_b=True, reason is map_lowhp_soft_b
+    flags_on = JevPolicyFlags(map_lowhp_soft_b=True)
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter, flags=flags_on)
     # Uncertain on danger fork soft-prefers safe non-elite (SHOP)
     assert action == _MAP_START + 1
     assert log["shadow_fallback_reason"] == MAP_LOWHP_SOFT_B_REASON
@@ -1939,8 +1946,9 @@ def test_map_lowhp_soft_b_killable():
             }
         ]
     )
-    # With soft_b enabled, low HP avoids elite, picks shop with reason map_lowhp_soft_b
-    action_b, log_b = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    # With soft_b opt-in, low HP avoids elite, picks shop with reason map_lowhp_soft_b
+    flags_optin = JevPolicyFlags(map_lowhp_soft_b=True)
+    action_b, log_b = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter, flags=flags_optin)
     assert action_b == _MAP_START + 1
     assert log_b["shadow_fallback_reason"] == MAP_LOWHP_SOFT_B_REASON
 
