@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from sts2_env.eval.act1_suite import PROTOCOL_ID, SEED_COUNT, SEED_START
+from sts2_env.eval.combat_jev import CombatJevTelemetry, summarize_combat_jev
 from sts2_env.gym_env.observation import OBS_SIZE
 from sts2_env.gym_env.run_env import RUN_OBS_SIZE
 
@@ -40,6 +41,8 @@ def summarize_act1_rows(rows: list[dict]) -> dict:
         "event_off_random_n": int(sum(int(r.get("event_off_random_n") or 0) for r in rows)),
         "potion_or_relic_safe_n": int(sum(int(r.get("potion_or_relic_safe_n") or 0) for r in rows)),
         "potion_or_relic_random_n": int(sum(int(r.get("potion_or_relic_random_n") or 0) for r in rows)),
+        "combat_jev_calls": int(sum(int(r.get("combat_jev_calls") or 0) for r in rows)),
+        "combat_jev_fail_open": int(sum(int(r.get("combat_jev_fail_open") or 0) for r in rows)),
     }
 
 
@@ -62,9 +65,14 @@ def build_report(
     map_lowhp_hard: str = "off",
     map_lowhp_soft_b: str = "off",
     seed_count: int | None = None,
+    combat_policy: str = "ppo",
+    combat_jev_telemetry: CombatJevTelemetry | None = None,
 ) -> dict:
     summary = _summarize(rows)
     n_seeds = seed_count if seed_count is not None else (summary.get("n") or SEED_COUNT)
+    combat_jev = summarize_combat_jev(
+        rows, combat_jev_telemetry, n_episodes=n_seeds
+    )
     return {
         "ts": datetime.now(timezone.utc).isoformat(),
         "protocol": PROTOCOL_ID,
@@ -80,6 +88,8 @@ def build_report(
         "map_lowhp": map_lowhp,
         "map_lowhp_hard": map_lowhp_hard,
         "map_lowhp_soft_b": map_lowhp_soft_b,
+        "combat_policy": combat_policy,
+        "combat_jev": combat_jev,
         "character": "Ironclad",
         "ascension": 0,
         "seeds": {
@@ -93,7 +103,10 @@ def build_report(
         "jev_shadow": {
             "mode": "on" if jev == "on" else "stub",
             "note": (
-                "Combat never uses Jev. --jev off: legal random + stub logs. "
+                "Combat default is hung PPO (--combat-policy ppo). "
+                "--combat-policy jev is an optional bypass (not a hang swap): "
+                "combat_step_choice on the legal shortlist, fail-open to bh_v1. "
+                "--jev off: legal random + stub logs. "
                 "--jev on: Choice/Score with confidence>=0.65, hp_pressure "
                 "rest/continue, MAP UNKNOWN defer (unknown_deferred at conf<0.80 "
                 "when hp_pressure>=2), MAP low-HP v1 map_lowhp (default on: "

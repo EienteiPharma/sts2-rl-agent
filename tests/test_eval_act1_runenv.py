@@ -270,6 +270,7 @@ def test_cli_jev_default_off_and_strategic_alias():
     assert off.map_lowhp == "on"
     assert off.map_lowhp_hard == "off"
     assert off.map_lowhp_soft_b == "off"
+    assert off.combat_policy == "ppo"
     assert off.n == eval_mod.SEED_COUNT
     assert off.jev_flags.allows_event() is False
     assert off.jev_flags.allows_neow() is False
@@ -657,6 +658,7 @@ def test_act1_eval_layering_split_parity():
     assert args.map_lowhp == "on"
     assert args.map_lowhp_hard == "off"
     assert args.map_lowhp_soft_b == "off"
+    assert args.combat_policy == "ppo"
     assert args.n == suite_mod.SEED_COUNT
     assert args.start_with_neow is False
     assert args.out == "/workspace/sts2-sim/evals/act1_runenv_latest.json"
@@ -701,5 +703,74 @@ def test_act1_eval_layering_split_parity():
         "map_lowhp_soft_b_n",
         "event_safe_fallback_n",
         "potion_or_relic_safe_n",
+        "combat_jev_calls",
+        "combat_jev_fail_open",
     ):
         assert key in summary["summary"]
+    assert summary["combat_policy"] == "ppo"
+    assert summary["combat_jev"]["jev_calls"] == 0
+    assert summary["combat_jev"]["jev_failopen"] == 0
+
+
+def test_cli_combat_policy_default_ppo_and_jev_requires_hierarchical():
+    off = eval_mod.parse_args(["--policy", "hierarchical", "--combat-model", "c.zip"])
+    eval_mod.validate_policy_args(off)
+    assert off.combat_policy == "ppo"
+    jev = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--combat-policy",
+            "jev",
+        ]
+    )
+    eval_mod.validate_policy_args(jev)
+    assert jev.combat_policy == "jev"
+    assert jev.jev == "off"
+    bad = eval_mod.parse_args(["--policy", "random", "--combat-policy", "jev"])
+    with pytest.raises(SystemExit, match="hierarchical"):
+        eval_mod.validate_policy_args(bad)
+
+
+def test_combat_policy_jev_stub_fail_opens_to_ppo():
+    from sts2_env.eval.combat_jev import CombatJevTelemetry, FAILOPEN_BAD_ID
+    from sts2_env.eval.jev_client import StubJevClient
+
+    env = STS2RunEnv(character_id="Ironclad", ascension_level=0, max_steps=120)
+    obs, info = env.reset(seed=42)
+    rng = np.random.RandomState(1)
+    model = FakeCombatModel()
+    tel = CombatJevTelemetry()
+    saw_combat = False
+    for _ in range(120):
+        mask = info.get("action_mask")
+        action, shadow = eval_mod.choose_action(
+            "hierarchical",
+            env,
+            obs,
+            info,
+            mask,
+            rng,
+            model=None,
+            combat_model=model,
+            combat_policy="jev",
+            combat_jev_adapter=StubJevClient(),
+            combat_jev_telemetry=tel,
+        )
+        if info.get("phase") == RunManager.PHASE_COMBAT:
+            saw_combat = True
+            assert _COMBAT_START <= action < _COMBAT_START + _COMBAT_SIZE
+            assert shadow.get("combat_jev_failopen") is True
+            assert shadow.get("jev_failopen_reason") == FAILOPEN_BAD_ID
+        obs, _, terminated, truncated, info = env.step(action)
+        if terminated or truncated:
+            break
+    env.close()
+    if not saw_combat:
+        pytest.skip("No combat phase reached")
+    assert tel.calls >= 1
+    assert tel.fail_open == tel.calls
+    assert tel.failopen_reason[FAILOPEN_BAD_ID] >= 1
+    assert set(model.seen_widths) == {OBS_SIZE}

@@ -1,4 +1,13 @@
 """Act1 RunEnv eval helpers (hierarchical + Jev)."""
+from sts2_env.eval.combat_jev import (
+    CHOICE_COMBAT_STEP,
+    COMBAT_JEV_CONF_MIN,
+    COMBAT_JEV_FAILOPEN_REASONS,
+    COMBAT_JEV_INSTRUCTIONS,
+    CombatJevTelemetry,
+    choose_combat_step,
+    summarize_combat_jev,
+)
 from sts2_env.eval.act1_suite import (
     HUNG_COMBAT_ZIP,
     JEV_SHADOW_SKIPPED,

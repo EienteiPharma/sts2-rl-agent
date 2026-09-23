@@ -3,6 +3,7 @@
 
 Protocol: ``docs/HOLD_PROTOCOL.md``. Dual gate overall ≥70 / Boss ≥40 on this
 aligned protocol. Hang zip stays ``bh_v1``. Not Act1 RunEnv.
+``--combat-policy jev`` is an optional bypass (not a hang swap); default ppo.
 
 Box ops used to keep a bare Act1 22-enc copy at ``/workspace/sts2-sim/eval_combat_suite.py``
 (no ``--suite loadout_v1``). That is **not** the hang table. Use this script.
@@ -15,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from sts2_env.eval.combat_hold import (
     HOLD_BOSS_MIN,
     HOLD_OVERALL_MIN,
@@ -22,6 +25,7 @@ from sts2_env.eval.combat_hold import (
     hold_protocol_meta,
     run_hold_smoke,
 )
+from sts2_env.eval.combat_jev import CombatJevTelemetry
 from sts2_env.gym_env.observation import OBS_SIZE
 
 PROTOCOL_ID = "loadout_v1 HOLD LOCKED 2026-09-23"
@@ -58,6 +62,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=400,
         help="Gym steps per fight (hold smoke default)",
+    )
+    parser.add_argument(
+        "--combat-policy",
+        choices=["ppo", "jev"],
+        default="ppo",
+        help=(
+            "Combat source. Default ppo = hung bh_v1 zip (hang table). "
+            "jev = optional bypass (not a hang swap): combat_step_choice on "
+            "the legal shortlist; fail-open to the same zip."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -138,7 +152,40 @@ def main(argv: list[str] | None = None) -> int:
         action, _ = model.predict(obs, action_masks=mask, deterministic=True)
         return int(action)
 
-    summary = run_hold_smoke(predict_fn, n_eps=n_eps, max_steps=int(args.max_steps))
+    combat_policy = str(getattr(args, "combat_policy", "ppo") or "ppo")
+    choose_fn = None
+    combat_jev_summary = None
+    if combat_policy == "jev":
+        from sts2_env.eval.combat_jev import CombatJevTelemetry, choose_combat_step
+        from sts2_env.eval.jev_client import build_jev_adapter
+
+        adapter = build_jev_adapter(enabled=True)
+        telemetry = CombatJevTelemetry()
+        rng = np.random.RandomState(0)
+
+        def choose_fn(env, obs, mask):
+            combat = getattr(env, "combat", None)
+            if combat is None:
+                return predict_fn(obs, mask)
+            local, _shadow = choose_combat_step(
+                combat,
+                mask,
+                rng,
+                model,
+                adapter=adapter,
+                combat_obs=obs,
+                telemetry=telemetry,
+            )
+            return int(local)
+
+        combat_jev_summary = telemetry
+
+    summary = run_hold_smoke(
+        predict_fn,
+        n_eps=n_eps,
+        max_steps=int(args.max_steps),
+        choose_fn=choose_fn,
+    )
     overall = float(summary["overall"]["win_rate"])
     elite = float(summary["elite"]["win_rate"])
     boss = float(summary["boss"]["win_rate"])
@@ -155,9 +202,17 @@ def main(argv: list[str] | None = None) -> int:
         "gate": summary["gate"],
         "passed": bool(summary["passed"]),
         "n_eps": n_eps,
+        "combat_policy": combat_policy,
+        "combat_jev": (
+            combat_jev_summary.as_report(n_episodes=int(summary["overall"]["n"]))
+            if combat_jev_summary is not None
+            else CombatJevTelemetry().as_report(
+                n_episodes=int(summary["overall"]["n"])
+            )
+        ),
     }
     text = (
-        f"HOLD loadout_v1 n_eps={n_eps}  "
+        f"HOLD loadout_v1 n_eps={n_eps} combat_policy={combat_policy}  "
         f"{pct(overall)} / {pct(elite)} / Boss {pct(boss)}  "
         f"passed={payload['passed']} "
         f"(gate {HOLD_OVERALL_MIN:.0%}/{HOLD_BOSS_MIN:.0%})"

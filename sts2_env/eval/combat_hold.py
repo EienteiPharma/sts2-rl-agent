@@ -197,11 +197,15 @@ def run_hold_smoke(
     n_eps: int = 1,
     fixture_dir: Path | None = None,
     max_steps: int = 400,
+    choose_fn: Callable[[Any, np.ndarray, np.ndarray], int] | None = None,
 ) -> dict[str, Any]:
     """Run HOLD episodes with a predict(obs, mask)->action callable. No SB3 import.
 
     Applies fixture relics/potions through ``env.reset(..., options=...)`` (hang
     ``options_from_fixture`` path). Win = ``terminated and reward > 0``.
+
+    Optional ``choose_fn(env, obs, mask)`` is used when the caller needs the
+    live ``STS2CombatEnv`` (combat-Jev bypass). Default path stays predict_fn.
     """
     from sts2_env.gym_env.combat_env import STS2CombatEnv
 
@@ -219,7 +223,11 @@ def run_hold_smoke(
             mask = info.get("action_mask")
             if mask is None:
                 mask = env.action_masks()
-            action = int(predict_fn(obs, np.asarray(mask)))
+            mask_arr = np.asarray(mask)
+            if choose_fn is not None:
+                action = int(choose_fn(env, obs, mask_arr))
+            else:
+                action = int(predict_fn(obs, mask_arr))
             obs, reward, terminated, truncated, info = env.step(action)
             steps += 1
             done = terminated or truncated

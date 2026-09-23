@@ -303,6 +303,7 @@ def test_eval_combat_suite_cli_is_hang_hold():
     args = mod.parse_args([])
     assert args.suite == "loadout_v1"
     assert args.n_eps == 20
+    assert args.combat_policy == "ppo"
     args20 = mod.parse_args(["--suite", "loadout_v1", "--n-eps", "20"])
     assert args20.n_eps == 20
     with pytest.raises(SystemExit, match="loadout_v1"):

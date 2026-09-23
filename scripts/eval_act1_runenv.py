@@ -13,10 +13,12 @@ Policies
 * ``hierarchical``: combat steps use the hung combat zip on ``--model``
   (alias ``--combat-model``; obs_v1 / OBS_SIZE=181) via
   ``encode_observation(CombatState)`` + combat ``get_action_mask``.
-  Non-combat default (``--jev off``): legal random, Jev shadow only (no
-  action change). ``--jev on`` calls TypeSafe/Jev Choice. Jev never runs
-  in combat. MAP low-HP ``--map-lowhp`` default on (v1 uncertain filter).
-  ``--map-lowhp-hard`` default **off**.
+  ``--combat-policy ppo`` (default) is the hung path. ``--combat-policy jev``
+  is an optional bypass (not a hang swap): legal-shortlist Choice, fail-open
+  to bh_v1. Non-combat default (``--jev off``): legal random, Jev shadow only (no
+  action change). ``--jev on`` calls TypeSafe/Jev Choice. Non-combat Jev is
+  independent of ``--combat-policy``. MAP low-HP ``--map-lowhp`` default on
+  (v1 uncertain filter). ``--map-lowhp-hard`` default **off**.
 
 Never feed RunEnv observations into the combat model.
 
@@ -61,6 +63,7 @@ from sts2_env.eval.act1_suite import (
     SEED_START,
     SEEDS,
 )
+from sts2_env.eval.combat_jev import CombatJevTelemetry
 from sts2_env.eval.jev_client import build_jev_adapter
 from sts2_env.eval.jev_config import DEFAULT_JEV_FLAGS
 from sts2_env.gym_env.observation import OBS_SIZE
@@ -154,6 +157,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     ap.add_argument(
+        "--combat-policy",
+        choices=["ppo", "jev"],
+        default="ppo",
+        help=(
+            "Combat source for hierarchical. Default ppo = hung bh_v1 zip "
+            "(unchanged hang path). jev = optional bypass (not a hang swap): "
+            "combat_step_choice on the legal shortlist; fail-open to bh_v1."
+        ),
+    )
+    ap.add_argument(
         "--n",
         type=int,
         default=SEED_COUNT,
@@ -186,6 +199,11 @@ def main(argv: list[str] | None = None) -> None:
     jev_enabled = args.policy == "hierarchical" and args.jev == "on"
     jev_adapter = build_jev_adapter(enabled=jev_enabled) if args.policy == "hierarchical" else None
     jev_flags = getattr(args, "jev_flags", None) or DEFAULT_JEV_FLAGS
+    combat_policy = str(getattr(args, "combat_policy", "ppo") or "ppo")
+    combat_jev_telemetry = CombatJevTelemetry()
+    combat_jev_adapter = None
+    if args.policy == "hierarchical" and combat_policy == "jev":
+        combat_jev_adapter = build_jev_adapter(enabled=True)
 
     env = STS2RunEnv(character_id="Ironclad", ascension_level=0, max_steps=args.max_steps)
     rng = np.random.RandomState(0)
@@ -206,6 +224,9 @@ def main(argv: list[str] | None = None) -> None:
                 jev_adapter=jev_adapter,
                 jev_flags=jev_flags,
                 start_with_neow=bool(getattr(args, "start_with_neow", False)),
+                combat_policy=combat_policy,
+                combat_jev_adapter=combat_jev_adapter,
+                combat_jev_telemetry=combat_jev_telemetry,
             )
         )
     env.close()
@@ -226,6 +247,8 @@ def main(argv: list[str] | None = None) -> None:
         map_lowhp_hard=getattr(args, "map_lowhp_hard", "off") if args.policy == "hierarchical" else "off",
         map_lowhp_soft_b=getattr(args, "map_lowhp_soft_b", "off") if args.policy == "hierarchical" else "off",
         seed_count=n,
+        combat_policy=combat_policy if args.policy == "hierarchical" else "ppo",
+        combat_jev_telemetry=combat_jev_telemetry,
     )
     out = Path(args.out)
     write_report(report, out)

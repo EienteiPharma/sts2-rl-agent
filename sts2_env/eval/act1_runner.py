@@ -17,6 +17,11 @@ from sts2_env.eval.act1_suite import (
     JEV_SHADOW_STUB,
     SEED_COUNT,
 )
+from sts2_env.eval.combat_jev import (
+    CombatJevTelemetry,
+    choose_combat_step,
+    hung_ppo_local,
+)
 from sts2_env.eval.jev_client import build_jev_adapter
 from sts2_env.eval.jev_config import (
     DEFAULT_JEV_FLAGS,
@@ -131,11 +136,17 @@ def choose_hierarchical_action(
     jev_enabled: bool = False,
     jev_adapter: Any = None,
     jev_flags: JevPolicyFlags | None = None,
+    combat_policy: str = "ppo",
+    combat_jev_adapter: Any = None,
+    combat_jev_telemetry: CombatJevTelemetry | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Pick a RunEnv action for hierarchical policy.
 
-    Combat: encode *combat* obs (never ``obs`` / RunEnv) and predict, then map
-    the combat action index into the RunEnv combat slice.
+    Combat default (``combat_policy=ppo``): encode *combat* obs (never ``obs``
+    / RunEnv) and predict with hung bh_v1, then map the combat action index
+    into the RunEnv combat slice. ``combat_policy=jev`` is an optional bypass
+    (not a hang swap): TypeSafe Choice on the legal shortlist, fail-open to
+    the same hung zip.
     Non-combat: legal random when ``jev_enabled`` is false; Jev Choice/Score
     when true (errors fall back to legal random). Ordinary EVENT is off unless
     ``jev_flags.allows_event()``. Detected Neow uses Jev only when
@@ -172,11 +183,24 @@ def choose_hierarchical_action(
 
     owner = _selected_combat_owner(mgr, combat)
     combat_mask = get_action_mask(combat, owner=owner)
-    local, _ = combat_model.predict(
-        combat_obs, action_masks=combat_mask, deterministic=True
-    )
-    local = int(local)
-    local = max(0, min(local, _COMBAT_SIZE - 1))
+    if combat_policy == "jev":
+        adapter = combat_jev_adapter or jev_adapter or build_jev_adapter(enabled=True)
+        local, shadow = choose_combat_step(
+            combat,
+            combat_mask,
+            rng,
+            combat_model,
+            adapter=adapter,
+            combat_obs=combat_obs,
+            telemetry=combat_jev_telemetry,
+            owner=owner,
+        )
+        local = max(0, min(int(local), _COMBAT_SIZE - 1))
+        return _COMBAT_START + local, shadow
+    local = hung_ppo_local(combat_model, combat_obs, combat_mask)
+    if local is None:
+        local = _legal_random(combat_mask, rng)
+    local = max(0, min(int(local), _COMBAT_SIZE - 1))
     return _COMBAT_START + local, shadow
 
 
@@ -194,6 +218,9 @@ def choose_action(
     jev_enabled: bool = False,
     jev_adapter: Any = None,
     jev_flags: JevPolicyFlags | None = None,
+    combat_policy: str = "ppo",
+    combat_jev_adapter: Any = None,
+    combat_jev_telemetry: CombatJevTelemetry | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Return ``(action, shadow_fields)`` for the current step."""
     if policy == "random":
@@ -212,6 +239,9 @@ def choose_action(
             jev_enabled=jev_enabled,
             jev_adapter=jev_adapter,
             jev_flags=jev_flags,
+            combat_policy=combat_policy,
+            combat_jev_adapter=combat_jev_adapter,
+            combat_jev_telemetry=combat_jev_telemetry,
         )
     raise SystemExit(f"unknown policy: {policy}")
 
@@ -228,6 +258,9 @@ def _run_episode(
     jev_adapter: Any = None,
     jev_flags: JevPolicyFlags | None = None,
     start_with_neow: bool = False,
+    combat_policy: str = "ppo",
+    combat_jev_adapter: Any = None,
+    combat_jev_telemetry: CombatJevTelemetry | None = None,
 ) -> dict:
     obs, info = env.reset(seed=seed, options={"start_with_neow": start_with_neow})
     done = False
@@ -249,6 +282,7 @@ def _run_episode(
     event_off_random_n = 0
     potion_or_relic_safe_n = 0
     potion_or_relic_random_n = 0
+    tel_mark = combat_jev_telemetry.mark() if combat_jev_telemetry is not None else (0, 0)
     while not done:
         mask = info.get("action_mask")
         if mask is None:
@@ -266,6 +300,9 @@ def _run_episode(
             jev_enabled=jev_enabled,
             jev_adapter=jev_adapter,
             jev_flags=jev_flags,
+            combat_policy=combat_policy,
+            combat_jev_adapter=combat_jev_adapter,
+            combat_jev_telemetry=combat_jev_telemetry,
         )
         reason = last_shadow.get("shadow_fallback_reason")
         dec = last_shadow.get("shadow_decision")
@@ -348,6 +385,11 @@ def _run_episode(
         "potion_or_relic_safe_n": potion_or_relic_safe_n,
         "potion_or_relic_random_n": potion_or_relic_random_n,
         "jev_card_fit": last_shadow.get("jev_card_fit"),
+        **(
+            combat_jev_telemetry.episode_fields(tel_mark)
+            if combat_jev_telemetry is not None
+            else {"combat_jev_calls": 0, "combat_jev_fail_open": 0}
+        ),
     }
 
 
@@ -381,6 +423,8 @@ def validate_policy_args(args: argparse.Namespace) -> None:
             raise SystemExit("--jev-event on is only valid with --policy hierarchical")
         if args.jev_neow == "on":
             raise SystemExit("--jev-neow on is only valid with --policy hierarchical")
+        if getattr(args, "combat_policy", "ppo") == "jev":
+            raise SystemExit("--combat-policy jev is only valid with --policy hierarchical")
     if int(getattr(args, "n", SEED_COUNT)) < 1:
         raise SystemExit("--n must be >= 1")
     args.jev_flags = resolve_jev_flags(
