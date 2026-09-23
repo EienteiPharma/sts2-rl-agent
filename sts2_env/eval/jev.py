@@ -81,6 +81,8 @@ TYPESAFE_API_URL = "https://api.typesafe.ai/v1/systemone"
 TYPESAFE_MODEL = "jev-1.13.0"
 TYPESAFE_API_KEY_ENV = "TYPESAFE_API_KEY"
 TYPESAFE_API_KEYS_ENV = "TYPESAFE_API_KEYS"
+# Box-secrets card fields Surplus stores: TYPESAFE_API_KEY + TYPESAFE_API_KEY_1..4.
+TYPESAFE_BOX_SECRET_NUMBERED_MAX = 4
 TYPESAFE_NUMBERED_KEY_MAX = 16
 # Cloudflare error 1010 blocks the default Python-urllib User-Agent.
 TYPESAFE_HTTP_USER_AGENT = "sts2-rl-agent-jev/1.0"
@@ -217,12 +219,16 @@ def is_typesafe_forbidden(http_code: int) -> bool:
     return int(http_code) == 403
 
 
-def numbered_typesafe_key_env_names() -> tuple[str, ...]:
+def numbered_typesafe_key_env_names(*, upto: int | None = None) -> tuple[str, ...]:
+    last = TYPESAFE_NUMBERED_KEY_MAX if upto is None else int(upto)
     names = [TYPESAFE_API_KEY_ENV]
-    names.extend(
-        f"{TYPESAFE_API_KEY_ENV}_{i}" for i in range(2, TYPESAFE_NUMBERED_KEY_MAX + 1)
-    )
+    names.extend(f"{TYPESAFE_API_KEY_ENV}_{i}" for i in range(1, last + 1))
     return tuple(names)
+
+
+def box_secret_key_names() -> tuple[str, ...]:
+    """card.* names in /home/box/agent-data/box-secrets.json."""
+    return numbered_typesafe_key_env_names(upto=TYPESAFE_BOX_SECRET_NUMBERED_MAX)
 
 
 def _dedupe_keys(values: list[str]) -> list[str]:
@@ -256,7 +262,11 @@ def apply_box_secrets_to_environ(
     environ: Any | None = None,
     secrets_path: str | Path | None = None,
 ) -> bool:
-    """Copy TypeSafe keys from box-secrets into env if missing. Never logs values."""
+    """Copy card.TYPESAFE_API_KEY plus card.TYPESAFE_API_KEY_1..4 into env.
+
+    Never overwrites a name that is already exported. Never logs values.
+    Process env is often empty on Surplus; callers must run this.
+    """
     env = os.environ if environ is None else environ
     path = Path(secrets_path) if secrets_path is not None else BOX_SECRETS_PATH
     try:
@@ -267,7 +277,7 @@ def apply_box_secrets_to_environ(
     if not isinstance(card, dict):
         return False
     wrote = False
-    for name in numbered_typesafe_key_env_names():
+    for name in box_secret_key_names():
         val = card.get(name)
         if isinstance(val, str) and val.strip() and not str(env.get(name) or "").strip():
             env[name] = val.strip()
@@ -291,18 +301,22 @@ def load_typesafe_api_keys(
     secrets_path: str | Path | None = None,
     hydrate_box_secrets: bool = True,
 ) -> list[str]:
-    """Load optional TypeSafe key pool. Default is a single TYPESAFE_API_KEY.
+    """Load TypeSafe key pool for hang-protocol Jev workers.
 
-    Sources (deduped, order preserved): ``TYPESAFE_API_KEYS`` (JSON list or
-    comma-separated), then ``TYPESAFE_API_KEY``, ``TYPESAFE_API_KEY_2`` …
-    ``TYPESAFE_API_KEY_16``. Missing env falls back to box-secrets ``card``.
-    Never returns or logs key values to stdout.
+    Always reads ``/home/box/agent-data/box-secrets.json`` ``card`` fields
+    ``TYPESAFE_API_KEY`` and ``TYPESAFE_API_KEY_1``..``_4`` unless
+    ``hydrate_box_secrets`` is False. Already-exported
+    ``TYPESAFE_API_KEY`` / ``TYPESAFE_API_KEY_N`` / ``TYPESAFE_API_KEYS``
+    win over the file (not overwritten). Injects filled names into env so
+    spawn workers inherit them. Never logs key material.
     """
     env: Mapping[str, str]
     if environ is None:
         env = os.environ
     else:
         env = environ
+    if hydrate_box_secrets:
+        apply_box_secrets_to_environ(env, secrets_path)
     keys: list[str] = []
     keys.extend(parse_typesafe_keys_blob(str(env.get(TYPESAFE_API_KEYS_ENV) or "")))
     for name in numbered_typesafe_key_env_names():
@@ -312,13 +326,7 @@ def load_typesafe_api_keys(
     keys = _dedupe_keys(keys)
     if keys:
         _sync_primary_key_env(keys, env)
-        return keys
-    if hydrate_box_secrets:
-        apply_box_secrets_to_environ(env, secrets_path)  # type: ignore[arg-type]
-        return load_typesafe_api_keys(
-            env, secrets_path=secrets_path, hydrate_box_secrets=False
-        )
-    return []
+    return keys
 
 
 def _sync_primary_key_env(keys: list[str], env: Mapping[str, str]) -> None:

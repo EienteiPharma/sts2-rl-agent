@@ -1,6 +1,7 @@
 """Jev non-combat policy: confidence, hp_pressure, error fallback, plus-card."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -537,6 +538,7 @@ def test_cloudflare_1010_retries_once(monkeypatch):
 
 def test_typesafe_key_pool_from_env_and_json():
     from sts2_env.eval.jev import (
+        box_secret_key_names,
         key_for_worker,
         load_typesafe_api_keys,
         parse_typesafe_keys_blob,
@@ -545,16 +547,24 @@ def test_typesafe_key_pool_from_env_and_json():
 
     assert parse_typesafe_keys_blob("a, b, a") == ["a", "b"]
     assert parse_typesafe_keys_blob('["x", "y", "x"]') == ["x", "y"]
+    assert box_secret_key_names() == (
+        "TYPESAFE_API_KEY",
+        "TYPESAFE_API_KEY_1",
+        "TYPESAFE_API_KEY_2",
+        "TYPESAFE_API_KEY_3",
+        "TYPESAFE_API_KEY_4",
+    )
     env = {
         "TYPESAFE_API_KEYS": "p1,p2",
         "TYPESAFE_API_KEY": "p1",
+        "TYPESAFE_API_KEY_1": "p4",
         "TYPESAFE_API_KEY_2": "p3",
     }
     keys = load_typesafe_api_keys(env, hydrate_box_secrets=False)
-    assert keys == ["p1", "p2", "p3"]
+    assert keys == ["p1", "p2", "p4", "p3"]
     assert key_for_worker(keys, 0) == "p1"
     assert key_for_worker(keys, 1) == "p2"
-    assert key_for_worker(keys, 3) == "p1"
+    assert key_for_worker(keys, 4) == "p1"
     assert warn_n_envs(4) is None
     assert warn_n_envs(2) is None
     assert "2-4" in (warn_n_envs(16) or "")
@@ -573,6 +583,32 @@ def test_typesafe_box_secrets_hydrate(tmp_path):
     assert keys == ["box1", "box2"]
     assert env["TYPESAFE_API_KEY"] == "box1"
     assert env["TYPESAFE_API_KEY_2"] == "box2"
+
+
+def test_box_secrets_key_1_to_4_with_empty_process_env(tmp_path):
+    from sts2_env.eval.jev import load_typesafe_api_keys
+
+    secrets = tmp_path / "box-secrets.json"
+    card = {
+        "TYPESAFE_API_KEY": "card0",
+        "TYPESAFE_API_KEY_1": "card1",
+        "TYPESAFE_API_KEY_2": "card2",
+        "TYPESAFE_API_KEY_3": "card3",
+        "TYPESAFE_API_KEY_4": "card4",
+    }
+    secrets.write_text(json.dumps({"card": card}) + "\n")
+    env: dict[str, str] = {}
+    keys = load_typesafe_api_keys(env, secrets_path=secrets)
+    assert keys == ["card0", "card1", "card2", "card3", "card4"]
+    for name, val in card.items():
+        assert env[name] == val
+    # already-exported primary wins; still pick up _1..4 from the file
+    env2 = {"TYPESAFE_API_KEY": "exported"}
+    keys2 = load_typesafe_api_keys(env2, secrets_path=secrets)
+    assert keys2[0] == "exported"
+    assert "card0" not in keys2
+    assert keys2[1:] == ["card1", "card2", "card3", "card4"]
+    assert env2["TYPESAFE_API_KEY"] == "exported"
 
 
 def test_pool_rotates_on_http_403(monkeypatch):

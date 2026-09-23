@@ -69,8 +69,9 @@ def ensure_typesafe_api_key(
 ) -> bool:
     """Ensure a TypeSafe key (or pool) is in the environment.
 
-    Prefer existing env; else box-secrets ``card``. Never prints/logs key values.
-    Returns True if at least one non-empty key is available.
+    Loads ``card.TYPESAFE_API_KEY`` plus ``card.TYPESAFE_API_KEY_1``..``_4``
+    from box-secrets; also accepts already-exported env names. Never prints
+    key values. Returns True if at least one non-empty key is available.
     """
     from sts2_env.eval.jev import load_typesafe_api_keys
 

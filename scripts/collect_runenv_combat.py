@@ -17,6 +17,8 @@ Usage:
         --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip
 
 Never writes into ``bh_v1``. Hang flags/bars unchanged.
+TypeSafe pool loads from box-secrets card.TYPESAFE_API_KEY + _1..4
+automatically (no user re-paste; process env need not be pre-injected).
 """
 
 from __future__ import annotations
@@ -167,7 +169,7 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
     print("  policy:    ", args.policy)
     print("  hang:      jev on / event off / neow off / start_with_neow")
     print("  allows_event:", flags.allows_event(), "allows_neow", flags.allows_neow())
-    print("  typesafe keys:", pool["typesafe_key_count"], "(values not printed)")
+    print("  typesafe keys:", pool["typesafe_key_count"], "(box-secrets auto-load; values not printed)")
     print()
     result = collect_parallel(
         out_path=out,

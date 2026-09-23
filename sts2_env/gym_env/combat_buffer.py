@@ -276,6 +276,7 @@ def collect_transitions(
 
 def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
     """Top-level multiprocessing target. Each worker is hang-protocol Jev."""
+    from sts2_env.eval.jev import load_typesafe_api_keys
     from sts2_env.gym_env.runenv_onpolicy_combat import RunEnvOnPolicyCombatEnv
 
     n_steps = int(payload["n_steps"])
@@ -285,6 +286,7 @@ def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
     shard = Path(payload["shard"])
     max_steps = int(payload.get("max_steps", 2000))
     rng = np.random.RandomState(seed + worker_id * 100003)
+    load_typesafe_api_keys()
 
     env = RunEnvOnPolicyCombatEnv(
         max_steps=max_steps,

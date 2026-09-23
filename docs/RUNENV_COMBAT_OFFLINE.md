@@ -18,29 +18,30 @@ See `docs/HANG_PROTOCOL_2026-09-22.md`.
 - Collector uses `RunEnvOnPolicyCombatEnv` / `choose_jev_noncombat` (same as online). Each `--n-envs` worker is still hang-protocol Jev.
 - First collect recipe: **`--n-envs 2–4`**, not 16.
 
-## TypeSafe key pool (optional)
+## TypeSafe key pool (box-secrets; no re-paste)
 
-Default is still one `TYPESAFE_API_KEY`. For parallel collect, Surplus can inject a **pool** so each worker has a key (round-robin: `keys[worker_id % len(keys)]`). On Cloudflare **1010** / HTTP **403** the client rotates to the next key and backs off ~1s. It does **not** replace MAP/CARD with random to buy fps.
+Surplus stores keys at `/home/box/agent-data/box-secrets.json`:
 
-**Do not paste keys into chat.** Inject only through env or box-secrets:
+- `card.TYPESAFE_API_KEY`
+- `card.TYPESAFE_API_KEY_1` … `card.TYPESAFE_API_KEY_4`
 
-1. **Cursor secret-request / cloud environment** — set secrets on the run so the process sees them. Never put values in the agent prompt.
-   - `TYPESAFE_API_KEY` (required for Jev)
-   - optional `TYPESAFE_API_KEY_2` … `TYPESAFE_API_KEY_16`
-   - and/or `TYPESAFE_API_KEYS` = comma-separated **or** JSON list (`["…","…"]`)
-2. **Box file** `/home/box/agent-data/box-secrets.json` `card` object, same names. Collector hydrates missing env from this file. Logs **count only**, never values.
+Process env is **not** assumed to be pre-injected. `collect_runenv_combat.py` / `LiveJevClient` / `ensure_typesafe_api_key` call `load_typesafe_api_keys()`, which reads those `card.*` fields, injects missing names into the process env for workers, then also accepts already-exported `TYPESAFE_API_KEY` / `TYPESAFE_API_KEY_N` / `TYPESAFE_API_KEYS` (exported names are not overwritten). Logs **count only**. Never print or paste key material into chat.
+
+On Cloudflare **1010** / HTTP **403** the client rotates to the next key and backs off ~1s. MAP/CARD stay Jev (not random). Round-robin: `keys[worker_id % len(keys)]`. First collect recipe: **`--n-envs 2–4`**.
 
 ```bash
-# Surplus box (keys already in env or box-secrets — do not echo them)
+# Surplus launch — no user re-paste. Pool loads from box-secrets automatically.
+python scripts/collect_runenv_combat.py --dry-run
+
 python scripts/collect_runenv_combat.py \
   --out output/runenv_combat_buffer/transitions.npz \
   --n-envs 4 --n-steps 50000 --policy model \
   --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip
 ```
 
-`--n-envs 4` with 2 keys round-robins. Prefer `n_envs <= key_count` when the pool is small. `--n-envs > 4` prints a warning; first recipe stays 2–4.
+`--n-envs 4` with fewer keys round-robins. `--n-envs > 4` prints a warning.
 
-Do **not** stop a running `combat_runenv_antiforget_v1` job to apply the pool. Online mix still defaults `--n-envs 1`. Pool is for collect (and a later mix restart if Surplus wants).
+Do **not** stop a running `combat_runenv_antiforget_v1` job to apply the pool. Online mix still defaults `--n-envs 1`.
 
 ## Buffer
 
