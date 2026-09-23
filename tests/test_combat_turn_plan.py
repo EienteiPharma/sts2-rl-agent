@@ -204,3 +204,54 @@ def test_eval_combat_suite_accepts_jev_turn():
     args = mod.parse_args(["--combat-policy", "jev-turn"])
     assert args.combat_policy == "jev-turn"
     assert mod.parse_args([]).combat_policy == "ppo"
+
+
+def test_jev_turn_plan_telemetry_hook_and_report_rates():
+    from sts2_env.eval.combat_jev import (
+        COMBAT_JEV_TURN_CATASTROPHE_REASONS,
+        CombatJevTelemetry,
+        FAILOPEN_ILLEGAL_PLAN,
+        FAILOPEN_TIMEOUT,
+    )
+    from sts2_env.eval.combat_turn_plan import record_jev_turn_plan_turn
+
+    tel = CombatJevTelemetry()
+    record_jev_turn_plan_turn(tel, fulfilled=True)
+    record_jev_turn_plan_turn(tel, fulfilled=False, catastrophe_reason=FAILOPEN_TIMEOUT)
+    record_jev_turn_plan_turn(tel, fulfilled=False, catastrophe_reason=FAILOPEN_ILLEGAL_PLAN)
+    record_jev_turn_plan_turn(tel, fulfilled=False)  # low_conf guardrail shape
+
+    report = tel.as_report(n_episodes=1)
+    assert report["turn_plan_turns"] == 4
+    assert report["turn_plan_fulfilled"] == 1
+    assert report["turn_plan_catastrophe_failopen"] == 2
+    assert report["jev_fulfilled_rate"] == 0.25
+    assert report["catastrophe_failopen_rate"] == 0.5
+    assert set(report["jev_turn_catastrophe_reason"]) == set(COMBAT_JEV_TURN_CATASTROPHE_REASONS)
+    assert report["jev_turn_catastrophe_reason"][FAILOPEN_TIMEOUT] == 1
+    assert report["jev_turn_catastrophe_reason"][FAILOPEN_ILLEGAL_PLAN] == 1
+
+    record_jev_turn_plan_turn(None, fulfilled=True)  # no-op
+
+
+def test_runner_illegal_plan_increments_catastrophe_telemetry():
+    from sts2_env.eval.combat_jev import CombatJevTelemetry, FAILOPEN_ILLEGAL_PLAN
+
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    tel = CombatJevTelemetry()
+    choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        _Ppo(),
+        adapter=_PlanAdapter("plan_not_in_list"),
+        combat_obs=obs,
+        env=env,
+        telemetry=tel,
+    )
+    env.close()
+    report = tel.as_report()
+    assert report["turn_plan_turns"] == 1
+    assert report["catastrophe_failopen_rate"] == 1.0
+    assert report["jev_turn_catastrophe_reason"][FAILOPEN_ILLEGAL_PLAN] == 1

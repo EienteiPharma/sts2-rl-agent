@@ -57,12 +57,22 @@ FAILOPEN_ERROR = "error"
 FAILOPEN_BAD_ID = "bad_id"
 FAILOPEN_LOW_CONF = "low_conf"
 FAILOPEN_EMPTY_LIST = "empty_list"
+FAILOPEN_ILLEGAL_PLAN = "illegal_plan"
+FAILOPEN_REPLAN_CAP = "replan_cap"
 COMBAT_JEV_FAILOPEN_REASONS = (
     FAILOPEN_TIMEOUT,
     FAILOPEN_ERROR,
     FAILOPEN_BAD_ID,
     FAILOPEN_LOW_CONF,
     FAILOPEN_EMPTY_LIST,
+)
+# ``--combat-policy jev-turn`` catastrophe fail-open only (not ``low_conf`` guardrail).
+COMBAT_JEV_TURN_CATASTROPHE_REASONS = (
+    FAILOPEN_TIMEOUT,
+    FAILOPEN_ERROR,
+    FAILOPEN_EMPTY_LIST,
+    FAILOPEN_ILLEGAL_PLAN,
+    FAILOPEN_REPLAN_CAP,
 )
 
 _KEY_POWERS = (
@@ -344,6 +354,12 @@ class CombatJevTelemetry:
     failopen_reason: dict[str, int] = field(
         default_factory=lambda: {k: 0 for k in COMBAT_JEV_FAILOPEN_REASONS}
     )
+    turn_plan_turns: int = 0
+    turn_plan_fulfilled: int = 0
+    turn_plan_catastrophe: int = 0
+    catastrophe_failopen_reason: dict[str, int] = field(
+        default_factory=lambda: {k: 0 for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS}
+    )
 
     def mark(self) -> tuple[int, int]:
         return (self.calls, self.fail_open)
@@ -356,11 +372,64 @@ class CombatJevTelemetry:
             key = fail_reason if fail_reason in self.failopen_reason else FAILOPEN_ERROR
             self.failopen_reason[key] = int(self.failopen_reason.get(key, 0)) + 1
 
+    def mark_turn_plan(self) -> tuple[int, int, int]:
+        return (self.turn_plan_turns, self.turn_plan_fulfilled, self.turn_plan_catastrophe)
+
+    def record_turn_plan_turn(
+        self,
+        *,
+        fulfilled: bool,
+        catastrophe_reason: str | None = None,
+    ) -> None:
+        """One ``jev-turn`` player turn (``--combat-policy jev-turn``).
+
+        ``catastrophe_reason`` must be in ``COMBAT_JEV_TURN_CATASTROPHE_REASONS``
+        (timeout/error/empty_list/illegal_plan/replan_cap). ``low_conf`` guardrail
+        is not catastrophe: pass ``fulfilled=False`` and ``catastrophe_reason=None``.
+        """
+        self.turn_plan_turns += 1
+        if catastrophe_reason is not None:
+            key = (
+                catastrophe_reason
+                if catastrophe_reason in self.catastrophe_failopen_reason
+                else FAILOPEN_ERROR
+            )
+            self.turn_plan_catastrophe += 1
+            self.catastrophe_failopen_reason[key] = int(
+                self.catastrophe_failopen_reason.get(key, 0)
+            ) + 1
+        elif fulfilled:
+            self.turn_plan_fulfilled += 1
+
+    def _turn_plan_report_rates(self) -> dict[str, Any]:
+        turns = int(self.turn_plan_turns)
+        fulfilled = int(self.turn_plan_fulfilled)
+        catastrophe = int(self.turn_plan_catastrophe)
+        return {
+            "turn_plan_turns": turns,
+            "turn_plan_fulfilled": fulfilled,
+            "turn_plan_catastrophe_failopen": catastrophe,
+            "jev_fulfilled_rate": round(fulfilled / turns, 4) if turns else 0.0,
+            "catastrophe_failopen_rate": round(catastrophe / turns, 4) if turns else 0.0,
+            "jev_turn_catastrophe_reason": {
+                k: int(self.catastrophe_failopen_reason.get(k, 0))
+                for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS
+            },
+        }
+
     def episode_fields(self, start: tuple[int, int]) -> dict[str, int]:
         c0, f0 = start
         return {
             "combat_jev_calls": self.calls - c0,
             "combat_jev_fail_open": self.fail_open - f0,
+        }
+
+    def episode_turn_plan_fields(self, start: tuple[int, int, int]) -> dict[str, int]:
+        t0, f0, c0 = start
+        return {
+            "turn_plan_turns": self.turn_plan_turns - t0,
+            "turn_plan_fulfilled": self.turn_plan_fulfilled - f0,
+            "turn_plan_catastrophe_failopen": self.turn_plan_catastrophe - c0,
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -370,6 +439,13 @@ class CombatJevTelemetry:
             "latencies_ms": list(self.latencies_ms),
             "failopen_reason": {
                 k: int(self.failopen_reason.get(k, 0)) for k in COMBAT_JEV_FAILOPEN_REASONS
+            },
+            "turn_plan_turns": int(self.turn_plan_turns),
+            "turn_plan_fulfilled": int(self.turn_plan_fulfilled),
+            "turn_plan_catastrophe": int(self.turn_plan_catastrophe),
+            "catastrophe_failopen_reason": {
+                k: int(self.catastrophe_failopen_reason.get(k, 0))
+                for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS
             },
         }
 
@@ -384,6 +460,12 @@ class CombatJevTelemetry:
         reasons = data.get("failopen_reason") or {}
         for k in COMBAT_JEV_FAILOPEN_REASONS:
             tel.failopen_reason[k] = int(reasons.get(k, 0) or 0)
+        tel.turn_plan_turns = int(data.get("turn_plan_turns") or 0)
+        tel.turn_plan_fulfilled = int(data.get("turn_plan_fulfilled") or 0)
+        tel.turn_plan_catastrophe = int(data.get("turn_plan_catastrophe") or 0)
+        cat = data.get("catastrophe_failopen_reason") or {}
+        for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS:
+            tel.catastrophe_failopen_reason[k] = int(cat.get(k, 0) or 0)
         return tel
 
     def merge(self, other: "CombatJevTelemetry") -> "CombatJevTelemetry":
@@ -394,6 +476,13 @@ class CombatJevTelemetry:
             self.failopen_reason[k] = int(self.failopen_reason.get(k, 0)) + int(
                 other.failopen_reason.get(k, 0)
             )
+        self.turn_plan_turns += int(other.turn_plan_turns)
+        self.turn_plan_fulfilled += int(other.turn_plan_fulfilled)
+        self.turn_plan_catastrophe += int(other.turn_plan_catastrophe)
+        for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS:
+            self.catastrophe_failopen_reason[k] = int(
+                self.catastrophe_failopen_reason.get(k, 0)
+            ) + int(other.catastrophe_failopen_reason.get(k, 0))
         return self
 
     def as_report(self, *, n_episodes: int = 0) -> dict[str, Any]:
@@ -417,12 +506,33 @@ class CombatJevTelemetry:
             "jev_failopen_reason": {
                 k: int(self.failopen_reason.get(k, 0)) for k in COMBAT_JEV_FAILOPEN_REASONS
             },
+            **self._turn_plan_report_rates(),
             "note": (
                 "Combat-Jev is an optional bypass (--combat-policy jev), not a "
                 "hang swap. Default remains ppo/bh_v1. Conf min "
-                f"{COMBAT_JEV_CONF_MIN}."
+                f"{COMBAT_JEV_CONF_MIN}. "
+                "jev-turn rates (jev_fulfilled_rate, catastrophe_failopen_rate) "
+                "apply when --combat-policy jev-turn records turn_plan_turns."
             ),
         }
+
+
+def _turn_plan_rates_from_rows(rows: list[dict]) -> dict[str, Any]:
+    turns = int(sum(int(r.get("turn_plan_turns") or 0) for r in rows))
+    fulfilled = int(sum(int(r.get("turn_plan_fulfilled") or 0) for r in rows))
+    catastrophe = int(sum(int(r.get("turn_plan_catastrophe_failopen") or 0) for r in rows))
+    reasons = {k: 0 for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS}
+    for r in rows:
+        for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS:
+            reasons[k] += int(r.get(f"turn_plan_catastrophe_{k}") or 0)
+    return {
+        "turn_plan_turns": turns,
+        "turn_plan_fulfilled": fulfilled,
+        "turn_plan_catastrophe_failopen": catastrophe,
+        "jev_fulfilled_rate": round(fulfilled / turns, 4) if turns else 0.0,
+        "catastrophe_failopen_rate": round(catastrophe / turns, 4) if turns else 0.0,
+        "jev_turn_catastrophe_reason": reasons,
+    }
 
 
 def summarize_combat_jev(
@@ -447,6 +557,7 @@ def summarize_combat_jev(
         "latency_ms": {"p50": None, "p95": None, "n": 0, "mean": None},
         "combat_jev_calls_mean": round(calls / n_eps, 4) if n_eps else 0.0,
         "jev_failopen_reason": reasons,
+        **_turn_plan_rates_from_rows(rows),
         "note": (
             "Combat-Jev is an optional bypass (--combat-policy jev), not a "
             "hang swap. Default remains ppo/bh_v1."
@@ -554,11 +665,14 @@ __all__ = [
     "COMBAT_JEV_HAND_TRUNCATE",
     "COMBAT_JEV_INSTRUCTIONS",
     "COMBAT_JEV_MONSTER_TRUNCATE",
+    "COMBAT_JEV_TURN_CATASTROPHE_REASONS",
     "CombatJevTelemetry",
     "FAILOPEN_BAD_ID",
     "FAILOPEN_EMPTY_LIST",
     "FAILOPEN_ERROR",
+    "FAILOPEN_ILLEGAL_PLAN",
     "FAILOPEN_LOW_CONF",
+    "FAILOPEN_REPLAN_CAP",
     "FAILOPEN_TIMEOUT",
     "choose_combat_step",
     "classify_jev_error",

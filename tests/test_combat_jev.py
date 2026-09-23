@@ -305,6 +305,9 @@ def test_compressed_state_truncates_and_report_schema():
         FAILOPEN_LOW_CONF,
         FAILOPEN_EMPTY_LIST,
     }
+    assert report["jev_fulfilled_rate"] == 0.0
+    assert report["catastrophe_failopen_rate"] == 0.0
+    assert report["turn_plan_turns"] == 0
 
 
 def test_obs_width_stays_combat():
@@ -337,6 +340,14 @@ def test_combat_jev_telemetry_merge_and_lazy_eval_attr():
     report = merged.as_report(n_episodes=3)
     assert report["jev_calls"] == 3
     assert report["jev_failopen"] == 2
+
+    merged.record_turn_plan_turn(fulfilled=True)
+    merged.record_turn_plan_turn(fulfilled=False, catastrophe_reason=FAILOPEN_TIMEOUT)
+    merged.record_turn_plan_turn(fulfilled=True)
+    roundtrip = CombatJevTelemetry.from_dict(merged.to_dict())
+    assert roundtrip.turn_plan_turns == 3
+    assert roundtrip.turn_plan_fulfilled == 2
+    assert roundtrip.turn_plan_catastrophe == 1
 
     import sts2_env.eval as eval_pkg
 

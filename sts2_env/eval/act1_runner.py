@@ -196,6 +196,7 @@ def choose_hierarchical_action(
             combat_obs=combat_obs,
             env=env,
             owner=owner,
+            telemetry=combat_jev_telemetry,
         )
         local = max(0, min(int(local), _COMBAT_SIZE - 1))
         return _COMBAT_START + local, shadow

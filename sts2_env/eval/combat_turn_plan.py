@@ -352,6 +352,7 @@ class TurnPlanRuntime:
     step_index: int = 0
     intent_snapshot: dict[int, str] | None = None
     last_shadow: dict[str, Any] = field(default_factory=dict)
+    telemetry_logged_turn: int = -1
 
     def reset_player_turn(self, turn_id: int) -> None:
         self.player_turn_id = int(turn_id)
@@ -414,6 +415,43 @@ def _fail_open_bh_v1(
     from sts2_env.eval.combat_jev import fail_open_local
 
     return int(fail_open_local(combat_model, combat_obs, combat_mask, rng))
+
+
+def catastrophe_reason_for_telemetry(reason: str) -> str:
+    """Map turn-plan catastrophe codes to ``CombatJevTelemetry`` reason keys."""
+    from sts2_env.eval.combat_jev import (
+        FAILOPEN_EMPTY_LIST,
+        FAILOPEN_ERROR,
+        FAILOPEN_ILLEGAL_PLAN,
+        FAILOPEN_REPLAN_CAP,
+        FAILOPEN_TIMEOUT,
+    )
+
+    mapping = {
+        CATA_FAILOPEN_TIMEOUT: FAILOPEN_TIMEOUT,
+        CATA_FAILOPEN_ERROR: FAILOPEN_ERROR,
+        CATA_FAILOPEN_EMPTY: FAILOPEN_EMPTY_LIST,
+        CATA_FAILOPEN_ILLEGAL_PLAN: FAILOPEN_ILLEGAL_PLAN,
+        CATA_FAILOPEN_CAP: FAILOPEN_REPLAN_CAP,
+    }
+    return mapping.get(reason, FAILOPEN_ERROR)
+
+
+def _log_turn_plan_telemetry(
+    session: TurnPlanRuntime,
+    telemetry: Any,
+    *,
+    fulfilled: bool,
+    catastrophe_reason: str | None = None,
+) -> None:
+    if session.telemetry_logged_turn == session.player_turn_id:
+        return
+    record_jev_turn_plan_turn(
+        telemetry,
+        fulfilled=fulfilled,
+        catastrophe_reason=catastrophe_reason,
+    )
+    session.telemetry_logged_turn = session.player_turn_id
 
 
 def _catastrophe_fail_open(
@@ -485,6 +523,7 @@ def choose_combat_turn_plan_action(
     owner: Creature | None = None,
     prompt_config: TurnPlanPromptConfig | None = None,
     runtime: TurnPlanRuntime | None = None,
+    telemetry: Any = None,
 ) -> tuple[int, dict[str, Any]]:
     """Execute turn-plan path: pick ``plan_id``, run steps, replan on triggers.
 
@@ -502,6 +541,10 @@ def choose_combat_turn_plan_action(
     cfg = prompt_config or TurnPlanPromptConfig()
     owner_creature = owner or combat.primary_player
 
+    turn_id = player_turn_id(combat)
+    if session.player_turn_id != turn_id:
+        session.reset_player_turn(turn_id)
+
     if combat.pending_choice is not None:
         session.clear_plan()
         local = _fail_open_bh_v1(combat_model, combat_obs, mask, rng)
@@ -511,12 +554,9 @@ def choose_combat_turn_plan_action(
             "turn_plan_failopen": True,
             "executed_id": semantic_key_for_gym_action_from_obs(local, mask),
         }
+        _log_turn_plan_telemetry(session, telemetry, fulfilled=False)
         session.last_shadow = shadow
         return local, shadow
-
-    turn_id = player_turn_id(combat)
-    if session.player_turn_id != turn_id:
-        session.reset_player_turn(turn_id)
 
     loops = 0
     while loops < 32:
@@ -525,6 +565,12 @@ def choose_combat_turn_plan_action(
             session.clear_plan()
             local, shadow = _catastrophe_fail_open(
                 combat_model, combat_obs, mask, rng, CATA_FAILOPEN_CAP
+            )
+            _log_turn_plan_telemetry(
+                session,
+                telemetry,
+                fulfilled=False,
+                catastrophe_reason=catastrophe_reason_for_telemetry(CATA_FAILOPEN_CAP),
             )
             session.last_shadow = shadow
             return local, shadow
@@ -548,7 +594,10 @@ def choose_combat_turn_plan_action(
                 session.clear_plan()
                 continue
             session.step_index += 1
-            if key == SEMANTIC_END_TURN or session.step_index >= len(session.plan.steps):
+            plan_completed = key == SEMANTIC_END_TURN or session.step_index >= len(
+                session.plan.steps
+            )
+            if plan_completed:
                 session.clear_plan()
             shadow = {
                 "shadow_decision": CHOICE_COMBAT_TURN_PLAN,
@@ -556,6 +605,8 @@ def choose_combat_turn_plan_action(
                 "turn_plan_failopen": False,
                 "executed_id": key,
             }
+            if plan_completed:
+                _log_turn_plan_telemetry(session, telemetry, fulfilled=True)
             session.last_shadow = shadow
             return int(action), shadow
 
@@ -568,6 +619,12 @@ def choose_combat_turn_plan_action(
             local, shadow = _catastrophe_fail_open(
                 combat_model, combat_obs, mask, rng, err
             )
+            _log_turn_plan_telemetry(
+                session,
+                telemetry,
+                fulfilled=False,
+                catastrophe_reason=catastrophe_reason_for_telemetry(err),
+            )
             session.last_shadow = shadow
             return local, shadow
         assert picked is not None
@@ -579,8 +636,33 @@ def choose_combat_turn_plan_action(
     local, shadow = _catastrophe_fail_open(
         combat_model, combat_obs, mask, rng, CATA_FAILOPEN_ERROR
     )
+    _log_turn_plan_telemetry(
+        session,
+        telemetry,
+        fulfilled=False,
+        catastrophe_reason=catastrophe_reason_for_telemetry(CATA_FAILOPEN_ERROR),
+    )
     session.last_shadow = shadow
     return local, shadow
+
+
+def record_jev_turn_plan_turn(
+    telemetry: Any,
+    *,
+    fulfilled: bool,
+    catastrophe_reason: str | None = None,
+) -> None:
+    """Telemetry hook for ``--combat-policy jev-turn`` (tip② loop calls each turn).
+
+    Pass ``catastrophe_reason`` only for timeout/error/empty_list/illegal_plan/
+    replan_cap fail-open. ``low_conf`` guardrail: ``fulfilled=False``,
+    ``catastrophe_reason=None``.
+    """
+    if telemetry is None:
+        return
+    record = getattr(telemetry, "record_turn_plan_turn", None)
+    if callable(record):
+        record(fulfilled=fulfilled, catastrophe_reason=catastrophe_reason)
 
 
 __all__ = [
@@ -601,10 +683,12 @@ __all__ = [
     "TurnPlanRuntime",
     "build_combat_turn_plan_choice_question",
     "build_turn_plan_jev_state",
+    "catastrophe_reason_for_telemetry",
     "choose_combat_turn_plan_action",
     "enumerate_candidate_plans",
     "gym_action_for_semantic_key",
     "jev_turn_plan_questions",
+    "record_jev_turn_plan_turn",
     "legal_semantic_keys",
     "living_enemy_intent_snapshot",
     "runtime_for_env",

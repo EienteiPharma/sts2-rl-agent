@@ -158,6 +158,18 @@ def empty_combat_jev_report(*, n_episodes: int = 0) -> dict[str, Any]:
             "low_conf": 0,
             "empty_list": 0,
         },
+        "turn_plan_turns": 0,
+        "turn_plan_fulfilled": 0,
+        "turn_plan_catastrophe_failopen": 0,
+        "jev_fulfilled_rate": 0.0,
+        "catastrophe_failopen_rate": 0.0,
+        "jev_turn_catastrophe_reason": {
+            "timeout": 0,
+            "error": 0,
+            "empty_list": 0,
+            "illegal_plan": 0,
+            "replan_cap": 0,
+        },
         "note": (
             "Combat-Jev is an optional bypass (--combat-policy jev), not a "
             "hang swap. Default remains ppo/bh_v1. Conf min 0.35."
@@ -224,11 +236,13 @@ def main(argv: list[str] | None = None) -> int:
 
         combat_jev_summary = telemetry
     elif workers == 1 and combat_policy == "jev-turn":
+        from sts2_env.eval.combat_jev import CombatJevTelemetry
         from sts2_env.eval.combat_turn_plan import choose_combat_turn_plan_action
         from sts2_env.eval.jev_client import build_jev_adapter
 
         adapter = build_jev_adapter(enabled=True)
         rng = np.random.RandomState(0)
+        telemetry = CombatJevTelemetry()
 
         def choose_fn(env, obs, mask):
             combat = getattr(env, "combat", None)
@@ -242,8 +256,11 @@ def main(argv: list[str] | None = None) -> int:
                 adapter=adapter,
                 combat_obs=obs,
                 env=env,
+                telemetry=telemetry,
             )
             return int(local)
+
+        combat_jev_summary = telemetry
 
     summary = run_hold_smoke(
         predict_fn,
@@ -258,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     n_fights = int(summary["overall"]["n"])
     if combat_jev_summary is not None:
         combat_jev_payload = combat_jev_summary.as_report(n_episodes=n_fights)
-    elif combat_policy == "jev" and summary.get("combat_jev_telemetry"):
+    elif combat_policy in ("jev", "jev-turn") and summary.get("combat_jev_telemetry"):
         from sts2_env.eval.combat_jev import CombatJevTelemetry
 
         combat_jev_payload = CombatJevTelemetry.from_dict(

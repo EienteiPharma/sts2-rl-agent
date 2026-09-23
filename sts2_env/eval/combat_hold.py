@@ -338,9 +338,10 @@ def hold_eval_worker(payload: dict[str, Any]) -> dict[str, Any]:
                 )
                 return int(local)
         else:
+            from sts2_env.eval.combat_jev import CombatJevTelemetry
             from sts2_env.eval.combat_turn_plan import choose_combat_turn_plan_action
 
-            telemetry = None
+            telemetry = CombatJevTelemetry()
 
             def choose_fn(env, obs, mask):
                 combat = getattr(env, "combat", None)
@@ -354,6 +355,7 @@ def hold_eval_worker(payload: dict[str, Any]) -> dict[str, Any]:
                     adapter=adapter,
                     combat_obs=obs,
                     env=env,
+                    telemetry=telemetry,
                 )
                 return int(local)
 
