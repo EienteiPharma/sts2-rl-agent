@@ -613,3 +613,93 @@ def test_jev_on_never_enters_combat_and_still_acts():
     assert saw_noncombat_error
     assert model.seen_widths
     assert set(model.seen_widths) == {OBS_SIZE}
+
+
+def test_act1_eval_layering_split_parity():
+    """Suite/runner/metrics split re-exports match the thin CLI and eval package."""
+    import sts2_env.eval as eval_pkg
+    import sts2_env.eval.act1_metrics as metrics_mod
+    import sts2_env.eval.act1_runner as runner_mod
+    import sts2_env.eval.act1_suite as suite_mod
+
+    assert suite_mod.SEED_START == 200000
+    assert suite_mod.SEED_COUNT == 50
+    assert suite_mod.SEEDS == list(range(200000, 200050))
+    assert suite_mod.PROTOCOL_ID == "act1_runenv_eval_protocol.md LOCKED 2026-09-22"
+    assert suite_mod.HUNG_COMBAT_ZIP == (
+        "/workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip"
+    )
+    assert suite_mod.JEV_SHADOW_SKIPPED == "skipped"
+    assert suite_mod.JEV_SHADOW_STUB == "stub"
+    assert metrics_mod._summarize is metrics_mod.summarize_act1_rows
+
+    for name in suite_mod.__all__:
+        assert getattr(eval_mod, name) is getattr(suite_mod, name)
+        assert getattr(eval_pkg, name) is getattr(suite_mod, name)
+
+    for name in runner_mod.__all__:
+        assert getattr(eval_mod, name) is getattr(runner_mod, name)
+        assert getattr(eval_pkg, name) is getattr(runner_mod, name)
+
+    for name in metrics_mod.__all__:
+        assert getattr(eval_mod, name) is getattr(metrics_mod, name)
+        assert getattr(eval_pkg, name) is getattr(metrics_mod, name)
+
+    args = eval_mod.parse_args([])
+    assert args.policy == "random"
+    assert args.model == ""
+    assert args.combat_model == ""
+    assert args.jev == "off"
+    assert args.strategic is None
+    assert args.jev_event == "off"
+    assert args.jev_phases == "map,rest,card"
+    assert args.jev_neow == "off"
+    assert args.map_lowhp == "on"
+    assert args.map_lowhp_hard == "off"
+    assert args.map_lowhp_soft_b == "off"
+    assert args.n == suite_mod.SEED_COUNT
+    assert args.start_with_neow is False
+    assert args.out == "/workspace/sts2-sim/evals/act1_runenv_latest.json"
+    assert args.max_steps == 2000
+
+    empty = metrics_mod.summarize_act1_rows([])
+    assert empty["act1_clear_rate"] == 0.0
+    assert empty["n"] == 0
+    rows = [
+        {
+            "act1_clear": True,
+            "full_run_win": False,
+            "truncated": False,
+            "floor": 17,
+            "hp": 40,
+            "map_lowhp_hard_n": 0,
+            "map_lowhp_soft_b_n": 0,
+            "event_jev_used_n": 0,
+            "event_safe_fallback_n": 0,
+            "event_low_conf_random_n": 0,
+            "event_options_empty_n": 0,
+            "event_off_random_n": 0,
+            "potion_or_relic_safe_n": 0,
+            "potion_or_relic_random_n": 0,
+        }
+    ]
+    summary = metrics_mod.build_report(
+        policy="random",
+        model_path="",
+        combat_model_path="",
+        rows=rows,
+        elapsed_s=0.0,
+    )
+    assert summary["protocol"] == suite_mod.PROTOCOL_ID
+    assert summary["seeds"]["start"] == 200000
+    assert summary["summary"]["act1_clear_rate"] == 1.0
+    for key in (
+        "act1_clear_rate",
+        "full_run_win_rate",
+        "trunc_rate",
+        "map_lowhp_hard_n",
+        "map_lowhp_soft_b_n",
+        "event_safe_fallback_n",
+        "potion_or_relic_safe_n",
+    ):
+        assert key in summary["summary"]
