@@ -170,7 +170,7 @@ Closes damaging random holes in non-combat choices:
 
 ## Soft B: MAP elite/Boss low-HP soft bias (2026-09-23)
 
-- Under `hp_pressure >= 2.0`, if an elite or Boss is ahead on the fork, uncertain/error decisions soft-prefer safe shop/rest nodes (`map_lowhp_soft_b`).
+- Under `hp_pressure >= 1.5`, if an elite or Boss is ahead within 4 floors, uncertain/error decisions soft-prefer safe shop/rest nodes or non-danger forks (`map_lowhp_soft_b`).
 - Controlled by `--map-lowhp-soft-b on|off` (default **`on`**; killable via `--map-lowhp-soft-b off`).
 - Hard-select remains opt-in **off** (`--map-lowhp-hard off`).
 - Counted in eval summary as `map_lowhp_soft_b_n` and `map_lowhp_soft_b_eps`.
