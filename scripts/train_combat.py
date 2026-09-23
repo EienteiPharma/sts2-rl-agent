@@ -125,15 +125,23 @@ def assert_neow_early_labels(fixtures: list[dict[str, Any]]) -> None:
             )
 
 
-def _raw_id_entries(raw: Any, *, dict_keys: tuple[str, ...], what: str) -> list[str] | None:
-    """Parse a fixture relics/potions list. None = key omitted (not empty)."""
+def _raw_id_entries(
+    raw: Any,
+    *,
+    dict_keys: tuple[str, ...],
+    what: str,
+    keep_none: bool = False,
+) -> list[str | None] | None:
+    """Parse a fixture relics/potions list. None return = key omitted (not empty)."""
     if raw is None:
         return None
     if not isinstance(raw, (list, tuple)):
         raise SystemExit(f"fixture {what} must be a list")
-    out: list[str] = []
+    out: list[str | None] = []
     for entry in raw:
         if entry is None:
+            if keep_none:
+                out.append(None)
             continue
         if isinstance(entry, dict):
             name = None
@@ -161,12 +169,15 @@ def coerce_fixture_relic_ids(names: list[str]) -> list[str]:
     return relics
 
 
-def coerce_fixture_potions(names: list[str]):
+def coerce_fixture_potions(names: list[str | None]):
     import sts2_env.potions  # noqa: F401  # register models + effects
     from sts2_env.potions.base import PotionInstance, all_potion_models, create_potion, get_potion_model
 
-    potions: list[PotionInstance] = []
+    potions: list[PotionInstance | None] = []
     for i, name in enumerate(names):
+        if name is None:
+            potions.append(None)
+            continue
         pid = name
         if get_potion_model(pid) is None:
             camel = "".join(part.capitalize() for part in pid.replace("-", "_").split("_") if part)
@@ -234,6 +245,7 @@ def materialize_fixture(fixture: dict[str, Any], *, suite: str | None = None) ->
         fixture.get("potions"),
         dict_keys=("potion_id", "id", "name"),
         what="potions",
+        keep_none=True,
     )
     if potion_names is not None:
         spec["potions"] = coerce_fixture_potions(potion_names)

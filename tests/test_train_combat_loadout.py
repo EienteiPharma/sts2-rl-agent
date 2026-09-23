@@ -104,8 +104,9 @@ def test_mix_neow_v1_interleaves_fifty_fifty():
     assert suites[1::2] == ["loadout_v1"] * 10
     v1 = train_mod.load_loadout_v1_fixtures()
     assert len(v1) == 50
-    assert all("loadout_v1" in str(fx["label"]) for fx in v1)
-    assert all(not str(fx["label"]).startswith("Neow+early") for fx in v1)
+    tags = [str(fx.get("label") or fx.get("id") or "") for fx in v1]
+    assert all("loadout_v1" in tag for tag in tags)
+    assert all(not tag.startswith("Neow+early") for tag in tags)
 
 
 def test_loadout_v1_materializes():
@@ -123,7 +124,6 @@ def test_loadout_v1_materializes():
 
 def test_materialize_hold_fixtures_and_id_key_upgraded():
     from sts2_env.core.enums import CardId
-    from sts2_env.eval.combat_hold import HOLD_DEFAULT_RELICS
 
     root = Path(__file__).resolve().parents[1] / "scripts" / "fixtures" / "loadout_v1"
     for stem in ("loadout_v1_01", "loadout_v1_02", "loadout_v1_03"):
@@ -133,7 +133,8 @@ def test_materialize_hold_fixtures_and_id_key_upgraded():
         assert spec["deck"]
         assert spec["hp"] > 0
         assert all(c.card_id in CardId for c in spec["deck"])
-        assert spec["relics"] == list(HOLD_DEFAULT_RELICS)
+        assert spec["relics"]
+        assert spec["potions"]
     spec = train_mod.materialize_fixture(
         {
             "hp": 50,
@@ -158,6 +159,68 @@ def test_materialize_hold_fixtures_and_id_key_upgraded():
         train_mod.materialize_fixture(
             {"hp": 50, "max_hp": 80, "deck": [{"upgraded": True}]}
         )
+
+
+def test_hang_hold_fixtures_keep_distinct_relics_and_potions():
+    """Hang-era 01/02/03 must not be homogenized to Shuriken-only."""
+    from sts2_env.eval.combat_hold import apply_hold_relics, options_from_hold_fixture
+    from sts2_env.relics.base import RelicId
+
+    root = Path(__file__).resolve().parents[1] / "scripts" / "fixtures" / "loadout_v1"
+    fx01, fx02, fx03 = [
+        train_mod.load_json_fixtures([root / f"{stem}.json"])[0]
+        for stem in ("loadout_v1_01", "loadout_v1_02", "loadout_v1_03")
+    ]
+    assert fx01["hp"] == 58
+    assert fx01["relics"] == ["BURNING_BLOOD", "SHURIKEN"]
+    assert fx01["potions"] == ["FirePotion", "AttackPotion", None]
+    assert fx02["relics"] == ["BURNING_BLOOD", "BAG_OF_MARBLES"]
+    assert fx02["potions"] == ["ExplosiveAmpoule", "BlockPotion", None]
+    assert fx03["relics"] == ["BURNING_BLOOD", "VAJRA"]
+    assert fx03["potions"] == ["StrengthPotion", "FlexPotion", None]
+
+    spec02 = train_mod.materialize_fixture(fx02, suite="loadout_v1")
+    assert spec02["relics"] == ["BURNING_BLOOD", "BAG_OF_MARBLES"]
+    assert apply_hold_relics(dict(spec02), fixture=fx02)["relics"] == [
+        "BURNING_BLOOD",
+        "BAG_OF_MARBLES",
+    ]
+    spec01 = train_mod.materialize_fixture(fx01, suite="loadout_v1")
+    assert [p.potion_id if p else None for p in spec01["potions"]] == [
+        "FirePotion",
+        "AttackPotion",
+        None,
+    ]
+    spec03 = train_mod.materialize_fixture(fx03, suite="loadout_v1")
+    assert "VAJRA" in spec03["relics"]
+
+    env = STS2CombatEnv()
+    env.reset(seed=40000, options=options_from_hold_fixture(fx01))
+    assert env.combat is not None
+    ids01 = {r.relic_id for r in env.combat.relics}
+    pots01 = [p.potion_id if p else None for p in env.combat.potions]
+    assert RelicId.SHURIKEN in ids01
+    assert "FirePotion" in pots01
+    env.close()
+
+    env = STS2CombatEnv()
+    env.reset(seed=41000, options=options_from_hold_fixture(fx02))
+    assert env.combat is not None
+    ids02 = {r.relic_id for r in env.combat.relics}
+    pots02 = [p.potion_id if p else None for p in env.combat.potions]
+    assert RelicId.BAG_OF_MARBLES in ids02
+    assert RelicId.SHURIKEN not in ids02
+    assert "ExplosiveAmpoule" in pots02
+    env.close()
+
+    env = STS2CombatEnv()
+    env.reset(seed=42000, options=options_from_hold_fixture(fx03))
+    assert env.combat is not None
+    ids03 = {r.relic_id for r in env.combat.relics}
+    pots03 = [p.potion_id if p else None for p in env.combat.potions]
+    assert RelicId.VAJRA in ids03
+    assert "StrengthPotion" in pots03
+    env.close()
 
 
 def test_materialize_keeps_relics_and_potions_env_applies():
@@ -212,6 +275,10 @@ def test_materialize_keeps_relics_and_potions_env_applies():
     )
     assert "relics" not in omitted
     assert apply_hold_relics(dict(omitted))["relics"] == list(HOLD_DEFAULT_RELICS)
+    locked_empty = {"hp": 50, "max_hp": 80, "deck": ["BASH"], "relics": []}
+    empty_spec = train_mod.materialize_fixture(locked_empty, suite="loadout_v1")
+    assert empty_spec["relics"] == []
+    assert apply_hold_relics(dict(empty_spec), fixture=locked_empty)["relics"] == []
     with pytest.raises(SystemExit, match="unknown relic"):
         train_mod.materialize_fixture(
             {

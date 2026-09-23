@@ -189,7 +189,7 @@ Combat obs is 181 (obs_v1, full `IntentType` one-hot). RunEnv obs is 201. `--pol
 
 ### Evaluate loadout_v1 HOLD (locked combat suite)
 
-Hang table (2026-09-22 `bh_v1`, n_eps=20): **74.2 / 98.9 / Boss 49.4**. Dual gate is overall ≥70 / Boss ≥40 **on this protocol** (fixtures 01–03, enc 16–21, relic/potion apply). See [docs/HOLD_PROTOCOL.md](docs/HOLD_PROTOCOL.md).
+Hang table (2026-09-22 `bh_v1`, n_eps=20): **74.2 / 98.9 / Boss 49.4**. Dual gate is overall ≥70 / Boss ≥40 **on this protocol** (hang-era fixtures 01–03 with per-fixture relics/potions, enc 16–21). See [docs/HOLD_PROTOCOL.md](docs/HOLD_PROTOCOL.md).
 
 ```bash
 PYTHONPATH=. python scripts/eval_combat_suite.py \

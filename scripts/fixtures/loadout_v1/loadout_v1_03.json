@@ -1,73 +1,41 @@
 {
-  "locked": true,
-  "id": 3,
-  "label": "loadout_v1 mid-act combat deck (not Neow+early)",
-  "source": "loadout_v1 combat suite",
+  "id": "loadout_v1_03",
+  "character": "Ironclad",
+  "act": 1,
+  "stage": "mid_strength",
+  "status": "LOCKED",
+  "hp": 52,
   "max_hp": 80,
-  "snapshot_hp": 76,
-  "hp": 76,
-  "hp_synth": false,
-  "relics": ["BURNING_BLOOD", "SHURIKEN"],
   "deck": [
+    "STRIKE_IRONCLAD",
+    "STRIKE_IRONCLAD",
+    "STRIKE_IRONCLAD",
+    "DEFEND_IRONCLAD",
+    "DEFEND_IRONCLAD",
+    "DEFEND_IRONCLAD",
+    "BASH",
+    "ANGER",
     {
-      "card_id": "STRIKE_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
+      "id": "INFLAME",
+      "upgraded": true
     },
-    {
-      "card_id": "STRIKE_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "STRIKE_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "STRIKE_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "DEFEND_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "DEFEND_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "DEFEND_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "BASH",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "POMMEL_STRIKE",
-      "upgraded": false,
-      "rarity": "COMMON"
-    },
-    {
-      "card_id": "BODY_SLAM",
-      "upgraded": false,
-      "rarity": "COMMON"
-    },
-    {
-      "card_id": "ARMAMENTS",
-      "upgraded": false,
-      "rarity": "COMMON"
-    },
-    {
-      "card_id": "THUNDERCLAP",
-      "upgraded": false,
-      "rarity": "COMMON"
-    }
+    "UPPERCUT",
+    "HEADBUTT",
+    "BODY_SLAM",
+    "IRON_WAVE",
+    "SHRUG_IT_OFF"
+  ],
+  "relics": [
+    "BURNING_BLOOD",
+    "VAJRA"
+  ],
+  "potions": [
+    "StrengthPotion",
+    "FlexPotion",
+    null
+  ],
+  "notes": "Retained strength line (from v0_02). Inflame+ = smith. Still weak vs Slippery; kept per lab brief.",
+  "wiki_refs": [
+    "docs/loadout_v0_card_upgrade_verify.md Inflame/Uppercut"
   ]
 }

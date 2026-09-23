@@ -3,10 +3,10 @@
 Locked protocol: docs/HOLD_PROTOCOL.md
 
 Hang 2026-09-22 table on ``bh_v1`` (n_eps=20): overall 74.2 / elite 98.9 / Boss 49.4.
-That table used ``eval_combat_suite.py --suite loadout_v1`` with fixture relics
-(BURNING_BLOOD, SHURIKEN) and potions applied via reset options. A later
-materialize path dropped those keys, so 0-step HOLD on the same zip collapsed
-(39.4 / 78.9 / Boss 0.0). This module is the aligned runner.
+That table used ``eval_combat_suite.py --suite loadout_v1`` with the LOCKED
+per-fixture relics/potions (01 Shuriken+Fire/Attack, 02 Bag of Marbles+Explosive/Block,
+03 Vajra+Strength/Flex). Do not homogenize those three. Default relics apply
+**only** when a fixture omits the ``relics`` key.
 
 Not a hang-protocol Act1 RunEnv eval. Dual gates still ≥70 / Boss≥40 **on this
 protocol**. Hang zip stays ``bh_v1``. Buffer train stays frozen.
@@ -28,16 +28,16 @@ HOLD_FIXTURE_DIR = (
 )
 HOLD_SEED_BASE = 40000
 HOLD_SEED_FORMULA = "40000+fix*1000+enc*100+ep"
-# Hang-era Ironclad mid-act HOLD fixtures included starter + Shuriken. Applied
-# when the JSON omits ``relics`` so box-stripped copies still match the table.
+# Fallback only when a fixture omits the relics key. LOCKED HOLD 01–03 each
+# have their own relics/potions — never overwrite those with this tuple.
 HOLD_DEFAULT_RELICS = ("BURNING_BLOOD", "SHURIKEN")
 HANG_HOLD_TABLE = {
     "date": "2026-09-22",
     "zip": "combat_ppo_obs_v1_bh_v1",
     "n_eps": 20,
-    "overall": 0.742,
-    "elite": 0.989,
-    "boss": 0.494,
+    "overall": 0.7417,
+    "elite": 0.9889,
+    "boss": 0.4944,
     "summary": "evals/obs_v1_bh_v1_loadout_v1_n20.summary.json",
 }
 HUNG_COMBAT_ZIP = (
@@ -135,11 +135,16 @@ def _train_combat_mod():
     return mod
 
 
-def apply_hold_relics(spec: dict[str, Any]) -> dict[str, Any]:
-    """Keep fixture relics when present; else hang reconstruction defaults."""
-    relics = spec.get("relics")
-    if relics:
-        spec["relics"] = list(relics)
+def apply_hold_relics(
+    spec: dict[str, Any],
+    fixture: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Default relics only when the fixture omitted the ``relics`` key.
+
+    Never overwrite LOCKED fixture relics or potions.
+    """
+    source = fixture if fixture is not None else spec
+    if "relics" in source:
         return spec
     spec["relics"] = list(HOLD_DEFAULT_RELICS)
     spec["relics_defaulted"] = True
@@ -149,7 +154,7 @@ def apply_hold_relics(spec: dict[str, Any]) -> dict[str, Any]:
 def _materialize(fx: dict[str, Any]) -> dict[str, Any]:
     mod = _train_combat_mod()
     spec = mod.materialize_fixture(fx, suite="loadout_v1")
-    return apply_hold_relics(spec)
+    return apply_hold_relics(spec, fixture=fx)
 
 
 def options_from_hold_fixture(fx: dict[str, Any]) -> dict[str, Any]:
@@ -176,7 +181,10 @@ def hold_protocol_meta(*, n_eps: int) -> dict[str, Any]:
         "n_eps": int(n_eps),
         "n_jobs": 3 * len(HOLD_ENC_IDS) * int(n_eps),
         "default_relics": list(HOLD_DEFAULT_RELICS),
-        "relics": "fixture relics/potions applied via reset options; omitted relics → HOLD_DEFAULT_RELICS",
+        "relics": (
+            "LOCKED fixture relics/potions applied via reset options; "
+            "omitted relics key only → HOLD_DEFAULT_RELICS (do not overwrite 01–03)"
+        ),
         "gate": {"overall_min": HOLD_OVERALL_MIN, "boss_min": HOLD_BOSS_MIN},
         "hang_table": dict(HANG_HOLD_TABLE),
         "zip": "combat_ppo_obs_v1_bh_v1",

@@ -1,88 +1,42 @@
 {
-  "locked": true,
-  "id": 2,
-  "label": "loadout_v1 mid-act combat deck (not Neow+early)",
-  "source": "loadout_v1 combat suite",
+  "id": "loadout_v1_02",
+  "character": "Ironclad",
+  "act": 1,
+  "stage": "mid_aoe",
+  "status": "LOCKED",
+  "hp": 60,
   "max_hp": 80,
-  "snapshot_hp": 64,
-  "hp": 64,
-  "hp_synth": false,
-  "relics": ["BURNING_BLOOD", "SHURIKEN"],
   "deck": [
+    "STRIKE_IRONCLAD",
+    "STRIKE_IRONCLAD",
+    "DEFEND_IRONCLAD",
+    "DEFEND_IRONCLAD",
+    "DEFEND_IRONCLAD",
+    "BASH",
+    "THUNDERCLAP",
+    "THUNDERCLAP",
     {
-      "card_id": "STRIKE_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
+      "id": "WHIRLWIND",
+      "upgraded": true
     },
-    {
-      "card_id": "STRIKE_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "STRIKE_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "STRIKE_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "DEFEND_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "DEFEND_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "DEFEND_IRONCLAD",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "BASH",
-      "upgraded": false,
-      "rarity": "BASIC"
-    },
-    {
-      "card_id": "UPPERCUT",
-      "upgraded": false,
-      "rarity": "UNCOMMON"
-    },
-    {
-      "card_id": "INFLAME",
-      "upgraded": false,
-      "rarity": "UNCOMMON"
-    },
-    {
-      "card_id": "PERFECTED_STRIKE",
-      "upgraded": true,
-      "rarity": "COMMON"
-    },
-    {
-      "card_id": "RAMPAGE",
-      "upgraded": false,
-      "rarity": "UNCOMMON"
-    },
-    {
-      "card_id": "ANGER",
-      "upgraded": false,
-      "rarity": "COMMON"
-    },
-    {
-      "card_id": "THUNDERCLAP",
-      "upgraded": false,
-      "rarity": "COMMON"
-    },
-    {
-      "card_id": "POMMEL_STRIKE",
-      "upgraded": false,
-      "rarity": "COMMON"
-    }
+    "SHOCKWAVE",
+    "BLOODLETTING",
+    "BATTLE_TRANCE",
+    "TWIN_STRIKE",
+    "CINDER"
+  ],
+  "relics": [
+    "BURNING_BLOOD",
+    "BAG_OF_MARBLES"
+  ],
+  "potions": [
+    "ExplosiveAmpoule",
+    "BlockPotion",
+    null
+  ],
+  "notes": "Anti-Kin: Thunderclap AoE×2 + Whirlwind+ + Shockwave (all Weak/Vuln). Bloodletting feeds X-cost. Whirlwind Uncommon smith OK.",
+  "wiki_refs": [
+    "local docs/CARDS_REFERENCE.md Whirlwind/Thunderclap/Shockwave",
+    "docs/act1_boss_mechanics_vs_loadout.md §The Kin"
   ]
 }
