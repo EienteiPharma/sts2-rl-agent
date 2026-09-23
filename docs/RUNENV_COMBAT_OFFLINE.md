@@ -1,6 +1,6 @@
 # Offline hang-protocol combat collect → train-from-buffer
 
-Online anti-forgetting mix (`docs/RUNENV_ONPOLICY_ANTIFORGET.md`) is **still valid**. It sits ~8fps because TypeSafe Jev HTTP is inside `RunEnvOnPolicyCombatEnv.step` / `reset` (auto-noncombat on the PPO learn path). This knife splits that:
+Online anti-forgetting mix (`docs/RUNENV_ONPOLICY_ANTIFORGET.md`) is **still valid** at **`--runenv-frac 0.3`**. The 0.7 `antiforget_v1` recipe is **frozen** (HOLD 50.0/77.8/22.2 FAIL). Continue-from `bh_v1` only. Online mix sits ~8fps because TypeSafe Jev HTTP is inside `RunEnvOnPolicyCombatEnv.step` / `reset` (auto-noncombat on the PPO learn path). This knife splits that:
 
 1. **Collect** hang-protocol RunEnv rollouts; write **combat segments only**.
 2. **Train** MaskablePPO from that buffer so Jev does **not** block `learn()`.
@@ -41,7 +41,7 @@ python scripts/collect_runenv_combat.py \
 
 `--n-envs 4` with fewer keys round-robins. `--n-envs > 4` prints a warning.
 
-Do **not** stop a running `combat_runenv_antiforget_v1` job to apply the pool. Online mix still defaults `--n-envs 1`.
+`combat_runenv_antiforget_v1` (`--runenv-frac 0.7`) is **frozen** — do not continue that job or that zip. Online mix now defaults `--runenv-frac 0.3` / `--n-envs 1`. See `docs/RUNENV_ONPOLICY_ANTIFORGET.md`.
 
 ## Buffer
 
@@ -90,16 +90,19 @@ python scripts/collect_runenv_combat.py \
 
 `scripts/train_combat_from_buffer.py`
 
-Continue-from `bh_v1`. New outdir. Never overwrite `bh_v1` or frozen `combat_runenv_onpolicy_v1`. Optional `--runenv-frac` still mixes **live** `loadout_v1` (no Jev) with buffer replay (hang combat distribution).
+Continue-from **`bh_v1` only**. New outdir. Never overwrite `bh_v1`, frozen `combat_runenv_onpolicy_v1`, or frozen `combat_runenv_antiforget_v1`. Never continue-from the antiforget_v1 zip. Default `--runenv-frac 0.3` mixes **live** `loadout_v1` (no Jev) with buffer replay (hang combat distribution). `--runenv-frac 0.7` is frozen.
+
+**Recommended Surplus EP CUDA recipe** (existing buffer + `bh_v1`):
 
 ```bash
-python scripts/train_combat_from_buffer.py --dry-run
+python scripts/train_combat_from_buffer.py --dry-run --device auto
 
 python scripts/train_combat_from_buffer.py \
   --buffer output/runenv_combat_buffer/transitions.npz \
   --continue-from /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip \
-  --output-dir output/combat_runenv_offline_v1 \
-  --runenv-frac 0.7 --n-envs 1 --n-steps 256 --batch-size 256 \
+  --output-dir output/combat_runenv_offline_ld03 \
+  --runenv-frac 0.3 --lr 3e-5 --device auto \
+  --n-envs 1 --n-steps 256 --batch-size 256 \
   --total-timesteps 250000 \
   --hold-freq 25000 --hold-n-eps 1
 ```
@@ -107,6 +110,8 @@ python scripts/train_combat_from_buffer.py \
 `--dry-run` does not need a buffer file (uses a synthetic 16-step tensor). Real `learn` needs `--buffer`. Default `--total-timesteps 2048` is smoke; do not launch 500k from CA.
 
 EP CUDA: `--device auto` (default; cuda if available) or `--device cuda`. Never overwrite `bh_v1`.
+
+If HOLD still misses ≥70 / Boss≥40 after 0.3, restart from `bh_v1` with `--runenv-frac 0.1` into a new outdir (`combat_runenv_offline_ld01`). Do not continue-from the failed mix zip. Do not go back to 0.7.
 
 `--n-envs > 1` uses `SubprocVecEnv` of pickle-friendly `MixedHangLoadoutEnvMaker(buffer_path=...)`. Replay half has **no** TypeSafe. Loadout half is fixture combat.
 
@@ -117,6 +122,6 @@ EP CUDA: `--device auto` (default; cuda if available) or `--device cuda`. Never 
 | `train_combat_runenv_antiforget.py` | On every RunEnv episode (`--n-envs` SubprocVecEnv, each worker hang Jev) | Live on-policy mix; ~8fps if TypeSafe is in `step` |
 | collect + `train_combat_from_buffer.py` | Collect only | Prefer for Surplus fps; re-collect as the zip moves |
 
-`--n-envs` on the **online** trainer already works (`SubprocVecEnv` + `MixedHangLoadoutEnvMaker`). That parallelizes Jev; it does not remove it. Do not set `--jev off` on hang eval to chase fps. Do **not** interrupt a running `antiforget_v1` (`--n-envs 1`) to apply a key pool; collect is the parallel path.
+`--n-envs` on the **online** trainer already works (`SubprocVecEnv` + `MixedHangLoadoutEnvMaker`). That parallelizes Jev; it does not remove it. Do not set `--jev off` on hang eval to chase fps. `antiforget_v1` is frozen; collect + from-buffer at `--runenv-frac 0.3 --device auto` is the Surplus fps path.
 
 After train: hang-protocol Act1 eval on the **new** zip **and** loadout_v1 HOLD. 评测哨兵 owns both gates.

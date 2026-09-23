@@ -36,7 +36,12 @@ BUFFER_VERSION = 1
 REQUIRED_KEYS = ("obs", "next_obs", "action", "reward", "done", "action_mask")
 HUNG_OUTDIR_NAME = "combat_ppo_obs_v1_bh_v1"
 ONPOLICY_FROZEN_OUTDIR = "combat_runenv_onpolicy_v1"
-FROZEN_OUTDIR_NAMES = (HUNG_OUTDIR_NAME, ONPOLICY_FROZEN_OUTDIR)
+ANTIFORGET_FROZEN_OUTDIR = "combat_runenv_antiforget_v1"
+FROZEN_OUTDIR_NAMES = (
+    HUNG_OUTDIR_NAME,
+    ONPOLICY_FROZEN_OUTDIR,
+    ANTIFORGET_FROZEN_OUTDIR,
+)
 
 
 def hang_protocol_meta() -> dict[str, Any]:
@@ -57,7 +62,7 @@ def hang_protocol_meta() -> dict[str, Any]:
 
 
 def refuse_frozen_path(path: str | Path, *, what: str = "path") -> Path:
-    """Never write into bh_v1 / frozen onpolicy_v1 outdirs."""
+    """Never write into bh_v1 / frozen onpolicy_v1 / frozen antiforget_v1 outdirs."""
     out = Path(path).expanduser()
     parts = set(out.parts)
     for name in FROZEN_OUTDIR_NAMES:

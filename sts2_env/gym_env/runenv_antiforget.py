@@ -1,13 +1,17 @@
 """Episode mixer: hang-protocol RunEnv combat + loadout_v1 fixture combat.
 
 Same obs_v1 / action space as ``bh_v1``.  On each ``reset()`` pick the
-RunEnv half with probability ``runenv_frac`` (default 0.70); otherwise
-``STS2CombatEnv`` with a ``loadout_v1`` provider.  PPO sees only combat
-steps either way.
+RunEnv half with probability ``runenv_frac`` (default 0.30, loadout-dominant);
+otherwise ``STS2CombatEnv`` with a ``loadout_v1`` provider.  PPO sees only
+combat steps either way.
+
+``--runenv-frac 0.7`` (antiforget_v1) is frozen: HOLD 50.0/77.8/22.2 FAIL.
+Continue-from ``bh_v1`` only — refuse the antiforget_v1 zip.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable
 
 import gymnasium
@@ -26,7 +30,13 @@ from sts2_env.gym_env.runenv_onpolicy_combat import (
     RunEnvOnPolicyCombatEnv,
 )
 
-DEFAULT_RUNENV_FRAC = 0.70
+DEFAULT_RUNENV_FRAC = 0.30
+FROZEN_RUNENV_FRAC = 0.70
+FROZEN_CONTINUE_FROM_MARKER = "antiforget_v1"
+FROZEN_RUNENV_FRAC_NOTE = (
+    "WARNING: --runenv-frac 0.7 is FROZEN (antiforget_v1 HOLD 50.0/77.8/22.2 FAIL). "
+    "Recommended loadout-dominant mix is 0.3 from bh_v1."
+)
 SOURCE_RUNENV = "runenv"
 SOURCE_LOADOUT = "loadout_v1"
 
@@ -36,6 +46,24 @@ def parse_runenv_frac(value: float | str) -> float:
     if frac < 0.0 or frac > 1.0:
         raise SystemExit("--runenv-frac must be in [0, 1]")
     return frac
+
+
+def frozen_runenv_frac_warning(frac: float) -> str | None:
+    if abs(float(frac) - FROZEN_RUNENV_FRAC) < 1e-9:
+        return FROZEN_RUNENV_FRAC_NOTE
+    return None
+
+
+def refuse_antiforget_v1_continue(path: str | Path) -> Path:
+    """Never continue-from the frozen 0.7 antiforget_v1 zip. Use bh_v1."""
+    zip_path = Path(path).expanduser()
+    hay = str(zip_path).replace("\\", "/")
+    if FROZEN_CONTINUE_FROM_MARKER in hay:
+        raise SystemExit(
+            f"refusing continue-from frozen antiforget_v1 zip {zip_path}; "
+            "continue-from bh_v1 only (0.7 recipe is frozen; use loadout-dominant 0.3)"
+        )
+    return zip_path
 
 
 def action_mask_fn(env):

@@ -124,6 +124,8 @@ def test_refuse_frozen_buffer_path(tmp_path):
         refuse_frozen_path("output/combat_ppo_obs_v1_bh_v1/transitions.npz")
     with pytest.raises(SystemExit, match="refusing to overwrite"):
         refuse_frozen_path("output/combat_runenv_onpolicy_v1/x.npz")
+    with pytest.raises(SystemExit, match="refusing to overwrite"):
+        refuse_frozen_path("output/combat_runenv_antiforget_v1/x.npz")
     ok = refuse_frozen_path(tmp_path / "runenv_combat_buffer" / "transitions.npz")
     assert ok.name == "transitions.npz"
 
@@ -305,11 +307,13 @@ def test_train_from_buffer_cli_and_dry_run(tmp_path):
     args = train_mod.parse_args([])
     assert args.continue_from == train_mod.HUNG_COMBAT_ZIP
     assert "bh_v1" in args.continue_from
-    assert args.runenv_frac == pytest.approx(0.7)
+    assert args.runenv_frac == pytest.approx(0.3)
     assert args.n_envs == 1
     assert args.total_timesteps == 2048
     assert args.output_dir == train_mod.DEFAULT_OUTPUT_DIR
+    assert args.output_dir.endswith("combat_runenv_offline_ld03")
     assert args.device == "auto"
+    assert args.lr == pytest.approx(3e-5)
     report = train_mod.dry_run(
         train_mod.parse_args(
             ["--dry-run", "--output-dir", "output/combat_runenv_offline_dry"]
@@ -329,7 +333,14 @@ def test_train_from_buffer_cli_and_dry_run(tmp_path):
     assert report["loadout_reset"]["mix_source"] == "loadout_v1"
     assert report["loadout_reset"]["obs_size"] == OBS_SIZE
     assert report["online_antiforget_still_valid"] is True
+    assert report["runenv_frac"] == pytest.approx(0.3)
+    assert report["loadout_frac"] == pytest.approx(0.7)
+    assert report["runenv_frac_warning"] is None
+    assert report["recipe"] == "loadout_dominant_0.3"
+    assert report["continue_from_policy"] == "bh_v1_only"
     assert "combat_ppo_obs_v1_bh_v1" in report["frozen_outdirs"]
+    assert "combat_runenv_antiforget_v1" in report["frozen_outdirs"]
+    assert report["antiforget_v1_0.7"] == "frozen"
     arrays = synthetic_combat_buffer(n=8, n_episodes=2, seed=1)
     buf = tmp_path / "transitions.npz"
     save_combat_buffer(buf, arrays)
@@ -369,6 +380,22 @@ def test_train_from_buffer_refuses_frozen():
     )
     with pytest.raises(SystemExit, match="refusing to overwrite"):
         train_mod.dry_run(args)
+    args_af = train_mod.parse_args(
+        ["--dry-run", "--output-dir", "output/combat_runenv_antiforget_v1"]
+    )
+    with pytest.raises(SystemExit, match="refusing to overwrite"):
+        train_mod.dry_run(args_af)
+    args_cf = train_mod.parse_args(
+        [
+            "--dry-run",
+            "--output-dir",
+            "output/combat_runenv_offline_ld03_dry",
+            "--continue-from",
+            "/workspace/sts2-sim/output/combat_runenv_antiforget_v1/final_model.zip",
+        ]
+    )
+    with pytest.raises(SystemExit, match="antiforget_v1"):
+        train_mod.dry_run(args_cf)
 
 
 def test_train_from_buffer_requires_buffer_without_dry_run():

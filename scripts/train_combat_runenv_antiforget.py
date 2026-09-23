@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Anti-forgetting mix: hang-protocol RunEnv combat + loadout_v1 fixtures.
+"""Loadout-dominant anti-forgetting mix: hang RunEnv combat + loadout_v1.
 
-Pure RunEnv on-policy 500k (``combat_runenv_onpolicy_v1``) is FROZEN:
-RunEnv 4%/med7 but loadout_v1 HOLD FAIL. This trainer continues ``bh_v1``
-and interleaves hang RunEnv combat segments with loadout_v1 so HOLD
-does not collapse.
+``combat_runenv_onpolicy_v1`` (pure 500k) and ``combat_runenv_antiforget_v1``
+(runenv-frac 0.7) are FROZEN. antiforget_v1 HOLD 50.0/77.8/22.2 FAIL.
+This trainer continues ``bh_v1`` only with default ``runenv-frac 0.3``
+(≥70% loadout_v1) so HOLD can recover while still seeing hang RunEnv combat.
 
 Usage:
     python scripts/train_combat_runenv_antiforget.py --dry-run
     python scripts/train_combat_runenv_antiforget.py \\
         --continue-from /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip \\
-        --output-dir output/combat_runenv_antiforget_smoke \\
-        --runenv-frac 0.7 --n-envs 1 --n-steps 64 --total-timesteps 256
+        --output-dir output/combat_runenv_antiforget_ld03_smoke \\
+        --runenv-frac 0.3 --n-envs 1 --n-steps 64 --total-timesteps 256
 
-Never overwrites ``bh_v1`` or ``combat_runenv_onpolicy_v1``.
+Never overwrites ``bh_v1``, ``combat_runenv_onpolicy_v1``, or
+``combat_runenv_antiforget_v1``. Never continue-from the antiforget_v1 zip.
 Hang eval flags/bars unchanged. Not a win claim.
 """
 
@@ -30,13 +31,16 @@ from sts2_env.eval.combat_hold import (
     HOLD_OVERALL_MIN,
     run_hold_smoke,
 )
+from sts2_env.gym_env.combat_buffer import FROZEN_OUTDIR_NAMES, refuse_frozen_path
 from sts2_env.gym_env.runenv_antiforget import (
     DEFAULT_RUNENV_FRAC,
     MaskedEnvMaker,
     MixedHangLoadoutEnv,
     MixedHangLoadoutEnvMaker,
+    frozen_runenv_frac_warning,
     make_loadout_v1_provider,
     parse_runenv_frac,
+    refuse_antiforget_v1_continue,
 )
 from sts2_env.gym_env.runenv_onpolicy_combat import (
     HANG_JEV,
@@ -47,27 +51,17 @@ from sts2_env.gym_env.runenv_onpolicy_combat import (
 )
 
 HUNG_OUTDIR_NAME = "combat_ppo_obs_v1_bh_v1"
-ONPOLICY_FROZEN_OUTDIR = "combat_runenv_onpolicy_v1"
-FROZEN_OUTDIR_NAMES = (HUNG_OUTDIR_NAME, ONPOLICY_FROZEN_OUTDIR)
 HUNG_COMBAT_ZIP = f"/workspace/sts2-sim/output/{HUNG_OUTDIR_NAME}/final_model.zip"
-DEFAULT_OUTPUT_DIR = "output/combat_runenv_antiforget"
-PROTOCOL_ID = "hang_protocol_runenv_antiforget LOCKED 2026-09-22"
+DEFAULT_OUTPUT_DIR = "output/combat_runenv_antiforget_ld03"
+PROTOCOL_ID = "hang_protocol_runenv_antiforget_ld03 LOCKED 2026-09-23"
 
 
 def refuse_overwrite_frozen(output_dir: str | Path) -> Path:
-    out = Path(output_dir).expanduser()
-    parts = set(out.parts)
-    for name in FROZEN_OUTDIR_NAMES:
-        if out.name == name or name in parts:
-            raise SystemExit(
-                f"refusing to overwrite frozen outdir {out}; "
-                f"pick a new --output-dir (e.g. {DEFAULT_OUTPUT_DIR})"
-            )
-    return out
+    return refuse_frozen_path(output_dir, what="outdir")
 
 
 def resolve_continue_from(path: str, *, must_exist: bool = True) -> Path:
-    zip_path = Path(path).expanduser()
+    zip_path = refuse_antiforget_v1_continue(path)
     if must_exist and not zip_path.is_file():
         raise SystemExit(f"continue-from zip not found: {path}")
     return zip_path
@@ -146,7 +140,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Fine-tune bh_v1 on hang RunEnv combat mixed with loadout_v1 "
-            "(anti-forgetting). Pure onpolicy_v1 500k is frozen."
+            "(loadout-dominant anti-forgetting). 0.7 antiforget_v1 is frozen."
         )
     )
     parser.add_argument(
@@ -160,13 +154,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--output-dir",
         type=str,
         default=DEFAULT_OUTPUT_DIR,
-        help=f"New outdir (not {HUNG_OUTDIR_NAME} / {ONPOLICY_FROZEN_OUTDIR})",
+        help=(
+            f"New outdir (not {HUNG_OUTDIR_NAME} / combat_runenv_onpolicy_v1 "
+            "/ combat_runenv_antiforget_v1)"
+        ),
     )
     parser.add_argument(
         "--runenv-frac",
         type=float,
         default=DEFAULT_RUNENV_FRAC,
-        help="P(hang RunEnv episode) on reset (default 0.7; rest is loadout_v1)",
+        help=(
+            "P(hang RunEnv episode) on reset (default 0.3 loadout-dominant; "
+            "rest is loadout_v1). 0.7 is frozen."
+        ),
     )
     parser.add_argument(
         "--total-timesteps",
@@ -224,6 +224,7 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     from sts2_env.gym_env.observation import OBS_SIZE
 
     out = refuse_overwrite_frozen(args.output_dir)
+    refuse_antiforget_v1_continue(args.continue_from)
     flags = hang_jev_flags()
     env = make_mixed_env(
         seed=0,
@@ -248,6 +249,9 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "output_dir": str(out),
         "runenv_frac": args.runenv_frac,
         "loadout_frac": round(1.0 - args.runenv_frac, 4),
+        "runenv_frac_warning": frozen_runenv_frac_warning(args.runenv_frac),
+        "recipe": "loadout_dominant_0.3",
+        "continue_from_policy": "bh_v1_only",
         "loadout_half": "loadout_v1",
         "mix_neow_v1": False,
         "n_envs": args.n_envs,
@@ -289,6 +293,7 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "action_size": ACTION_SPACE_SIZE,
         "frozen_outdirs": list(FROZEN_OUTDIR_NAMES),
         "pure_onpolicy_500k": "frozen",
+        "antiforget_v1_0.7": "frozen",
     }
 
 
@@ -377,6 +382,9 @@ def train(args: argparse.Namespace) -> None:
     print("  continue_from:   ", continue_from)
     print("  output_dir:      ", output_dir)
     print("  runenv_frac:     ", args.runenv_frac, "(loadout_v1", round(1.0 - args.runenv_frac, 4), ")")
+    note = frozen_runenv_frac_warning(args.runenv_frac)
+    if note:
+        print(" ", note)
     print("  n_envs:          ", n_envs, "(SubprocVecEnv)" if n_envs > 1 else "(DummyVecEnv)")
     print("  total_timesteps: ", args.total_timesteps)
     print("  learning_rate:   ", args.lr)

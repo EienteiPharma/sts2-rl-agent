@@ -23,11 +23,14 @@ from sts2_env.gym_env.observation import OBS_SIZE
 from sts2_env.gym_env.run_env import RUN_OBS_SIZE
 from sts2_env.gym_env.runenv_antiforget import (
     DEFAULT_RUNENV_FRAC,
+    FROZEN_RUNENV_FRAC,
     SOURCE_LOADOUT,
     SOURCE_RUNENV,
     MixedHangLoadoutEnv,
+    frozen_runenv_frac_warning,
     make_loadout_v1_provider,
     parse_runenv_frac,
+    refuse_antiforget_v1_continue,
 )
 from sts2_env.run.run_manager import RunManager
 
@@ -58,13 +61,17 @@ def test_cli_defaults_continue_bh_v1_not_onpolicy():
     assert args.continue_from == train_mod.HUNG_COMBAT_ZIP
     assert "combat_ppo_obs_v1_bh_v1" in args.continue_from
     assert "onpolicy_v1" not in args.continue_from
-    assert args.runenv_frac == pytest.approx(0.7)
+    assert args.runenv_frac == pytest.approx(0.3)
+    assert args.runenv_frac == pytest.approx(DEFAULT_RUNENV_FRAC)
+    assert "antiforget_v1" not in args.continue_from
     assert args.n_envs == 1
     assert args.total_timesteps == 2048
+    assert args.lr == pytest.approx(3e-5)
     assert args.hold_freq == 0
     assert args.hold_n_eps == 1
     assert args.hold_stop is False
     assert args.output_dir == train_mod.DEFAULT_OUTPUT_DIR
+    assert args.output_dir.endswith("combat_runenv_antiforget_ld03")
     alias = train_mod.parse_args(["--model", "/tmp/bh.zip", "--runenv-frac", "0.5"])
     assert alias.continue_from == "/tmp/bh.zip"
     assert alias.runenv_frac == pytest.approx(0.5)
@@ -91,8 +98,29 @@ def test_refuse_overwrite_frozen_outdirs(tmp_path):
         train_mod.refuse_overwrite_frozen("output/combat_ppo_obs_v1_bh_v1")
     with pytest.raises(SystemExit, match="refusing to overwrite"):
         train_mod.refuse_overwrite_frozen("output/combat_runenv_onpolicy_v1")
-    ok = train_mod.refuse_overwrite_frozen(tmp_path / "combat_runenv_antiforget_v1")
-    assert ok.name == "combat_runenv_antiforget_v1"
+    with pytest.raises(SystemExit, match="refusing to overwrite"):
+        train_mod.refuse_overwrite_frozen("output/combat_runenv_antiforget_v1")
+    ok = train_mod.refuse_overwrite_frozen(tmp_path / "combat_runenv_antiforget_ld03")
+    assert ok.name == "combat_runenv_antiforget_ld03"
+
+
+def test_refuse_continue_from_antiforget_v1(tmp_path):
+    frozen = tmp_path / "combat_runenv_antiforget_v1" / "final_model.zip"
+    frozen.parent.mkdir(parents=True)
+    frozen.write_bytes(b"zip")
+    with pytest.raises(SystemExit, match="antiforget_v1"):
+        train_mod.resolve_continue_from(str(frozen), must_exist=True)
+    with pytest.raises(SystemExit, match="antiforget_v1"):
+        refuse_antiforget_v1_continue("output/antiforget_v1/final_model.zip")
+    with pytest.raises(SystemExit, match="not found"):
+        train_mod.resolve_continue_from(str(tmp_path / "missing.zip"), must_exist=True)
+    ok = tmp_path / "combat_ppo_obs_v1_bh_v1" / "final_model.zip"
+    ok.parent.mkdir(parents=True)
+    ok.write_bytes(b"zip")
+    assert train_mod.resolve_continue_from(str(ok)) == ok
+    assert frozen_runenv_frac_warning(0.3) is None
+    assert frozen_runenv_frac_warning(FROZEN_RUNENV_FRAC) is not None
+    assert "FROZEN" in frozen_runenv_frac_warning(0.7)
 
 
 def test_continue_from_and_obs_guard(tmp_path):
@@ -199,15 +227,15 @@ def test_mix_default_frac_samples_both():
         max_steps=80,
     )
     sources = []
-    for i in range(24):
+    for i in range(48):
         _obs, info = env.reset(seed=1000 + i)
         sources.append(info["mix_source"])
     env.close()
     assert SOURCE_RUNENV in sources
     assert SOURCE_LOADOUT in sources
-    # 70% in expectation; 24 trials should not be all one source.
+    # 0.3 in expectation; 48 trials should not be all one source.
     n_run = sources.count(SOURCE_RUNENV)
-    assert 6 <= n_run <= 22
+    assert 1 <= n_run <= 40
 
 
 def test_dry_run_wires_mix_and_hold():
@@ -216,15 +244,16 @@ def test_dry_run_wires_mix_and_hold():
             [
                 "--dry-run",
                 "--output-dir",
-                "output/combat_runenv_antiforget_dry",
-                "--runenv-frac",
-                "0.7",
+                "output/combat_runenv_antiforget_ld03_dry",
             ]
         )
     )
     assert report["dry_run"] is True
-    assert report["runenv_frac"] == pytest.approx(0.7)
-    assert report["loadout_frac"] == pytest.approx(0.3)
+    assert report["runenv_frac"] == pytest.approx(0.3)
+    assert report["loadout_frac"] == pytest.approx(0.7)
+    assert report["runenv_frac_warning"] is None
+    assert report["recipe"] == "loadout_dominant_0.3"
+    assert report["continue_from_policy"] == "bh_v1_only"
     assert report["loadout_half"] == "loadout_v1"
     assert report["mix_neow_v1"] is False
     assert report["hang"]["start_with_neow"] is True
@@ -239,7 +268,23 @@ def test_dry_run_wires_mix_and_hold():
     assert report["hold"]["jobs_n_eps1"] == 18
     assert "combat_ppo_obs_v1_bh_v1" in report["frozen_outdirs"]
     assert "combat_runenv_onpolicy_v1" in report["frozen_outdirs"]
+    assert "combat_runenv_antiforget_v1" in report["frozen_outdirs"]
     assert report["pure_onpolicy_500k"] == "frozen"
+    assert report["antiforget_v1_0.7"] == "frozen"
+    warned = train_mod.dry_run(
+        train_mod.parse_args(
+            [
+                "--dry-run",
+                "--output-dir",
+                "output/combat_runenv_antiforget_ld03_dry07",
+                "--runenv-frac",
+                "0.7",
+            ]
+        )
+    )
+    assert warned["runenv_frac"] == pytest.approx(0.7)
+    assert warned["runenv_frac_warning"] is not None
+    assert "FROZEN" in warned["runenv_frac_warning"]
 
 
 def test_dry_run_refuses_frozen_outdir():
@@ -248,6 +293,22 @@ def test_dry_run_refuses_frozen_outdir():
     )
     with pytest.raises(SystemExit, match="refusing to overwrite"):
         train_mod.dry_run(args)
+    args_af = train_mod.parse_args(
+        ["--dry-run", "--output-dir", "output/combat_runenv_antiforget_v1"]
+    )
+    with pytest.raises(SystemExit, match="refusing to overwrite"):
+        train_mod.dry_run(args_af)
+    args_cf = train_mod.parse_args(
+        [
+            "--dry-run",
+            "--output-dir",
+            "output/combat_runenv_antiforget_ld03_dry",
+            "--continue-from",
+            "output/combat_runenv_antiforget_v1/final_model.zip",
+        ]
+    )
+    with pytest.raises(SystemExit, match="antiforget_v1"):
+        train_mod.dry_run(args_cf)
 
 
 def test_hold_smoke_constructs_with_legal_first_action():
