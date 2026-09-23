@@ -358,3 +358,50 @@ def test_hold_smoke_constructs_with_legal_first_action():
     assert RelicId.BURNING_BLOOD in relic_ids
     assert RelicId.SHURIKEN in relic_ids
     env.close()
+
+
+def test_split_hold_jobs_round_robin_and_workers_default_serial():
+    from sts2_env.eval.combat_hold import (
+        compact_hold_job,
+        expand_hold_job,
+        hold_job_key,
+        run_hold_job_list,
+        run_hold_smoke,
+        split_hold_jobs,
+    )
+
+    jobs = hold_jobs(n_eps=1)
+    assert split_hold_jobs(jobs, 1) == [jobs]
+    shards = split_hold_jobs(jobs, 8)
+    assert len(shards) == 8
+    assert sum(len(s) for s in shards) == 18
+    flat = [j for shard in shards for j in shard]
+    assert sorted(hold_job_key(j) for j in flat) == sorted(hold_job_key(j) for j in jobs)
+    assert shards[0][0]["enc_id"] == jobs[0]["enc_id"]
+    assert shards[1][0]["enc_id"] == jobs[1]["enc_id"]
+
+    raw = jobs[0]
+    compact = compact_hold_job(raw)
+    assert "encounter_setup" not in compact
+    restored = expand_hold_job(compact)
+    assert restored["enc_id"] == raw["enc_id"]
+    assert restored["seed"] == raw["seed"]
+    assert callable(restored["encounter_setup"])
+
+    def predict_fn(obs, mask):
+        valid = np.flatnonzero(np.asarray(mask) == 1)
+        return int(valid[0])
+
+    slice_jobs = jobs[:2]
+    serial = run_hold_job_list(slice_jobs, predict_fn, max_steps=30)
+    shards2 = split_hold_jobs(slice_jobs, 8)
+    parallel_rows = []
+    for shard in shards2:
+        parallel_rows.extend(run_hold_job_list(shard, predict_fn, max_steps=30))
+    parallel_rows.sort(key=lambda r: (r["fixture_index"], r["enc_id"], r["seed"]))
+    serial_sorted = sorted(serial, key=lambda r: (r["fixture_index"], r["enc_id"], r["seed"]))
+    assert summarize_hold_rows(serial_sorted) == summarize_hold_rows(parallel_rows)
+    assert [r["win"] for r in serial_sorted] == [r["win"] for r in parallel_rows]
+
+    with pytest.raises(SystemExit, match="--workers"):
+        run_hold_smoke(predict_fn, n_eps=1, workers=8)

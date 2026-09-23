@@ -1,13 +1,9 @@
-"""Act1 RunEnv eval helpers (hierarchical + Jev)."""
-from sts2_env.eval.combat_jev import (
-    CHOICE_COMBAT_STEP,
-    COMBAT_JEV_CONF_MIN,
-    COMBAT_JEV_FAILOPEN_REASONS,
-    COMBAT_JEV_INSTRUCTIONS,
-    CombatJevTelemetry,
-    choose_combat_step,
-    summarize_combat_jev,
-)
+"""Act1 RunEnv eval helpers (hierarchical + Jev).
+
+Heavy modules that pull the combat/card graph (``combat_jev``, Act1 runner,
+metrics) are lazy. ``import sts2_env.eval`` and HOLD ``--help`` must not
+complete ``core.combat`` while cards are still registering.
+"""
 from sts2_env.eval.act1_suite import (
     HUNG_COMBAT_ZIP,
     JEV_SHADOW_SKIPPED,
@@ -16,26 +12,6 @@ from sts2_env.eval.act1_suite import (
     SEED_COUNT,
     SEED_START,
     SEEDS,
-)
-from sts2_env.eval.act1_runner import (
-    _legal_random,
-    _run_episode,
-    _run_manager,
-    _selected_combat_owner,
-    choose_action,
-    choose_hierarchical_action,
-    jev_shadow_fields,
-    load_maskable_ppo,
-    load_policy_models,
-    model_obs_dim,
-    require_obs_dim,
-    validate_policy_args,
-)
-from sts2_env.eval.act1_metrics import (
-    _summarize,
-    build_report,
-    summarize_act1_rows,
-    write_report,
 )
 from sts2_env.eval.map_lowhp import (
     MAP_FIGHT_POINT_TYPES,
@@ -148,3 +124,79 @@ from sts2_env.eval.jev_config import (
     parse_jev_phases,
     resolve_jev_flags,
 )
+
+# Lazy: these modules import CombatState / the card graph. Eager import here
+# is a circular ImportError (core.combat ↔ cards) and breaks HOLD --help.
+_LAZY_ATTRS: dict[str, tuple[str, str]] = {
+    name: ("sts2_env.eval.combat_jev", name)
+    for name in (
+        "CHOICE_COMBAT_STEP",
+        "COMBAT_JEV_CONF_MIN",
+        "COMBAT_JEV_FAILOPEN_REASONS",
+        "COMBAT_JEV_HAND_TRUNCATE",
+        "COMBAT_JEV_INSTRUCTIONS",
+        "COMBAT_JEV_MONSTER_TRUNCATE",
+        "CombatJevTelemetry",
+        "FAILOPEN_BAD_ID",
+        "FAILOPEN_EMPTY_LIST",
+        "FAILOPEN_ERROR",
+        "FAILOPEN_LOW_CONF",
+        "FAILOPEN_TIMEOUT",
+        "choose_combat_step",
+        "classify_jev_error",
+        "combat_action_id",
+        "compress_combat_state",
+        "enumerate_legal_combat_actions",
+        "fail_open_local",
+        "hung_ppo_local",
+        "parse_combat_action_id",
+        "summarize_combat_action",
+        "summarize_combat_jev",
+    )
+}
+_LAZY_ATTRS.update(
+    {
+        name: ("sts2_env.eval.act1_runner", name)
+        for name in (
+            "_legal_random",
+            "_run_episode",
+            "_run_manager",
+            "_selected_combat_owner",
+            "choose_action",
+            "choose_hierarchical_action",
+            "jev_shadow_fields",
+            "load_maskable_ppo",
+            "load_policy_models",
+            "model_obs_dim",
+            "require_obs_dim",
+            "validate_policy_args",
+        )
+    }
+)
+_LAZY_ATTRS.update(
+    {
+        name: ("sts2_env.eval.act1_metrics", name)
+        for name in (
+            "_summarize",
+            "build_report",
+            "summarize_act1_rows",
+            "write_report",
+        )
+    }
+)
+
+
+def __getattr__(name: str):
+    spec = _LAZY_ATTRS.get(name)
+    if spec is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    mod_name, attr = spec
+    import importlib
+
+    value = getattr(importlib.import_module(mod_name), attr)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_LAZY_ATTRS))

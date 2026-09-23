@@ -304,8 +304,12 @@ def test_eval_combat_suite_cli_is_hang_hold():
     assert args.suite == "loadout_v1"
     assert args.n_eps == 20
     assert args.combat_policy == "ppo"
+    assert args.workers == 1
     args20 = mod.parse_args(["--suite", "loadout_v1", "--n-eps", "20"])
     assert args20.n_eps == 20
+    args8 = mod.parse_args(["--workers", "8", "--combat-policy", "jev"])
+    assert args8.workers == 8
+    assert args8.combat_policy == "jev"
     with pytest.raises(SystemExit, match="loadout_v1"):
         mod.main(["--suite", "bare"])
 

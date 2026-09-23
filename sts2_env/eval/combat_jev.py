@@ -18,6 +18,10 @@ from typing import Any
 
 import numpy as np
 
+# Cards must finish registering before CombatState / action_space / observation
+# import core.combat; otherwise core.combat ↔ cards is a circular ImportError.
+import sts2_env.cards  # noqa: F401
+
 from sts2_env.core.combat import CombatState
 from sts2_env.core.constants import ACTION_END_TURN, ACTION_SPACE_SIZE
 from sts2_env.core.creature import Creature
@@ -305,6 +309,39 @@ class CombatJevTelemetry:
             "combat_jev_calls": self.calls - c0,
             "combat_jev_fail_open": self.fail_open - f0,
         }
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "calls": int(self.calls),
+            "fail_open": int(self.fail_open),
+            "latencies_ms": list(self.latencies_ms),
+            "failopen_reason": {
+                k: int(self.failopen_reason.get(k, 0)) for k in COMBAT_JEV_FAILOPEN_REASONS
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "CombatJevTelemetry":
+        tel = cls()
+        if not data:
+            return tel
+        tel.calls = int(data.get("calls") or 0)
+        tel.fail_open = int(data.get("fail_open") or 0)
+        tel.latencies_ms = [float(x) for x in (data.get("latencies_ms") or [])]
+        reasons = data.get("failopen_reason") or {}
+        for k in COMBAT_JEV_FAILOPEN_REASONS:
+            tel.failopen_reason[k] = int(reasons.get(k, 0) or 0)
+        return tel
+
+    def merge(self, other: "CombatJevTelemetry") -> "CombatJevTelemetry":
+        self.calls += int(other.calls)
+        self.fail_open += int(other.fail_open)
+        self.latencies_ms.extend(other.latencies_ms)
+        for k in COMBAT_JEV_FAILOPEN_REASONS:
+            self.failopen_reason[k] = int(self.failopen_reason.get(k, 0)) + int(
+                other.failopen_reason.get(k, 0)
+            )
+        return self
 
     def as_report(self, *, n_episodes: int = 0) -> dict[str, Any]:
         n = len(self.latencies_ms)

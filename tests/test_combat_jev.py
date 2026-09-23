@@ -300,3 +300,25 @@ def test_obs_width_stays_combat():
     )
     env.close()
     assert ppo.seen_widths == [OBS_SIZE]
+
+
+def test_combat_jev_telemetry_merge_and_lazy_eval_attr():
+    a = CombatJevTelemetry()
+    a.record(10.0)
+    a.record(20.0, fail_reason=FAILOPEN_LOW_CONF)
+    b = CombatJevTelemetry()
+    b.record(30.0, fail_reason=FAILOPEN_TIMEOUT)
+    merged = CombatJevTelemetry.from_dict(a.to_dict())
+    merged.merge(b)
+    assert merged.calls == 3
+    assert merged.fail_open == 2
+    assert merged.failopen_reason[FAILOPEN_LOW_CONF] == 1
+    assert merged.failopen_reason[FAILOPEN_TIMEOUT] == 1
+    report = merged.as_report(n_episodes=3)
+    assert report["jev_calls"] == 3
+    assert report["jev_failopen"] == 2
+
+    import sts2_env.eval as eval_pkg
+
+    lazy = eval_pkg.CombatJevTelemetry
+    assert lazy is CombatJevTelemetry

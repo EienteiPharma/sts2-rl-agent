@@ -7,6 +7,8 @@ aligned protocol. Hang zip stays ``bh_v1``. Not Act1 RunEnv.
 
 Box ops used to keep a bare Act1 22-enc copy at ``/workspace/sts2-sim/eval_combat_suite.py``
 (no ``--suite loadout_v1``). That is **not** the hang table. Use this script.
+
+Sentry 8-way smoke: ``--workers 8`` (default 1 = serial, same as before).
 """
 from __future__ import annotations
 
@@ -25,8 +27,6 @@ from sts2_env.eval.combat_hold import (
     hold_protocol_meta,
     run_hold_smoke,
 )
-from sts2_env.eval.combat_jev import CombatJevTelemetry
-from sts2_env.gym_env.observation import OBS_SIZE
 
 PROTOCOL_ID = "loadout_v1 HOLD LOCKED 2026-09-23"
 
@@ -71,6 +71,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Combat source. Default ppo = hung bh_v1 zip (hang table). "
             "jev = optional bypass (not a hang swap): combat_step_choice on "
             "the legal shortlist; fail-open to the same zip."
+        ),
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help=(
+            "Parallel HOLD fights (ProcessPool spawn, same as collect). "
+            "Default 1 = serial (prior behavior). Sentry smoke passes --workers 8. "
+            "jev arm shards TypeSafe keys "
+            "(TYPESAFE_API_KEY / TYPESAFE_API_KEY_1.._4 / TYPESAFE_API_KEYS)."
         ),
     )
     return parser.parse_args(argv)
@@ -128,6 +139,29 @@ def pct(rate: float) -> str:
     return f"{100.0 * float(rate):.1f}"
 
 
+def empty_combat_jev_report(*, n_episodes: int = 0) -> dict[str, Any]:
+    """PPO-path combat_jev payload without importing combat_jev (no import cycle)."""
+    del n_episodes  # mean is 0 with no calls
+    return {
+        "jev_calls": 0,
+        "jev_failopen": 0,
+        "failopen_rate": 0.0,
+        "latency_ms": {"p50": None, "p95": None, "n": 0, "mean": None},
+        "combat_jev_calls_mean": 0.0,
+        "jev_failopen_reason": {
+            "timeout": 0,
+            "error": 0,
+            "bad_id": 0,
+            "low_conf": 0,
+            "empty_list": 0,
+        },
+        "note": (
+            "Combat-Jev is an optional bypass (--combat-policy jev), not a "
+            "hang swap. Default remains ppo/bh_v1. Conf min 0.35."
+        ),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     suite = str(args.suite).strip()
@@ -140,7 +174,14 @@ def main(argv: list[str] | None = None) -> int:
     n_eps = int(args.n_eps)
     if n_eps < 1:
         raise SystemExit("--n-eps must be >= 1")
+    workers = int(getattr(args, "workers", 1) or 1)
+    if workers < 1:
+        raise SystemExit("--workers must be >= 1")
     device = resolve_device(args.device)
+    # Cards must register before observation imports CombatState.
+    import sts2_env.cards  # noqa: F401
+    from sts2_env.gym_env.observation import OBS_SIZE
+
     model = load_maskable_ppo(args.model, device=device)
     obs_dim = model_obs_dim(model)
     if obs_dim != OBS_SIZE:
@@ -155,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
     combat_policy = str(getattr(args, "combat_policy", "ppo") or "ppo")
     choose_fn = None
     combat_jev_summary = None
-    if combat_policy == "jev":
+    if workers == 1 and combat_policy == "jev":
         from sts2_env.eval.combat_jev import CombatJevTelemetry, choose_combat_step
         from sts2_env.eval.jev_client import build_jev_adapter
 
@@ -185,7 +226,23 @@ def main(argv: list[str] | None = None) -> int:
         n_eps=n_eps,
         max_steps=int(args.max_steps),
         choose_fn=choose_fn,
+        workers=workers,
+        model_path=str(args.model),
+        device=device,
+        combat_policy=combat_policy,
     )
+    n_fights = int(summary["overall"]["n"])
+    if combat_jev_summary is not None:
+        combat_jev_payload = combat_jev_summary.as_report(n_episodes=n_fights)
+    elif combat_policy == "jev" and summary.get("combat_jev_telemetry"):
+        from sts2_env.eval.combat_jev import CombatJevTelemetry
+
+        combat_jev_payload = CombatJevTelemetry.from_dict(
+            summary["combat_jev_telemetry"]
+        ).as_report(n_episodes=n_fights)
+    else:
+        combat_jev_payload = empty_combat_jev_report(n_episodes=n_fights)
+
     overall = float(summary["overall"]["win_rate"])
     elite = float(summary["elite"]["win_rate"])
     boss = float(summary["boss"]["win_rate"])
@@ -202,17 +259,13 @@ def main(argv: list[str] | None = None) -> int:
         "gate": summary["gate"],
         "passed": bool(summary["passed"]),
         "n_eps": n_eps,
+        "workers": workers,
         "combat_policy": combat_policy,
-        "combat_jev": (
-            combat_jev_summary.as_report(n_episodes=int(summary["overall"]["n"]))
-            if combat_jev_summary is not None
-            else CombatJevTelemetry().as_report(
-                n_episodes=int(summary["overall"]["n"])
-            )
-        ),
+        "combat_jev": combat_jev_payload,
     }
     text = (
-        f"HOLD loadout_v1 n_eps={n_eps} combat_policy={combat_policy}  "
+        f"HOLD loadout_v1 n_eps={n_eps} workers={workers} "
+        f"combat_policy={combat_policy}  "
         f"{pct(overall)} / {pct(elite)} / Boss {pct(boss)}  "
         f"passed={payload['passed']} "
         f"(gate {HOLD_OVERALL_MIN:.0%}/{HOLD_BOSS_MIN:.0%})"
