@@ -2015,3 +2015,18 @@ def test_box_decide_noncombat_event_safe_fallback(monkeypatch):
     )
     # Safe option picked is Leave (index 2)
     assert action == _EVENT_START + 2
+
+
+def test_map_lowhp_reexport_parity():
+    """Verify that importing from sts2_env.eval.map_lowhp and re-exported from jev.py match."""
+    import sts2_env.eval.jev as jev_mod
+    import sts2_env.eval.map_lowhp as lowhp_mod
+    import sts2_env.eval as eval_pkg
+
+    for name in lowhp_mod.__all__:
+        assert hasattr(jev_mod, name), f"jev.py missing re-export of {name}"
+        assert getattr(jev_mod, name) is getattr(lowhp_mod, name), f"jev.py mismatch on {name}"
+        assert hasattr(eval_pkg, name), f"eval pkg missing re-export of {name}"
+        assert getattr(eval_pkg, name) is getattr(lowhp_mod, name), f"eval pkg mismatch on {name}"
+
+

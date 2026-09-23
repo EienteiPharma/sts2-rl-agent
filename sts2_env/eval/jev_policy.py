@@ -27,12 +27,6 @@ from sts2_env.eval.jev import (
     JEV_NEOW_OFF_REASON,
     NEOW_OPTIONS_EMPTY_REASON,
     JEV_PHASE_TOKENS,
-    MAP_LOWHP_HARD_ON,
-    MAP_LOWHP_HARD_REASON,
-    MAP_LOWHP_ON,
-    MAP_LOWHP_RANDOM_REASON,
-    MAP_LOWHP_SOFT_B_ON,
-    MAP_LOWHP_SOFT_B_REASON,
     NEOW_BOON_INSTRUCTIONS,
     NEOW_EARLY_CARD_INSTRUCTIONS,
     NON_JEV_PHASE_REASON,
@@ -53,11 +47,19 @@ from sts2_env.eval.jev import (
     JevError,
     apply_choice_confidence,
     local_hp_pressure,
+    rest_or_continue_override,
+)
+from sts2_env.eval.map_lowhp import (
+    MAP_LOWHP_HARD_ON,
+    MAP_LOWHP_HARD_REASON,
+    MAP_LOWHP_ON,
+    MAP_LOWHP_RANDOM_REASON,
+    MAP_LOWHP_SOFT_B_ON,
+    MAP_LOWHP_SOFT_B_REASON,
     map_lowhp_filter,
     map_lowhp_filter_with_reason,
     map_lowhp_hard_item,
     map_lowhp_safe_items,
-    rest_or_continue_override,
 )
 from sts2_env.gym_env.run_env import (
     STS2RunEnv,

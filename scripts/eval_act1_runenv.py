@@ -38,12 +38,14 @@ from sts2_env.eval.jev import (
     EVENT_OPTIONS_EMPTY_REASON,
     EVENT_SAFE_FALLBACK_REASON,
     JEV_EVENT_OFF_REASON,
-    MAP_LOWHP_HARD_REASON,
-    MAP_LOWHP_SOFT_B_REASON,
     POTION_OR_RELIC_REASON,
     POTION_OR_RELIC_SAFE_REASON,
     JevAnswer,
     build_jev_adapter,
+)
+from sts2_env.eval.map_lowhp import (
+    MAP_LOWHP_HARD_REASON,
+    MAP_LOWHP_SOFT_B_REASON,
 )
 from sts2_env.eval.jev_policy import (
     DEFAULT_JEV_FLAGS,

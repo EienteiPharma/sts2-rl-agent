@@ -25,6 +25,9 @@ from typing import Any
 import numpy as np
 
 from sts2_env.eval.jev import (
+    local_hp_pressure,
+)
+from sts2_env.eval.map_lowhp import (
     MAP_LOWHP_HARD_ON,
     MAP_LOWHP_HARD_REASON,
     MAP_LOWHP_ON,
@@ -32,7 +35,6 @@ from sts2_env.eval.jev import (
     MAP_LOWHP_SAFE_REASON,
     MAP_LOWHP_SOFT_B_ON,
     MAP_LOWHP_SOFT_B_REASON,
-    local_hp_pressure,
     map_lowhp_filter,
     map_lowhp_filter_with_reason,
     map_lowhp_hard_item,
