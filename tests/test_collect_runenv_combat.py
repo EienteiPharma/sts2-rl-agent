@@ -309,6 +309,7 @@ def test_train_from_buffer_cli_and_dry_run(tmp_path):
     assert args.n_envs == 1
     assert args.total_timesteps == 2048
     assert args.output_dir == train_mod.DEFAULT_OUTPUT_DIR
+    assert args.device == "auto"
     report = train_mod.dry_run(
         train_mod.parse_args(
             ["--dry-run", "--output-dir", "output/combat_runenv_offline_dry"]
@@ -317,6 +318,8 @@ def test_train_from_buffer_cli_and_dry_run(tmp_path):
     assert report["dry_run"] is True
     assert report["buffer_source"] == "synthetic"
     assert report["jev_on_learn_path"] is False
+    assert report["device_requested"] == "auto"
+    assert report["device"] in ("cpu", "cuda")
     assert report["hang"]["jev_event"] == "off"
     assert report["hang"]["jev_neow"] == "off"
     assert report["hang"]["start_with_neow"] is True
@@ -343,6 +346,21 @@ def test_train_from_buffer_cli_and_dry_run(tmp_path):
     )
     assert report2["buffer_source"] == "disk"
     assert report2["n_transitions"] == 8
+
+
+def test_train_from_buffer_resolve_device():
+    assert train_mod.parse_args(["--device", "cpu"]).device == "cpu"
+    assert train_mod.parse_args(["--device", "cuda"]).device == "cuda"
+    assert train_mod.parse_args(["--device", "cuda:0"]).device == "cuda:0"
+    assert train_mod.resolve_device("auto", cuda_available=False) == "cpu"
+    assert train_mod.resolve_device("auto", cuda_available=True) == "cuda"
+    assert train_mod.resolve_device("cpu", cuda_available=True) == "cpu"
+    assert train_mod.resolve_device("cuda", cuda_available=True) == "cuda"
+    assert train_mod.resolve_device("cuda:1", cuda_available=True) == "cuda:1"
+    with pytest.raises(SystemExit, match="cuda requested"):
+        train_mod.resolve_device("cuda", cuda_available=False)
+    with pytest.raises(SystemExit, match="unknown"):
+        train_mod.resolve_device("tpu", cuda_available=False)
 
 
 def test_train_from_buffer_refuses_frozen():

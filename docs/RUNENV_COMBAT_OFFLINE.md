@@ -106,6 +106,8 @@ python scripts/train_combat_from_buffer.py \
 
 `--dry-run` does not need a buffer file (uses a synthetic 16-step tensor). Real `learn` needs `--buffer`. Default `--total-timesteps 2048` is smoke; do not launch 500k from CA.
 
+EP CUDA: `--device auto` (default; cuda if available) or `--device cuda`. Never overwrite `bh_v1`.
+
 `--n-envs > 1` uses `SubprocVecEnv` of pickle-friendly `MixedHangLoadoutEnvMaker(buffer_path=...)`. Replay half has **no** TypeSafe. Loadout half is fixture combat.
 
 ## Online mix vs this path

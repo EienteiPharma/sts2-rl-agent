@@ -179,9 +179,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Replay env (+ mix) from buffer or synthetic; no SB3 learn",
     )
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="SB3 device: auto (cuda if available else cpu), cuda, cpu, or cuda:N",
+    )
     args = parser.parse_args(argv)
     args.runenv_frac = parse_runenv_frac(args.runenv_frac)
     return args
+
+
+def resolve_device(spec: str, *, cuda_available: bool | None = None) -> str:
+    """Map --device to an SB3 device string. EP 3070 Ti: auto or cuda."""
+    s = (spec or "auto").strip().lower()
+    if cuda_available is None:
+        try:
+            import torch
+
+            cuda_available = bool(torch.cuda.is_available())
+        except ImportError:
+            cuda_available = False
+    if s in ("auto", "cuda-if-available", ""):
+        return "cuda" if cuda_available else "cpu"
+    if s == "cuda":
+        if not cuda_available:
+            raise SystemExit(
+                "--device cuda requested but torch.cuda.is_available() is False"
+            )
+        return "cuda"
+    if s == "cpu":
+        return "cpu"
+    if s.startswith("cuda:"):
+        if not cuda_available:
+            raise SystemExit(f"--device {s} requested but CUDA unavailable")
+        return s
+    raise SystemExit(f"unknown --device {spec!r} (use auto|cuda|cpu|cuda:N)")
 
 
 def dry_run(args: argparse.Namespace) -> dict[str, Any]:
@@ -243,6 +275,8 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "subproc_maker": "MixedHangLoadoutEnvMaker",
         "total_timesteps": args.total_timesteps,
         "jev_on_learn_path": False,
+        "device_requested": args.device,
+        "device": resolve_device(args.device),
         "hang": {
             "jev": HANG_JEV,
             "jev_event": HANG_JEV_EVENT,
@@ -360,19 +394,20 @@ def train(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     n_envs = max(1, int(args.n_envs))
+    device = resolve_device(getattr(args, "device", "auto"))
     print("Training MaskablePPO from hang combat buffer")
     print("  continue_from:   ", continue_from)
     print("  output_dir:      ", output_dir)
     print("  buffer:          ", buffer_path, "n=", arrays["obs"].shape[0])
     print("  runenv_frac:     ", args.runenv_frac)
     print("  n_envs:          ", n_envs, "(SubprocVecEnv)" if n_envs > 1 else "(DummyVecEnv)")
+    print("  device:          ", device)
     print("  total_timesteps: ", args.total_timesteps)
     print("  jev_on_learn:    ", False)
     print("  hang collect was: jev on / event off / neow off / start_with_neow")
     print("  allows_event:    ", flags.allows_event())
     print("  allows_neow:     ", flags.allows_neow())
     print()
-
     makers = [
         make_masked_env(
             i,
@@ -384,7 +419,7 @@ def train(args: argparse.Namespace) -> None:
         for i in range(n_envs)
     ]
     train_env = SubprocVecEnv(makers) if n_envs > 1 else DummyVecEnv(makers)
-    model = MaskablePPO.load(str(continue_from), env=train_env, device="cpu")
+    model = MaskablePPO.load(str(continue_from), env=train_env, device=device)
     require_combat_obs_dim(model, OBS_SIZE)
 
     callback = None
