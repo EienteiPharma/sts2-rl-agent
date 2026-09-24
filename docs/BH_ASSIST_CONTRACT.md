@@ -165,4 +165,4 @@ Reference API: `sts2_env/eval/bh_assist.py` (heuristic hints); train helpers: `s
 
 ## Boss residual pack + forward inject (T3)
 
-Offline only — no policy/prompt/ranker changes. Slice `hold_turn_plan_replay_v1` JSONL → `boss_fail_pack_v1` (`scripts/pack_hold_turn_replay.py`); rebuild HOLD reset jobs for the same seeds (`scripts/boss_forward_inject.py`). **No engine rewind** from turn logs; forward inject reproduces Boss fight **starts** for assist v3 data after Lab go. See `docs/BOSS_FORWARD_INJECT.md`.
+Offline only — no policy/prompt/ranker changes. Slice `hold_turn_plan_replay_v1` JSONL → `boss_fail_pack_v1` (`scripts/pack_hold_turn_replay.py`); rebuild HOLD reset jobs for the same seeds (`scripts/boss_forward_inject.py`); collect buffer with hung PPO (`scripts/collect_boss_fail_inject_buffer.py`); train to **`output/combat_bh_assist_v3`** (`scripts/train_bh_assist_from_buffer.py` — refuses v1/v2 outdirs). **No engine rewind** from turn logs. See `docs/BOSS_FORWARD_INJECT.md`.

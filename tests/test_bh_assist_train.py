@@ -15,6 +15,7 @@ from sts2_env.eval.bh_assist_train import (
     ASSIST_EVAL_MIN_BOSS_PP,
     ASSIST_EVAL_MIN_OVERALL_PP,
     DEFAULT_BH_ASSIST_OUTDIR,
+    DEFAULT_BH_ASSIST_V3_OUTDIR,
     build_assist_rows_from_buffer,
     dry_run_manifest,
     refuse_bh_assist_output_path,
@@ -65,7 +66,7 @@ def test_build_rows_and_train_checkpoint(tmp_path: Path):
     rows = build_assist_rows_from_buffer(arrays)
     assert rows
     ckpt = train_linear_assist_ranker(rows, steps=8, seed=0)
-    out = tmp_path / "combat_bh_assist_v1"
+    out = tmp_path / "combat_bh_assist_v3"
     path = save_assist_checkpoint(
         out,
         ckpt,
@@ -76,7 +77,9 @@ def test_build_rows_and_train_checkpoint(tmp_path: Path):
 
 
 def test_dry_run_manifest_default_outdir():
-    payload = dry_run_manifest(buffer_path=None, output_dir=DEFAULT_BH_ASSIST_OUTDIR, n_train_steps=16)
+    payload = dry_run_manifest(
+        buffer_path=None, output_dir=DEFAULT_BH_ASSIST_V3_OUTDIR, n_train_steps=16
+    )
     assert payload["dry_run"] is True
     assert payload["hang_policy_swap"] is False
     assert payload["n_assist_rows"] > 0
@@ -115,4 +118,4 @@ def test_train_cli_dry_run():
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(proc.stdout)
     assert payload["dry_run"] is True
-    assert DEFAULT_BH_ASSIST_OUTDIR in payload["output_dir"]
+    assert DEFAULT_BH_ASSIST_V3_OUTDIR in payload["output_dir"]

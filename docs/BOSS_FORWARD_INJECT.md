@@ -46,4 +46,22 @@ PYTHONPATH=. python scripts/boss_forward_inject.py --pack-dir evals/boss_fail_pa
 
 Helpers: `sts2_env/eval/hold_replay_pack.py`, `sts2_env/eval/boss_forward_inject.py`.
 
+## Assist v3 train path (EP)
+
+```bash
+# 1) Collect buffer from inject jobs (hung PPO; no TypeSafe)
+PYTHONPATH=. python scripts/collect_boss_fail_inject_buffer.py \
+  --pack-dir evals/boss_fail_pack_v1 \
+  --out output/boss_fail_inject_buffer_v1/transitions.npz
+
+# 2) Train assist ranker to v3 outdir (does not overwrite v1/v2)
+PYTHONPATH=. python scripts/train_bh_assist_from_buffer.py \
+  --buffer output/boss_fail_inject_buffer_v1/transitions.npz \
+  --output-dir output/combat_bh_assist_v3 \
+  --pack-dir evals/boss_fail_pack_v1 \
+  --train-steps 128
+```
+
+`refuse_bh_assist_output_path` blocks writes into `combat_bh_assist_v1` / `combat_bh_assist_v2` and frozen hang trees. In-service assist remains **v1** until Lab promotes v3.
+
 Related: `docs/BH_ASSIST_CONTRACT.md` (assist v1 in-service; v3 data path).

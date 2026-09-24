@@ -85,6 +85,34 @@ def build_inject_jobs_from_pack(
     return jobs, meta
 
 
+def load_inject_jobs_json(path: str | Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Rehydrate HOLD jobs from ``inject_jobs.json`` (fixtures loaded from disk)."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"inject jobs file must be object: {path}")
+    raw_jobs = data.get("jobs") or []
+    fixtures = load_hold_fixtures()
+    jobs: list[dict[str, Any]] = []
+    for raw in raw_jobs:
+        fix_i = int(raw["fixture_index"])
+        enc_id = int(raw["enc_id"])
+        seed = int(raw["seed"])
+        ep = int(raw.get("ep") if raw.get("ep") is not None else infer_ep_from_seed(seed, fix_i, enc_id))
+        jobs.append(
+            {
+                "fixture_index": fix_i,
+                "fixture": dict(fixtures[fix_i]),
+                "enc_id": enc_id,
+                "bucket": str(raw.get("bucket") or bucket_for_enc(enc_id)),
+                "ep": ep,
+                "seed": seed,
+                "pack_episode_ref": dict(raw.get("pack_episode_ref") or {}),
+            }
+        )
+    meta = {k: v for k, v in data.items() if k != "jobs"}
+    return jobs, meta
+
+
 def write_inject_jobs(
     path: str | Path,
     jobs: Sequence[Mapping[str, Any]],
@@ -134,6 +162,7 @@ def smoke_forward_inject(
 __all__ = [
     "BOSS_FORWARD_INJECT_PROTOCOL",
     "build_inject_jobs_from_pack",
+    "load_inject_jobs_json",
     "hold_job_from_replay_episode",
     "infer_ep_from_seed",
     "smoke_forward_inject",

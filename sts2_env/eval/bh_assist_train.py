@@ -21,9 +21,15 @@ from sts2_env.gym_env.combat_buffer import (
 from sts2_env.gym_env.observation import OBS_SIZE
 
 DEFAULT_BH_ASSIST_OUTDIR = "output/combat_bh_assist_v1"
+DEFAULT_BH_ASSIST_V3_OUTDIR = "output/combat_bh_assist_v3"
+PROTECTED_ASSIST_OUTDIR_NAMES = (
+    "combat_bh_assist_v1",
+    "combat_bh_assist_v2",
+)
 BH_ASSIST_MANIFEST_NAME = "bh_assist_train_manifest.json"
 BH_ASSIST_CKPT_NAME = "bh_assist_ranker.npz"
 PROTOCOL_ID = "bh_assist_buffer_rank_v1 LOCKED 2026-09-24"
+PROTOCOL_ID_V3 = "bh_assist_buffer_rank_v3 LOCKED 2026-09-24"
 # Pre-train HOLD eval (assist-on vs assist-off): docs/BH_ASSIST_CONTRACT.md
 # lock_eval_then_v3 — formal n_eps=20, workers=8; n_eps=5 diagnostic only (no promotion).
 ASSIST_EVAL_MIN_OVERALL_PP = 3
@@ -37,6 +43,12 @@ def refuse_bh_assist_output_path(path: str | Path, *, what: str = "bh_assist out
     """Refuse frozen hang outdirs and hang ``final_model.zip`` targets."""
     out = refuse_frozen_path(path, what=what)
     parts = set(out.parts)
+    for protected in PROTECTED_ASSIST_OUTDIR_NAMES:
+        if out.name == protected or protected in parts:
+            raise SystemExit(
+                f"refusing to write {what} into protected assist tree {out}; "
+                f"use e.g. {DEFAULT_BH_ASSIST_V3_OUTDIR} for new train"
+            )
     if HUNG_OUTDIR_NAME in parts and out.name == "final_model.zip":
         raise SystemExit(
             f"refusing to write assist artifact over hang zip {out}; "
@@ -207,6 +219,8 @@ def dry_run_manifest(
     buffer_path: str | None,
     output_dir: str | Path,
     n_train_steps: int,
+    pack_dir: str | None = None,
+    protocol_id: str | None = None,
 ) -> dict[str, Any]:
     out = refuse_bh_assist_output_path(output_dir)
     if buffer_path and str(buffer_path).strip():
@@ -219,8 +233,8 @@ def dry_run_manifest(
         meta = {}
         source = "synthetic"
         n_trans = int(arrays["obs"].shape[0])
-    return {
-        "protocol": PROTOCOL_ID,
+    payload: dict[str, Any] = {
+        "protocol": protocol_id or PROTOCOL_ID,
         "dry_run": True,
         "output_dir": str(out),
         "buffer": buffer_path or None,
@@ -232,12 +246,18 @@ def dry_run_manifest(
         "target": "ranked_semantic_and_risk_notes_for_jev",
         "sample_row": rows[0].as_dict() if rows else None,
     }
+    if pack_dir and str(pack_dir).strip():
+        payload["source_pack_dir"] = str(Path(pack_dir).resolve())
+    return payload
 
 
 __all__ = [
     "BH_ASSIST_CKPT_NAME",
     "BH_ASSIST_MANIFEST_NAME",
     "DEFAULT_BH_ASSIST_OUTDIR",
+    "DEFAULT_BH_ASSIST_V3_OUTDIR",
+    "PROTECTED_ASSIST_OUTDIR_NAMES",
+    "PROTOCOL_ID_V3",
     "AssistTrainRow",
     "ASSIST_EVAL_FORMAL_N_EPS",
     "ASSIST_EVAL_FORMAL_WORKERS",

@@ -18,7 +18,9 @@ from pathlib import Path
 
 from sts2_env.eval.bh_assist_train import (
     DEFAULT_BH_ASSIST_OUTDIR,
+    DEFAULT_BH_ASSIST_V3_OUTDIR,
     PROTOCOL_ID,
+    PROTOCOL_ID_V3,
     build_assist_rows_from_buffer,
     dry_run_manifest,
     load_assist_rows_from_buffer_path,
@@ -39,8 +41,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--output-dir",
-        default=DEFAULT_BH_ASSIST_OUTDIR,
-        help=f"Assist checkpoint outdir (default {DEFAULT_BH_ASSIST_OUTDIR})",
+        default=DEFAULT_BH_ASSIST_V3_OUTDIR,
+        help=(
+            f"Assist checkpoint outdir (default {DEFAULT_BH_ASSIST_V3_OUTDIR}; "
+            f"v1/v2 paths refused)"
+        ),
     )
     p.add_argument(
         "--continue-from",
@@ -51,6 +56,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--out-json", default="", help="Optional manifest JSON path")
+    p.add_argument(
+        "--pack-dir",
+        default="",
+        help="Optional boss_fail pack dir stamp for manifest (rows still from --buffer)",
+    )
     return p.parse_args(argv)
 
 
@@ -59,11 +69,16 @@ def main(argv: list[str] | None = None) -> int:
     refuse_hang_ppo_continue(args.continue_from or None)
     out = refuse_bh_assist_output_path(args.output_dir)
 
+    pack_dir = str(getattr(args, "pack_dir", "") or "").strip() or None
+    protocol = PROTOCOL_ID_V3 if "combat_bh_assist_v3" in out.parts else PROTOCOL_ID
+
     if args.dry_run:
         payload = dry_run_manifest(
             buffer_path=str(args.buffer).strip() or None,
             output_dir=out,
             n_train_steps=int(args.train_steps),
+            pack_dir=pack_dir,
+            protocol_id=protocol,
         )
         print(json.dumps(payload, indent=2))
         if args.out_json:
@@ -84,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         rows, seed=int(args.seed), steps=int(args.train_steps)
     )
     manifest = {
-        "protocol": PROTOCOL_ID,
+        "protocol": protocol,
         "dry_run": False,
         "output_dir": str(out),
         "buffer": buffer_path or None,
@@ -93,6 +108,8 @@ def main(argv: list[str] | None = None) -> int:
         "hang_policy_swap": False,
         "model_kind": "linear_assist_ranker",
     }
+    if pack_dir:
+        manifest["source_pack_dir"] = str(Path(pack_dir).resolve())
     manifest.update({k: meta[k] for k in ("buffer_version", "n_transitions") if k in meta})
     ckpt_path = save_assist_checkpoint(out, ckpt, manifest)
     print(f"bh_assist checkpoint: {ckpt_path}")
