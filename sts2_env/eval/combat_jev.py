@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -826,6 +826,82 @@ def choose_combat_step(
     return local, log
 
 
+def turn_plan_replan_cap_lab_report(
+    combat_jev_report: Mapping[str, Any] | None,
+    *,
+    arm: str | None = None,
+) -> dict[str, Any]:
+    """Lab acceptance payload for ``replan_cap`` tips (reporting only; no gates).
+
+    When ``replan_cap_events`` > 0, tips must report ``buckets`` (true exhaustion
+    vs shortlist idle), not the catastrophe total alone. A/B formal arms share the
+    same execute classifier — execute fixes should shift both; assist-only skew
+    shows up in plan-length / trigger mix, not missing buckets on B.
+    """
+    from sts2_env.eval.combat_turn_plan import (
+        REPLAN_CAP_BUCKET_SHORTLIST_IDLE,
+        REPLAN_CAP_BUCKET_TRUE_EXHAUSTION,
+    )
+
+    report = dict(combat_jev_report or {})
+    reasons = report.get("jev_turn_catastrophe_reason") or {}
+    cap_total = int(reasons.get(FAILOPEN_REPLAN_CAP) or 0)
+    buckets_raw = dict(report.get("turn_plan_replan_cap_bucket") or {})
+    triggers = dict(report.get("turn_plan_replan_trigger") or {})
+    buckets = {
+        REPLAN_CAP_BUCKET_TRUE_EXHAUSTION: int(
+            buckets_raw.get(REPLAN_CAP_BUCKET_TRUE_EXHAUSTION, 0)
+        ),
+        REPLAN_CAP_BUCKET_SHORTLIST_IDLE: int(
+            buckets_raw.get(REPLAN_CAP_BUCKET_SHORTLIST_IDLE, 0)
+        ),
+    }
+    bucket_sum = sum(buckets.values())
+    shares = {
+        k: round(v / bucket_sum, 4) if bucket_sum else 0.0 for k, v in buckets.items()
+    }
+    coverage_ok = cap_total == 0 or bucket_sum == cap_total
+    acceptance: dict[str, Any] = {
+        "requires_bucket_split_when_cap_positive": True,
+        "bucket_coverage_ok": coverage_ok,
+    }
+    if cap_total > 0 and not coverage_ok:
+        acceptance["warning"] = (
+            f"replan_cap_events={cap_total} but sum(buckets)={bucket_sum}; "
+            "tip must wire turn_plan_replan_cap_bucket at each cap catastrophe"
+        )
+    return {
+        "arm": arm,
+        "replan_cap_events": cap_total,
+        "buckets": buckets,
+        "bucket_share": shares,
+        "replan_triggers": {str(k): int(v) for k, v in triggers.items()},
+        "execute_path_symmetry": (
+            "Classifier is on jev-turn execute (replan budget / plan steps). "
+            "Assist (B) affects Choice pick only; formal both-high replan_cap "
+            "(e.g. d9d9fff A166 / B140) needs per-arm bucket tables — an execute "
+            "fix should explain similar bucket movement on A and B, not B-only pain."
+        ),
+        "lab_acceptance": acceptance,
+    }
+
+
+def format_replan_cap_lab_report_line(lab: Mapping[str, Any]) -> str:
+    cap = int(lab.get("replan_cap_events") or 0)
+    if cap <= 0:
+        return "  replan_cap_lab: 0 events (bucket split N/A)"
+    buckets = lab.get("buckets") or {}
+    ok = (lab.get("lab_acceptance") or {}).get("bucket_coverage_ok")
+    return (
+        "  replan_cap_lab: "
+        f"events={cap} "
+        f"true_exhaustion={int(buckets.get('true_replan_exhaustion') or 0)} "
+        f"shortlist_idle={int(buckets.get('shortlist_or_short_plan_idle') or 0)} "
+        f"triggers={lab.get('replan_triggers') or {}} "
+        f"coverage_ok={ok}"
+    )
+
+
 __all__ = [
     "CHOICE_COMBAT_STEP",
     "COMBAT_JEV_CONF_MIN",
@@ -851,9 +927,11 @@ __all__ = [
     "enumerate_legal_combat_actions",
     "fail_open_bh_v1_required",
     "fail_open_local",
+    "format_replan_cap_lab_report_line",
     "format_turn_plan_error_sample",
     "hung_ppo_local",
     "parse_combat_action_id",
     "summarize_combat_action",
     "summarize_combat_jev",
+    "turn_plan_replan_cap_lab_report",
 ]

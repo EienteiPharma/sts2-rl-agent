@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from sts2_env.eval.combat_jev import CombatJevTelemetry, FAILOPEN_REPLAN_CAP
+from sts2_env.eval.combat_jev import (
+    CombatJevTelemetry,
+    FAILOPEN_REPLAN_CAP,
+    format_replan_cap_lab_report_line,
+    turn_plan_replan_cap_lab_report,
+)
 from sts2_env.eval.combat_turn_plan import (
     MAX_REPLANS_PER_PLAYER_TURN,
     REPLAN_CAP_BUCKET_SHORTLIST_IDLE,
@@ -62,3 +67,31 @@ def test_replay_turn_row_carries_replan_cap_bucket_from_shadow():
     assert row["replan_cap_hit"] is True
     assert row["replan_cap_bucket"] == REPLAN_CAP_BUCKET_TRUE_EXHAUSTION
     assert row["replan_cap_diag"]["replan_triggers"]["illegal_step"] == 4
+
+
+def test_lab_report_requires_bucket_coverage_when_cap_positive():
+    report = {
+        "jev_turn_catastrophe_reason": {FAILOPEN_REPLAN_CAP: 3},
+        "turn_plan_replan_cap_bucket": {
+            REPLAN_CAP_BUCKET_TRUE_EXHAUSTION: 2,
+            REPLAN_CAP_BUCKET_SHORTLIST_IDLE: 1,
+        },
+        "turn_plan_replan_trigger": {"illegal_step": 10},
+    }
+    lab = turn_plan_replan_cap_lab_report(report, arm="A_assist_off")
+    assert lab["replan_cap_events"] == 3
+    assert lab["buckets"][REPLAN_CAP_BUCKET_TRUE_EXHAUSTION] == 2
+    assert lab["lab_acceptance"]["bucket_coverage_ok"] is True
+    assert "execute_path_symmetry" in lab
+    line = format_replan_cap_lab_report_line(lab)
+    assert "true_exhaustion=2" in line
+    assert "shortlist_idle=1" in line
+
+
+def test_lab_report_warns_when_buckets_missing():
+    lab = turn_plan_replan_cap_lab_report(
+        {"jev_turn_catastrophe_reason": {FAILOPEN_REPLAN_CAP: 5}},
+        arm="B_assist_on",
+    )
+    assert lab["lab_acceptance"]["bucket_coverage_ok"] is False
+    assert "warning" in lab["lab_acceptance"]

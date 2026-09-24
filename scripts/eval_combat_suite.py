@@ -210,6 +210,8 @@ def empty_combat_jev_report(*, n_episodes: int = 0) -> dict[str, Any]:
             "illegal_plan": 0,
             "replan_cap": 0,
         },
+        "turn_plan_replan_trigger": {},
+        "turn_plan_replan_cap_bucket": {},
         "note": (
             "Combat-Jev is an optional bypass (--combat-policy jev), not a "
             "hang swap. Default remains ppo/bh_v1. Conf min 0.35."
@@ -364,6 +366,20 @@ def main(argv: list[str] | None = None) -> int:
     overall = float(summary["overall"]["win_rate"])
     elite = float(summary["elite"]["win_rate"])
     boss = float(summary["boss"]["win_rate"])
+    replan_cap_lab: dict[str, Any] | None = None
+    if combat_policy == "jev-turn":
+        from sts2_env.eval.combat_jev import (
+            format_replan_cap_lab_report_line,
+            turn_plan_replan_cap_lab_report,
+        )
+
+        arm_label = (
+            "B_assist_on" if bh_assist_mode == "on" else "A_assist_off"
+        )
+        replan_cap_lab = turn_plan_replan_cap_lab_report(
+            combat_jev_payload, arm=arm_label
+        )
+
     payload = {
         "protocol": PROTOCOL_ID,
         "suite": "loadout_v1",
@@ -394,6 +410,7 @@ def main(argv: list[str] | None = None) -> int:
         "turn_replay": summary.get("turn_replay"),
         "wr_any": summary.get("wr_any") or summary.get("overall"),
         "turn_plan_episode_buckets": summary.get("turn_plan_episode_buckets"),
+        "replan_cap_lab": replan_cap_lab,
     }
     text = (
         f"HOLD loadout_v1 n_eps={n_eps} workers={workers} "
@@ -403,6 +420,8 @@ def main(argv: list[str] | None = None) -> int:
         f"(gate {HOLD_OVERALL_MIN:.0%}/{HOLD_BOSS_MIN:.0%})"
     )
     print(text)
+    if replan_cap_lab is not None:
+        print(format_replan_cap_lab_report_line(replan_cap_lab))
     hang = payload["hang_table"]
     print(
         "  hang 2026-09-22 bh_v1 table: "

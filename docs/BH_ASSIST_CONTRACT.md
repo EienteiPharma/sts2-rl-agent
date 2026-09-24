@@ -131,6 +131,18 @@ Overall WR (`wr_any`, same as `overall.win_rate`) mixes Jev-fulfilled turns with
 
 Per-fight rows (jev-turn) include `had_turn_plan_catastrophe`, `turn_plan_fulfilled_turns`, `turn_plan_catastrophe_turns`, `turn_plan_catastrophe_reasons`. Turn replay JSONL rows with `replan_cap_hit` may add `replan_cap_bucket` + `replan_cap_diag` (旁证).
 
+### Lab acceptance — `replan_cap` tips (reporting only)
+
+Any tip whose goal is to **reduce** turn-plan `replan_cap` must ship evidence as **bucket split**, not `jev_turn_catastrophe_reason.replan_cap` total alone:
+
+| Required in tip / summary JSON | Field |
+|---|---|
+| Per-arm bucket counts | `replan_cap_lab.buckets.true_replan_exhaustion` / `shortlist_or_short_plan_idle` |
+| Trigger mix | `replan_cap_lab.replan_triggers` (`illegal_step`, …) |
+| Coverage check | `replan_cap_lab.lab_acceptance.bucket_coverage_ok` (sum(buckets) == events when events > 0) |
+
+`eval_combat_suite.py` (`--combat-policy jev-turn`) writes top-level **`replan_cap_lab`** with `arm` = `A_assist_off` or `B_assist_on` and prints one stdout line. **Formal A/B both high** (e.g. `d9d9fff` replan_cap A166 / B140): contrast **two** summaries’ `replan_cap_lab` blocks. Execute-path fixes should move **both** arms similarly (classifier is assist-invariant); if only B moves, explain via Choice/plan-length skew, not execute-only wiring. Does **not** change +3/+2, dual gate, or `MAX_REPLANS`.
+
 ### Assist effectiveness bar (A vs B on `jev-turn`)
 
 Assist counts as **effective** only if arm B beats arm A on loadout_v1 HOLD win rates by:
