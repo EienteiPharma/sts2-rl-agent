@@ -239,33 +239,40 @@ def test_plans_from_live_legal_keys_max_steps():
     assert len(plans[0].steps) >= 1
 
 
-def test_prompt_layers_default_rich_choice_state():
-    from sts2_env.eval.combat_turn_plan import DEFAULT_TURN_PLAN_PROMPT_CONFIG
+def test_prompt_layers_default_short_context():
+    from sts2_env.eval.combat_turn_plan import (
+        DEFAULT_TURN_PLAN_PROMPT_CONFIG,
+        RICH_TURN_PLAN_PROMPT_CONFIG,
+    )
 
     cfg = DEFAULT_TURN_PLAN_PROMPT_CONFIG
-    assert cfg.system_rules is True
-    assert cfg.board_json is True
+    assert cfg.short_context is True
+    assert cfg.board_json is False
     board = _board_lethal_attack()
     state = build_turn_plan_jev_state(board, prompt_config=cfg)
     assert state["mode"] == "combat_turn_plan"
-    assert "combat_snapshot" in state
-    assert state["combat_snapshot"]["incoming_attack_damage"] == 20
-    assert "board" in state
+    assert "decision" in state
+    assert state["decision"]["incoming"] == 20
+    assert "board" not in state
+    assert "combat_snapshot" not in state
     plans = (
         TurnPlanCandidate("plan_0000", ("play:Defend:h1@self", SEMANTIC_END_TURN)),
     )
-    q = build_combat_turn_plan_choice_question(plans, board=board)
-    assert "Defend" in q["criteria"]["plan_0000"]
-    assert "End turn" in q["criteria"]["plan_0000"]
     wrapped = jev_turn_plan_questions(board, plans)
     instr = wrapped[CHOICE_COMBAT_TURN_PLAN]["instructions"]
-    assert "incoming attack" in instr.lower()
-    assert "Hand:" in instr
+    assert "inc=20" in instr or "inc 20" in instr.replace("=", " ")
+    crit = wrapped[CHOICE_COMBAT_TURN_PLAN]["criteria"]["plan_0000"]
+    assert "ET" in crit or "end" in crit.lower()
 
-    sparse = TurnPlanPromptConfig(system_rules=False, board_json=False)
-    state_sparse = build_turn_plan_jev_state(board, prompt_config=sparse)
-    assert "board" not in state_sparse
-    assert "combat_snapshot" in state_sparse
+    rich = RICH_TURN_PLAN_PROMPT_CONFIG
+    state_rich = build_turn_plan_jev_state(board, prompt_config=rich)
+    assert "combat_snapshot" in state_rich
+    assert "board" in state_rich
+    q = build_combat_turn_plan_choice_question(plans, board=board)
+    assert "Defend" in q["criteria"]["plan_0000"]
+    wrapped_rich = jev_turn_plan_questions(board, plans, prompt_config=rich)
+    instr_rich = wrapped_rich[CHOICE_COMBAT_TURN_PLAN]["instructions"]
+    assert "Hand:" in instr_rich
 
 
 def test_runner_executes_heuristic_top_plan_low_conf_ok():
@@ -420,9 +427,10 @@ def test_turn_plan_bh_assist_on_fixture_injects_choice_payload(tmp_path):
     )
     env.close()
     assert "bh_assist" in _CaptureAdapter.last_state
-    assert _CaptureAdapter.last_state["bh_assist"]["ranked_semantic"]
+    assist_state = _CaptureAdapter.last_state["bh_assist"]
+    assert assist_state.get("ranked") or assist_state.get("ranked_semantic")
     instr = _CaptureAdapter.last_questions[CHOICE_COMBAT_TURN_PLAN]["instructions"]
-    assert "ranked_semantic" in instr.lower()
+    assert "rank" in instr.lower()
 
 
 def test_eval_combat_suite_accepts_jev_turn_and_bh_assist():

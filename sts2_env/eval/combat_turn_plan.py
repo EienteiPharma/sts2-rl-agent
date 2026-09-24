@@ -12,6 +12,7 @@ No live HTTP in this module. Default hang combat remains ``--combat-policy ppo``
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -42,6 +43,9 @@ DEFAULT_TURN_PLAN_CHOICE_CANDIDATES = 32
 TURN_PLAN_CHOICE_CAP_ENV = "STS2_TURN_PLAN_CHOICE_CAP"
 # Off by default (Lab: ``37a066c`` remap lowered replan_cap but skewed B / Δ vs d9d9fff).
 TURN_PLAN_EXECUTE_REMAP_ENV = "STS2_TURN_PLAN_EXECUTE_REMAP"
+TURN_PLAN_JEV_PAYLOAD_MAX_BYTES = 2048
+TURN_PLAN_INSTRUCTIONS_MAX_CHARS = 400
+TURN_PLAN_CRITERIA_VALUE_MAX_CHARS = 48
 # Back-compat alias for tests/docs referring to the product default.
 MAX_TURN_PLAN_CHOICE_CANDIDATES = DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
 MAX_REPLANS_PER_PLAYER_TURN = 3
@@ -64,6 +68,11 @@ COMBAT_TURN_PLAN_INSTRUCTIONS = (
     "(not free-generated text). Do not invent plan_ids or steps outside the "
     "shortlist. Use the combat snapshot (HP, block, energy, enemy intents, "
     "incoming damage) to block lethal telegraphed attacks before greedy damage."
+)
+
+COMBAT_TURN_PLAN_INSTRUCTIONS_SHORT = (
+    "Pick exactly one plan_id from criteria keys. Plans are fixed semantic "
+    "step sequences; do not invent ids. Block lethal incoming before damage."
 )
 
 _TRACKED_POWERS = (
@@ -353,6 +362,135 @@ def summarize_board_for_turn_plan_choice(board: dict[str, Any]) -> dict[str, Any
             "exhaust": int(piles.get("exhaust_n") or 0),
         },
     }
+
+
+def compact_turn_plan_decision_scalars(board: dict[str, Any]) -> dict[str, int | bool]:
+    """Minimal scalars for Jev turn-plan Choice (no board dump)."""
+    snap = summarize_board_for_turn_plan_choice(board)
+    player = snap["player"]
+    return {
+        "hp": int(player["hp"]),
+        "max_hp": int(player["max_hp"]),
+        "block": int(player["block"]),
+        "energy": int(player["energy"]),
+        "incoming": int(snap["incoming_attack_damage"]),
+        "end_turn_ok": bool(snap["end_turn_legal"]),
+    }
+
+
+def _compact_semantic_step(step: str) -> str:
+    key = str(step).strip()
+    if key == SEMANTIC_END_TURN:
+        return "ET"
+    m = _PLAY_STEP_RE.match(key)
+    if m:
+        card = str(m.group("card") or "?").split("_")[0][:8]
+        if "@e" in key:
+            return f"{card}@e{key.rsplit('e', 1)[-1]}"
+        return f"{card}@s"
+    if key.startswith("potion:"):
+        return "pot"
+    return key[:12]
+
+
+def compact_plan_criteria_summary(plan: TurnPlanCandidate) -> str:
+    """Short semantic step summary for one plan_id (no hand prose)."""
+    if not plan.steps:
+        return "."
+    shown = plan.steps[:6]
+    text = ",".join(_compact_semantic_step(s) for s in shown)
+    if len(plan.steps) > 6:
+        text += ",.."
+    return text[:TURN_PLAN_CRITERIA_VALUE_MAX_CHARS]
+
+
+def _short_choice_instructions(board: dict[str, Any]) -> str:
+    d = compact_turn_plan_decision_scalars(board)
+    text = (
+        f"{COMBAT_TURN_PLAN_INSTRUCTIONS_SHORT} "
+        f"hp={d['hp']}/{d['max_hp']} blk={d['block']} en={d['energy']} "
+        f"inc={d['incoming']} et={'1' if d['end_turn_ok'] else '0'}."
+    )
+    return text[:TURN_PLAN_INSTRUCTIONS_MAX_CHARS]
+
+
+def _short_bh_assist_suffix(assist: Any) -> str:
+    ranked = list(getattr(assist, "ranked_semantic", ()) or ())[:5]
+    notes = [str(n)[:32] for n in (getattr(assist, "risk_notes", ()) or ())[:2]]
+    bits: list[str] = []
+    if ranked:
+        bits.append("rank:" + "|".join(_compact_semantic_step(k) for k in ranked))
+    if notes:
+        bits.append("risk:" + ";".join(notes))
+    if not bits:
+        return ""
+    return " " + " ".join(bits)[:180]
+
+
+def _compact_bh_assist_state(assist: Any) -> dict[str, Any]:
+    ranked = list(getattr(assist, "ranked_semantic", ()) or ())[:6]
+    notes = [str(n)[:40] for n in (getattr(assist, "risk_notes", ()) or ())[:2]]
+    return {
+        "ranked": [_compact_semantic_step(k) for k in ranked],
+        "notes": notes,
+    }
+
+
+def turn_plan_typesafe_payload_bytes(
+    state: dict[str, Any], questions: dict[str, dict[str, Any]]
+) -> int:
+    body = {"state": state, "questions": questions}
+    return len(json.dumps(body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"))
+
+
+def clamp_turn_plan_jev_payload(
+    state: dict[str, Any],
+    questions: dict[str, dict[str, Any]],
+    *,
+    max_bytes: int = TURN_PLAN_JEV_PAYLOAD_MAX_BYTES,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Trim criteria/instructions if serialized payload exceeds ``max_bytes``."""
+    if turn_plan_typesafe_payload_bytes(state, questions) <= max_bytes:
+        return state, questions
+    qmap = dict(questions)
+    choice = dict(qmap.get(CHOICE_COMBAT_TURN_PLAN) or {})
+    criteria = dict(choice.get("criteria") or {})
+    instr = str(choice.get("instructions") or "")
+    for limit in (
+        TURN_PLAN_CRITERIA_VALUE_MAX_CHARS,
+        32,
+        20,
+        12,
+        8,
+    ):
+        criteria = {k: str(v)[:limit] for k, v in criteria.items()}
+        choice["criteria"] = criteria
+        choice["instructions"] = instr[: max(80, TURN_PLAN_INSTRUCTIONS_MAX_CHARS // 2)]
+        qmap[CHOICE_COMBAT_TURN_PLAN] = choice
+        if turn_plan_typesafe_payload_bytes(state, qmap) <= max_bytes:
+            return state, qmap
+    choice["instructions"] = instr[:120]
+    choice["criteria"] = {k: str(v)[:8] for k, v in criteria.items()}
+    qmap[CHOICE_COMBAT_TURN_PLAN] = choice
+    return state, qmap
+
+
+def build_turn_plan_typesafe_request(
+    board: dict[str, Any],
+    plans: Sequence[TurnPlanCandidate],
+    *,
+    prompt_config: TurnPlanPromptConfig | None = None,
+    bh_assist: Any | None = None,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """State + questions as sent to TypeSafe (post clamp)."""
+    cfg = prompt_config or DEFAULT_TURN_PLAN_PROMPT_CONFIG
+    state = build_turn_plan_jev_state(
+        board, prompt_config=cfg, bh_assist=bh_assist
+    )
+    questions = jev_turn_plan_questions(
+        board, plans, prompt_config=cfg, bh_assist=bh_assist
+    )
+    return clamp_turn_plan_jev_payload(state, questions)
 
 
 def _choice_instructions_with_board(board: dict[str, Any], instructions: str) -> str:
@@ -740,6 +878,25 @@ def jev_turn_plan_questions(
     from sts2_env.eval.bh_assist import bh_assist_instruction_suffix
 
     cfg = prompt_config or DEFAULT_TURN_PLAN_PROMPT_CONFIG
+    if cfg.short_context:
+        instructions = _short_choice_instructions(board)
+        if cfg.system_rules:
+            instructions = (
+                COMBAT_TURN_PLAN_SYSTEM_RULES[:80] + " " + instructions
+            )[:TURN_PLAN_INSTRUCTIONS_MAX_CHARS]
+        if bh_assist is not None:
+            instructions = (
+                instructions + _short_bh_assist_suffix(bh_assist)
+            )[:TURN_PLAN_INSTRUCTIONS_MAX_CHARS]
+        return {
+            CHOICE_COMBAT_TURN_PLAN: {
+                "type": "choice",
+                "instructions": instructions,
+                "criteria": {
+                    p.plan_id: compact_plan_criteria_summary(p) for p in plans
+                },
+            }
+        }
     instructions = _choice_instructions_with_board(board, COMBAT_TURN_PLAN_INSTRUCTIONS)
     if cfg.system_rules:
         instructions = COMBAT_TURN_PLAN_SYSTEM_RULES + " " + instructions
@@ -758,12 +915,20 @@ def jev_turn_plan_questions(
 class TurnPlanPromptConfig:
     """Layered prompt toggles for turn-plan Choice."""
 
-    system_rules: bool = True
-    board_json: bool = True
+    short_context: bool = True
+    system_rules: bool = False
+    board_json: bool = False
     human_exemplars: bool = False
 
 
 DEFAULT_TURN_PLAN_PROMPT_CONFIG = TurnPlanPromptConfig()
+
+RICH_TURN_PLAN_PROMPT_CONFIG = TurnPlanPromptConfig(
+    short_context=False,
+    system_rules=True,
+    board_json=True,
+    human_exemplars=False,
+)
 
 REPLAN_CAP_BUCKET_TRUE_EXHAUSTION = "true_replan_exhaustion"
 REPLAN_CAP_BUCKET_SHORTLIST_IDLE = "shortlist_or_short_plan_idle"
@@ -878,7 +1043,15 @@ def build_turn_plan_jev_state(
     bh_assist: Any | None = None,
 ) -> dict[str, Any]:
     cfg = prompt_config or DEFAULT_TURN_PLAN_PROMPT_CONFIG
-    state: dict[str, Any] = {
+    if cfg.short_context:
+        state: dict[str, Any] = {
+            "mode": "combat_turn_plan",
+            "decision": compact_turn_plan_decision_scalars(board),
+        }
+        if bh_assist is not None:
+            state["bh_assist"] = _compact_bh_assist_state(bh_assist)
+        return state
+    state = {
         "mode": "combat_turn_plan",
         "combat_snapshot": summarize_board_for_turn_plan_choice(board),
     }
@@ -1085,6 +1258,7 @@ def _pick_plan_via_jev(
     questions = jev_turn_plan_questions(
         board, plans, prompt_config=cfg, bh_assist=bh_assist
     )
+    state, questions = clamp_turn_plan_jev_payload(state, questions)
     try:
         answers = adapter.system_one(state, questions)
     except JevError as e:
@@ -1416,7 +1590,10 @@ __all__ = [
     "CHOICE_COMBAT_TURN_PLAN",
     "COMBAT_TURN_PLAN_INSTRUCTIONS",
     "COMBAT_TURN_PLAN_SYSTEM_RULES",
+    "COMBAT_TURN_PLAN_INSTRUCTIONS_SHORT",
     "DEFAULT_TURN_PLAN_PROMPT_CONFIG",
+    "RICH_TURN_PLAN_PROMPT_CONFIG",
+    "TURN_PLAN_JEV_PAYLOAD_MAX_BYTES",
     "DEFAULT_TURN_PLAN_CHOICE_CANDIDATES",
     "MAX_CANDIDATE_PLANS",
     "MAX_PLAN_STEPS",
@@ -1442,6 +1619,11 @@ __all__ = [
     "resolve_turn_plan_execute_remap",
     "score_turn_plan_candidate",
     "build_turn_plan_jev_state",
+    "build_turn_plan_typesafe_request",
+    "clamp_turn_plan_jev_payload",
+    "compact_plan_criteria_summary",
+    "compact_turn_plan_decision_scalars",
+    "turn_plan_typesafe_payload_bytes",
     "summarize_board_for_turn_plan_choice",
     "catastrophe_reason_for_telemetry",
     "choose_combat_turn_plan_action",
