@@ -183,6 +183,10 @@ class HoldTurnPlanEpisodeReplay:
             entry["bh_assist"] = bh_assist.as_dict()
         if shadow and shadow.get("turn_plan_step"):
             entry["executed_step"] = shadow.get("turn_plan_step")
+        if shadow and shadow.get("replan_cap_bucket"):
+            entry["replan_cap_bucket"] = shadow.get("replan_cap_bucket")
+        if shadow and shadow.get("replan_cap_diag"):
+            entry["replan_cap_diag"] = dict(shadow.get("replan_cap_diag") or {})
         self.turns.append(entry)
 
     def patch_last_turn_trajectory(

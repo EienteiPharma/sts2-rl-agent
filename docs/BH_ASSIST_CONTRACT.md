@@ -127,8 +127,9 @@ Overall WR (`wr_any`, same as `overall.win_rate`) mixes Jev-fulfilled turns with
 | `win_rate_clean` / `win_rate_had_catastrophe` | WR within those episode sets |
 | `boss_win_rate_clean` / `boss_win_rate_had_catastrophe` | Boss-bucket subset |
 | `combat_jev` block | Turn-level `jev_fulfilled_rate`, `catastrophe_failopen_rate`, reason histogram (unchanged) |
+| `combat_jev.turn_plan_replan_cap_bucket` | **Reporting-only** split when `replan_cap` fires: `true_replan_exhaustion` (invalidation-driven replans ate the budget) vs `shortlist_or_short_plan_idle` (degenerate ≤1 legal key / single-step shortlist Jev spin). Does **not** change caps or gates. Formal HOLD `d9d9fff` A166/B140 replan_cap: use with `turn_plan_replan_trigger` to prioritize fixes. |
 
-Per-fight rows (jev-turn) include `had_turn_plan_catastrophe`, `turn_plan_fulfilled_turns`, `turn_plan_catastrophe_turns`, `turn_plan_catastrophe_reasons`.
+Per-fight rows (jev-turn) include `had_turn_plan_catastrophe`, `turn_plan_fulfilled_turns`, `turn_plan_catastrophe_turns`, `turn_plan_catastrophe_reasons`. Turn replay JSONL rows with `replan_cap_hit` may add `replan_cap_bucket` + `replan_cap_diag` (旁证).
 
 ### Assist effectiveness bar (A vs B on `jev-turn`)
 

@@ -733,6 +733,67 @@ class TurnPlanPromptConfig:
 
 DEFAULT_TURN_PLAN_PROMPT_CONFIG = TurnPlanPromptConfig()
 
+REPLAN_CAP_BUCKET_TRUE_EXHAUSTION = "true_replan_exhaustion"
+REPLAN_CAP_BUCKET_SHORTLIST_IDLE = "shortlist_or_short_plan_idle"
+
+
+@dataclass
+class TurnPlanTurnDiag:
+    """Per player-turn forensics for ``replan_cap`` (reporting only; no gates)."""
+
+    replan_triggers: dict[str, int] = field(default_factory=dict)
+    jev_plan_picks: int = 0
+    empty_shortlist_picks: int = 0
+    degenerate_legal_key_picks: int = 0
+    single_step_only_shortlists: int = 0
+    max_picked_plan_steps: int = 0
+    step_returns: int = 0
+
+    def note_replan_trigger(self, reason: str) -> None:
+        key = str(reason).strip() or "unknown"
+        self.replan_triggers[key] = int(self.replan_triggers.get(key, 0)) + 1
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "replan_triggers": dict(self.replan_triggers),
+            "jev_plan_picks": int(self.jev_plan_picks),
+            "empty_shortlist_picks": int(self.empty_shortlist_picks),
+            "degenerate_legal_key_picks": int(self.degenerate_legal_key_picks),
+            "single_step_only_shortlists": int(self.single_step_only_shortlists),
+            "max_picked_plan_steps": int(self.max_picked_plan_steps),
+            "step_returns": int(self.step_returns),
+        }
+
+
+def classify_replan_cap_bucket(diag: TurnPlanTurnDiag) -> str:
+    """Sidecar bucket for formal HOLD ``replan_cap`` forensics (Searcher split).
+
+    * ``true_replan_exhaustion`` — invalidation-driven replans (mostly
+      ``illegal_step``) consumed the per-turn budget.
+    * ``shortlist_or_short_plan_idle`` — degenerate shortlist / ≤1 legal key /
+      single-step-only plans with Jev re-pick spin (旁证; does not change caps).
+    """
+    triggers = sum(int(v) for v in diag.replan_triggers.values())
+    illegal = int(diag.replan_triggers.get("illegal_step", 0))
+    if triggers == 0:
+        return REPLAN_CAP_BUCKET_SHORTLIST_IDLE
+    idle = (
+        diag.empty_shortlist_picks > 0
+        or (
+            diag.degenerate_legal_key_picks > 0
+            and diag.max_picked_plan_steps <= 1
+        )
+        or (
+            diag.single_step_only_shortlists > 0
+            and diag.jev_plan_picks >= triggers
+            and diag.max_picked_plan_steps <= 1
+            and illegal < MAX_REPLANS_PER_PLAYER_TURN
+        )
+    )
+    if idle and illegal < MAX_REPLANS_PER_PLAYER_TURN:
+        return REPLAN_CAP_BUCKET_SHORTLIST_IDLE
+    return REPLAN_CAP_BUCKET_TRUE_EXHAUSTION
+
 
 @dataclass
 class TurnPlanRuntime:
@@ -743,10 +804,12 @@ class TurnPlanRuntime:
     intent_snapshot: dict[int, str] | None = None
     last_shadow: dict[str, Any] = field(default_factory=dict)
     telemetry_logged_turn: int = -1
+    turn_diag: TurnPlanTurnDiag = field(default_factory=TurnPlanTurnDiag)
 
     def reset_player_turn(self, turn_id: int) -> None:
         self.player_turn_id = int(turn_id)
         self.replans = 0
+        self.turn_diag = TurnPlanTurnDiag()
         self.clear_plan()
 
     def clear_plan(self) -> None:
@@ -897,8 +960,34 @@ def _increment_turn_plan_replan(
     reason: str,
 ) -> None:
     session.replans += 1
+    session.turn_diag.note_replan_trigger(reason)
     record_turn_plan_replan_trigger(telemetry, reason)
     _patch_replay_replan_count(env, session)
+
+
+def _note_jev_plan_pick_diag(
+    session: TurnPlanRuntime,
+    legal_keys: Sequence[str],
+    plans: Sequence[TurnPlanCandidate],
+) -> None:
+    diag = session.turn_diag
+    diag.jev_plan_picks += 1
+    if not legal_keys:
+        diag.empty_shortlist_picks += 1
+    if len(legal_keys) <= 1:
+        diag.degenerate_legal_key_picks += 1
+    if not plans:
+        diag.empty_shortlist_picks += 1
+    elif all(len(p.steps) <= 1 for p in plans):
+        diag.single_step_only_shortlists += 1
+
+
+def record_turn_plan_replan_cap_bucket(telemetry: Any, bucket: str) -> None:
+    if telemetry is None:
+        return
+    record = getattr(telemetry, "record_turn_plan_replan_cap_bucket", None)
+    if callable(record):
+        record(str(bucket))
 
 
 def _catastrophe_fail_open(
@@ -1049,9 +1138,17 @@ def choose_combat_turn_plan_action(
             cap_board = serialize_combat_board_full(
                 combat, mask, owner=owner_creature
             )
+            cap_bucket = classify_replan_cap_bucket(session.turn_diag)
+            cap_diag = session.turn_diag.as_dict()
             local, shadow, tel_reason, tel_detail = _catastrophe_fail_open(
                 combat_model, combat_obs, mask, rng, CATA_FAILOPEN_CAP
             )
+            shadow = {
+                **shadow,
+                "replan_cap_bucket": cap_bucket,
+                "replan_cap_diag": cap_diag,
+            }
+            record_turn_plan_replan_cap_bucket(telemetry, cap_bucket)
             if replay_rec is not None:
                 replay_rec.record_replan_cap_catastrophe(
                     player_turn=turn_id,
@@ -1113,6 +1210,7 @@ def choose_combat_turn_plan_action(
             if plan_completed:
                 _log_turn_plan_telemetry(session, telemetry, fulfilled=True)
                 _patch_replay_turn_trajectory(env, combat, mask, session)
+            session.turn_diag.step_returns += 1
             session.last_shadow = shadow
             return int(action), shadow
 
@@ -1122,6 +1220,7 @@ def choose_combat_turn_plan_action(
         plans, pruned_n, score_summary, score_composites = cap_plans_for_turn_plan_choice(
             raw_plans, board, max_choices=turn_plan_choice_cap
         )
+        _note_jev_plan_pick_diag(session, legal_keys, plans)
         if pruned_n:
             record_turn_plan_choice_prune(telemetry, pruned_n)
         record_turn_plan_heuristic_scores(telemetry, score_summary, score_composites)
@@ -1200,6 +1299,10 @@ def choose_combat_turn_plan_action(
             )
         assert picked is not None
         session.plan = picked
+        session.turn_diag.max_picked_plan_steps = max(
+            session.turn_diag.max_picked_plan_steps,
+            len(picked.steps),
+        )
         session.intent_snapshot = living_enemy_intent_snapshot(combat)
         session.step_index = 0
 
@@ -1285,8 +1388,11 @@ __all__ = [
     "TURN_PLAN_CHOICE_CAP_ENV",
     "TYPESAFE_CHOICE_PLATFORM_MAX",
     "MAX_REPLANS_PER_PLAYER_TURN",
+    "REPLAN_CAP_BUCKET_SHORTLIST_IDLE",
+    "REPLAN_CAP_BUCKET_TRUE_EXHAUSTION",
     "SEMANTIC_END_TURN",
     "TurnPlanCandidate",
+    "TurnPlanTurnDiag",
     "TurnPlanPromptConfig",
     "TurnPlanRuntime",
     "build_combat_turn_plan_choice_question",
@@ -1300,12 +1406,14 @@ __all__ = [
     "summarize_board_for_turn_plan_choice",
     "catastrophe_reason_for_telemetry",
     "choose_combat_turn_plan_action",
+    "classify_replan_cap_bucket",
     "enumerate_candidate_plans",
     "gym_action_for_semantic_key",
     "jev_turn_plan_questions",
     "record_jev_turn_plan_turn",
     "record_turn_plan_choice_prune",
     "record_turn_plan_heuristic_scores",
+    "record_turn_plan_replan_cap_bucket",
     "record_turn_plan_replan_trigger",
     "plan_step_action_signature",
     "remap_plan_step_semantic_key",

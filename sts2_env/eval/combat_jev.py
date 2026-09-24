@@ -409,6 +409,7 @@ class CombatJevTelemetry:
     turn_plan_pruned_count: int = 0
     turn_plan_heuristic_score_samples: list[float] = field(default_factory=list)
     turn_plan_replan_trigger: dict[str, int] = field(default_factory=dict)
+    turn_plan_replan_cap_bucket: dict[str, int] = field(default_factory=dict)
 
     def mark(self) -> tuple[int, int]:
         return (self.calls, self.fail_open)
@@ -433,6 +434,12 @@ class CombatJevTelemetry:
         key = str(reason).strip() or "unknown"
         self.turn_plan_replan_trigger[key] = (
             int(self.turn_plan_replan_trigger.get(key, 0)) + 1
+        )
+
+    def record_turn_plan_replan_cap_bucket(self, bucket: str) -> None:
+        key = str(bucket).strip() or "unknown"
+        self.turn_plan_replan_cap_bucket[key] = (
+            int(self.turn_plan_replan_cap_bucket.get(key, 0)) + 1
         )
 
     def record_turn_plan_heuristic_scores(
@@ -506,6 +513,7 @@ class CombatJevTelemetry:
             "pruned_count": int(self.turn_plan_pruned_count),
             "turn_plan_heuristic_score": self._turn_plan_heuristic_score_report(),
             "turn_plan_replan_trigger": dict(self.turn_plan_replan_trigger),
+            "turn_plan_replan_cap_bucket": dict(self.turn_plan_replan_cap_bucket),
         }
 
     def _turn_plan_heuristic_score_report(self) -> dict[str, Any]:
@@ -571,6 +579,7 @@ class CombatJevTelemetry:
                 self.turn_plan_heuristic_score_samples
             ),
             "turn_plan_replan_trigger": dict(self.turn_plan_replan_trigger),
+            "turn_plan_replan_cap_bucket": dict(self.turn_plan_replan_cap_bucket),
         }
 
     @classmethod
@@ -602,6 +611,11 @@ class CombatJevTelemetry:
             tel.turn_plan_replan_trigger = {
                 str(k): int(v) for k, v in triggers.items()
             }
+        buckets = data.get("turn_plan_replan_cap_bucket") or {}
+        if isinstance(buckets, dict):
+            tel.turn_plan_replan_cap_bucket = {
+                str(k): int(v) for k, v in buckets.items()
+            }
         return tel
 
     def merge(self, other: "CombatJevTelemetry") -> "CombatJevTelemetry":
@@ -632,6 +646,10 @@ class CombatJevTelemetry:
         for key, count in other.turn_plan_replan_trigger.items():
             self.turn_plan_replan_trigger[key] = int(
                 self.turn_plan_replan_trigger.get(key, 0)
+            ) + int(count)
+        for key, count in other.turn_plan_replan_cap_bucket.items():
+            self.turn_plan_replan_cap_bucket[key] = int(
+                self.turn_plan_replan_cap_bucket.get(key, 0)
             ) + int(count)
         return self
 
