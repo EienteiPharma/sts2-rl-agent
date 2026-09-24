@@ -1,5 +1,7 @@
 # Colab notebooks (GPU parallel track)
 
+**Drive convention (Pharma default):** mount `drive` → read/write under **`/content/drive/MyDrive/sts2/colab/`** (features parquet/npz, critic `.pt`); set notebook `USE_DRIVE=False` for `/content/sts2/colab/` fallback when Drive is unavailable.
+
 ## `colab_combat_feature_extract.ipynb`
 
 **Scope (tip #1):** feature skeleton only — read a local `transitions.npz`, validate,
