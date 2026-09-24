@@ -72,6 +72,78 @@ def test_record_plan_choice_includes_trajectory_keys():
     assert turn["enemies_hp"][0]["hp"] == 8
 
 
+def test_record_replan_cap_catastrophe_sets_hit_flag():
+    from sts2_env.eval.hold_turn_replay import HoldTurnPlanEpisodeReplay
+
+    board = {
+        "self": {"hp": 20, "max_hp": 70, "block": 0, "energy": 3, "hand": []},
+        "enemies": [],
+        "turn": {},
+        "piles": {},
+    }
+    rec = HoldTurnPlanEpisodeReplay(1, 0, 19, "boss", 0)
+    rec.record_replan_cap_catastrophe(
+        player_turn=2,
+        board=board,
+        replan_count=4,
+        shadow={"turn_plan_failopen_reason": "cap_exceeded"},
+    )
+    turn = rec.turns[0]
+    assert turn["replan_cap_hit"] is True
+    assert turn["replan_count"] == 4
+    assert turn["fail_open"] is True
+    assert turn["fail_open_reason"] == "cap_exceeded"
+
+
+def test_choose_combat_turn_plan_records_replan_cap_on_runtime():
+    from sts2_env.eval.combat_turn_plan import (
+        runtime_for_env,
+        choose_combat_turn_plan_action,
+        player_turn_id,
+    )
+    from sts2_env.eval.hold_turn_replay import (
+        HOLD_TURN_REPLAY_ENV_ATTR,
+        HoldTurnPlanEpisodeReplay,
+    )
+    from sts2_env.gym_env.observation import encode_observation
+
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    rt = runtime_for_env(env)
+    rt.player_turn_id = player_turn_id(combat)
+    rt.replans = 4
+    rec = HoldTurnPlanEpisodeReplay(0, 0, 16, "elite", 0)
+    setattr(env, HOLD_TURN_REPLAY_ENV_ATTR, rec)
+    ppo = _Ppo()
+    choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        ppo,
+        adapter=_PlanAdapter("plan_0000"),
+        combat_obs=obs,
+        env=env,
+        runtime=rt,
+    )
+    env.close()
+    assert rec.turns
+    cap_rows = [t for t in rec.turns if t.get("replan_cap_hit")]
+    assert cap_rows
+    assert cap_rows[-1]["replan_count"] >= 4
+
+
+def _reset():
+    from sts2_env.gym_env.combat_env import STS2CombatEnv
+
+    env = STS2CombatEnv()
+    obs, info = env.reset(seed=0)
+    combat = env.combat
+    mask = info.get("action_mask")
+    if mask is None:
+        mask = env.action_masks()
+    return env, combat, mask
+
+
 def test_should_retain_fail_and_boss_only():
     assert should_retain_hold_turn_replay(win=False, bucket="elite")
     assert should_retain_hold_turn_replay(win=True, bucket="boss")

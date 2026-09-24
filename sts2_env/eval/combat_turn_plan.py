@@ -832,6 +832,15 @@ def _patch_replay_turn_trajectory(
     rec.patch_last_turn_trajectory(board, replan_count=int(session.replans))
 
 
+def _patch_replay_replan_count(env: Any | None, session: TurnPlanRuntime) -> None:
+    from sts2_env.eval.hold_turn_replay import replay_recorder_from_env
+
+    rec = replay_recorder_from_env(env) if env is not None else None
+    if rec is None:
+        return
+    rec.patch_last_turn_replan_count(int(session.replans))
+
+
 def _catastrophe_fail_open(
     combat_model: Any,
     combat_obs: np.ndarray,
@@ -973,10 +982,26 @@ def choose_combat_turn_plan_action(
     while loops < 32:
         loops += 1
         if session.replans > MAX_REPLANS_PER_PLAYER_TURN:
+            from sts2_env.eval.hold_turn_replay import replay_recorder_from_env
+
             session.clear_plan()
+            replay_rec = replay_recorder_from_env(env) if env is not None else None
+            cap_board = serialize_combat_board_full(
+                combat, mask, owner=owner_creature
+            )
             local, shadow, tel_reason, tel_detail = _catastrophe_fail_open(
                 combat_model, combat_obs, mask, rng, CATA_FAILOPEN_CAP
             )
+            if replay_rec is not None:
+                replay_rec.record_replan_cap_catastrophe(
+                    player_turn=turn_id,
+                    board=cap_board,
+                    replan_count=int(session.replans),
+                    shadow=shadow,
+                    fail_open_reason=str(
+                        shadow.get("turn_plan_failopen_reason") or CATA_FAILOPEN_CAP
+                    ),
+                )
             _log_turn_plan_telemetry(
                 session,
                 telemetry,
@@ -992,10 +1017,12 @@ def choose_combat_turn_plan_action(
             legal = set(legal_semantic_keys(combat, mask, owner=owner_creature))
             if key not in legal:
                 session.replans += 1
+                _patch_replay_replan_count(env, session)
                 session.clear_plan()
                 continue
             if living_enemy_intent_snapshot(combat) != (session.intent_snapshot or {}):
                 session.replans += 1
+                _patch_replay_replan_count(env, session)
                 session.clear_plan()
                 continue
             action = gym_action_for_semantic_key(
@@ -1003,6 +1030,7 @@ def choose_combat_turn_plan_action(
             )
             if action is None:
                 session.replans += 1
+                _patch_replay_replan_count(env, session)
                 session.clear_plan()
                 continue
             session.step_index += 1

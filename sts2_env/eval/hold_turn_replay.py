@@ -199,6 +199,36 @@ class HoldTurnPlanEpisodeReplay:
         last["enemies_hp"] = enemies_hp_from_board(board)
         last["replan_count"] = int(replan_count)
 
+    def patch_last_turn_replan_count(self, replan_count: int) -> None:
+        if not self.turns:
+            return
+        self.turns[-1]["replan_count"] = int(replan_count)
+
+    def record_replan_cap_catastrophe(
+        self,
+        *,
+        player_turn: int,
+        board: Mapping[str, Any],
+        replan_count: int,
+        shadow: Mapping[str, Any] | None = None,
+        fail_open_reason: str = "cap_exceeded",
+    ) -> None:
+        """Suite ``replan_cap`` telemetry path (replans > MAX per player turn)."""
+        self.record_plan_choice(
+            player_turn=player_turn,
+            plans=(),
+            board=board,
+            pruned_plan_count=0,
+            picked_plan_id=None,
+            pick_error=fail_open_reason,
+            bh_assist=None,
+            shadow=shadow,
+            replan_count=int(replan_count),
+            replan_cap_hit=True,
+            fail_open=True,
+            fail_open_reason=fail_open_reason,
+        )
+
     def to_document(
         self,
         *,
