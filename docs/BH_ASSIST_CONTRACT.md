@@ -163,6 +163,10 @@ HOLD smoke collapsed twice with Jev **selecting combat steps** (`combat_step_cho
 
 Reference API: `sts2_env/eval/bh_assist.py` (heuristic hints); train helpers: `sts2_env/eval/bh_assist_train.py`.
 
+### Ranker apply (fixed 2026-09-24)
+
+Runtime ``rank_semantic_keys_with_ranker`` must **not** tie-break on gym action index: ``ACTION_END_TURN==0`` made ``ranked_semantic[0]`` always ``end_turn``. Apply now scores each legal semantic with turn-plan heuristic ``score_turn_plan_candidate`` (+ tiny ``dot(w,obs)`` nudge). Single-episode rank checks are **diagnostic only** (not promotion gates).
+
 ## Boss residual pack + forward inject (T3)
 
 Offline only — no policy/prompt/ranker changes. Slice `hold_turn_plan_replay_v1` JSONL → `boss_fail_pack_v1` (`scripts/pack_hold_turn_replay.py`); rebuild HOLD reset jobs for the same seeds (`scripts/boss_forward_inject.py`); collect buffer with hung PPO (`scripts/collect_boss_fail_inject_buffer.py`); train to **`output/combat_bh_assist_v3`** (`scripts/train_bh_assist_from_buffer.py` — refuses v1/v2 outdirs). **No engine rewind** from turn logs. See `docs/BOSS_FORWARD_INJECT.md`.

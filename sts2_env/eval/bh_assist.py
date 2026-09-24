@@ -128,21 +128,42 @@ def rank_semantic_keys_with_ranker(
     combat: Any,
     mask: np.ndarray,
     owner: Any | None = None,
+    board: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
-    from sts2_env.eval.combat_turn_plan import gym_action_for_semantic_key
+    """Rank legal semantics: heuristic step scores + tiny ranker context (not gym action id).
+
+    Previous apply path used ``dot(w, obs) - action_index*1e-6``; ``ACTION_END_TURN==0``
+    always won ties → ``ranked_semantic[0]==end_turn`` whenever legal. Fixed by scoring
+    each semantic via ``score_turn_plan_candidate`` (same family as turn-plan prune).
+    """
+    from sts2_env.eval.combat_turn_plan import (
+        SEMANTIC_END_TURN,
+        TurnPlanCandidate,
+        composite_heuristic_score,
+        score_turn_plan_candidate,
+        serialize_combat_board_full,
+    )
 
     w = np.asarray(ranker["w"], dtype=np.float32).reshape(-1)
     obs = np.asarray(combat_obs, dtype=np.float32).reshape(-1)
     if obs.size != w.size:
         raise ValueError("bh_assist ranker obs dim mismatch")
     base = float(np.dot(w, obs))
+    if board is None:
+        board = serialize_combat_board_full(combat, mask, owner=owner)
+    board_dict = dict(board) if isinstance(board, Mapping) else {}
     keys = tuple(str(k) for k in legal_semantic_keys if str(k).strip())
     scored: list[tuple[float, str]] = []
     for key in keys:
-        act = gym_action_for_semantic_key(combat, mask, key, owner=owner)
-        if act is None:
-            continue
-        score = base - float(act) * 1e-6
+        if key == SEMANTIC_END_TURN:
+            plan = TurnPlanCandidate(plan_id=f"hint_{key}", steps=(key,))
+        else:
+            plan = TurnPlanCandidate(
+                plan_id=f"hint_{key}", steps=(key, SEMANTIC_END_TURN)
+            )
+        comp = score_turn_plan_candidate(plan, board_dict)
+        hscore = composite_heuristic_score(comp[:3])
+        score = float(hscore) + base * 1e-9
         scored.append((score, key))
     scored.sort(key=lambda item: (-item[0], item[1]))
     return tuple(k for _, k in scored)
@@ -194,6 +215,7 @@ def try_turn_plan_bh_assist(
             combat=combat,
             mask=mask,
             owner=owner,
+            board=board,
         )
         ranked = tuple(k for k in ranked if k in keys)
         if not ranked:
