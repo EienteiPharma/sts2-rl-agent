@@ -406,6 +406,7 @@ class CombatJevTelemetry:
         default_factory=lambda: {k: 0 for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS}
     )
     turn_plan_error_samples: list[str] = field(default_factory=list)
+    turn_plan_pruned_count: int = 0
 
     def mark(self) -> tuple[int, int]:
         return (self.calls, self.fail_open)
@@ -420,6 +421,11 @@ class CombatJevTelemetry:
 
     def mark_turn_plan(self) -> tuple[int, int, int]:
         return (self.turn_plan_turns, self.turn_plan_fulfilled, self.turn_plan_catastrophe)
+
+    def record_turn_plan_choice_prune(self, pruned_count: int) -> None:
+        n = int(pruned_count)
+        if n > 0:
+            self.turn_plan_pruned_count += n
 
     def record_turn_plan_error_sample(self, detail: str) -> None:
         text = " ".join(str(detail).split())
@@ -475,6 +481,7 @@ class CombatJevTelemetry:
                 for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS
             },
             "jev_turn_catastrophe_error_samples": list(self.turn_plan_error_samples),
+            "pruned_count": int(self.turn_plan_pruned_count),
         }
 
     def episode_fields(self, start: tuple[int, int]) -> dict[str, int]:
@@ -508,6 +515,7 @@ class CombatJevTelemetry:
                 for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS
             },
             "turn_plan_error_samples": list(self.turn_plan_error_samples),
+            "turn_plan_pruned_count": int(self.turn_plan_pruned_count),
         }
 
     @classmethod
@@ -530,6 +538,7 @@ class CombatJevTelemetry:
         tel.turn_plan_error_samples = [
             str(x) for x in (data.get("turn_plan_error_samples") or [])
         ][:TURN_PLAN_ERROR_SAMPLE_MAX]
+        tel.turn_plan_pruned_count = int(data.get("turn_plan_pruned_count") or 0)
         return tel
 
     def merge(self, other: "CombatJevTelemetry") -> "CombatJevTelemetry":
@@ -549,6 +558,7 @@ class CombatJevTelemetry:
             ) + int(other.catastrophe_failopen_reason.get(k, 0))
         for sample in other.turn_plan_error_samples:
             self.record_turn_plan_error_sample(sample)
+        self.turn_plan_pruned_count += int(other.turn_plan_pruned_count)
         return self
 
     def as_report(self, *, n_episodes: int = 0) -> dict[str, Any]:

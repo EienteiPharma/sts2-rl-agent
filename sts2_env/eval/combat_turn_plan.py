@@ -35,6 +35,7 @@ CHOICE_COMBAT_TURN_PLAN = "combat_turn_plan_choice"
 SEMANTIC_END_TURN = "end_turn"
 MAX_PLAN_STEPS = 8
 MAX_CANDIDATE_PLANS = 512
+MAX_TYPESAFE_CHOICE_PLANS = 255
 MAX_REPLANS_PER_PLAYER_TURN = 3
 
 CATA_FAILOPEN_TIMEOUT = "timeout"
@@ -300,6 +301,20 @@ def enumerate_candidate_plans(
         for k in keys:
             queue.append(prefix + (k,))
     return tuple(plans)
+
+
+def cap_plans_for_typesafe_choice(
+    plans: Sequence[TurnPlanCandidate],
+    *,
+    max_choices: int = MAX_TYPESAFE_CHOICE_PLANS,
+) -> tuple[tuple[TurnPlanCandidate, ...], int]:
+    """Sort by ``plan_id`` and keep at most 255 options for TypeSafe Choice."""
+    ordered = tuple(sorted(plans, key=lambda p: p.plan_id))
+    limit = int(max_choices)
+    if limit < 1 or len(ordered) <= limit:
+        return ordered, 0
+    pruned = len(ordered) - limit
+    return ordered[:limit], pruned
 
 
 def build_combat_turn_plan_choice_question(
@@ -645,7 +660,10 @@ def choose_combat_turn_plan_action(
             return int(action), shadow
 
         legal_keys = legal_semantic_keys(combat, mask, owner=owner_creature)
-        plans = enumerate_candidate_plans(legal_keys)
+        raw_plans = enumerate_candidate_plans(legal_keys)
+        plans, pruned_n = cap_plans_for_typesafe_choice(raw_plans)
+        if pruned_n:
+            record_turn_plan_choice_prune(telemetry, pruned_n)
         board = serialize_combat_board_full(combat, mask, owner=owner_creature)
         picked, err, err_detail = _pick_plan_via_jev(
             adapter, board, plans, prompt_config=cfg
@@ -694,6 +712,14 @@ def choose_combat_turn_plan_action(
     return local, shadow
 
 
+def record_turn_plan_choice_prune(telemetry: Any, pruned_count: int) -> None:
+    if telemetry is None or int(pruned_count) <= 0:
+        return
+    record = getattr(telemetry, "record_turn_plan_choice_prune", None)
+    if callable(record):
+        record(int(pruned_count))
+
+
 def record_jev_turn_plan_turn(
     telemetry: Any,
     *,
@@ -730,12 +756,14 @@ __all__ = [
     "COMBAT_TURN_PLAN_SYSTEM_RULES",
     "MAX_CANDIDATE_PLANS",
     "MAX_PLAN_STEPS",
+    "MAX_TYPESAFE_CHOICE_PLANS",
     "MAX_REPLANS_PER_PLAYER_TURN",
     "SEMANTIC_END_TURN",
     "TurnPlanCandidate",
     "TurnPlanPromptConfig",
     "TurnPlanRuntime",
     "build_combat_turn_plan_choice_question",
+    "cap_plans_for_typesafe_choice",
     "build_turn_plan_jev_state",
     "catastrophe_reason_for_telemetry",
     "choose_combat_turn_plan_action",
@@ -743,6 +771,7 @@ __all__ = [
     "gym_action_for_semantic_key",
     "jev_turn_plan_questions",
     "record_jev_turn_plan_turn",
+    "record_turn_plan_choice_prune",
     "legal_semantic_keys",
     "living_enemy_intent_snapshot",
     "runtime_for_env",
