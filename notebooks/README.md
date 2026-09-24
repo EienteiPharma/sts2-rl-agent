@@ -15,3 +15,16 @@ subsample ≥1000 SARS rows, write parquet/npz. **No** game comms, EP bridge,
 (`hold_turn_replay_*.jsonl`) may document hp/enemies_hp for later tips.
 
 Canonical logic: `sts2_env/colab/combat_transition_features.py`.
+
+## `colab_combat_critic.ipynb` (tip #2)
+
+Minimal **value network / Critic** smoke on tip #1 features:
+
+| | |
+|--|--|
+| **In** | `obs` `(181,)` float32 |
+| **Out** | scalar value `(1,)` — MSE vs **MC return** (`G_t = r_t + 0.99·G_{t+1}`, reset at `done`) |
+| **Ckpt** | `.pt` via `train_critic_smoke` → `sts2_env/colab/combat_critic.py` |
+| **Gate** | ≥1000 rows, finite loss, no NaN |
+
+CLI: `scripts/colab_train_critic_smoke.py FEATURES OUT.pt`. ONNX export = tip #3 (not opened here).
