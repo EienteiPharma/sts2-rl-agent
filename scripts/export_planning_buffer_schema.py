@@ -1,35 +1,28 @@
 #!/usr/bin/env python3
-"""Print planning colab_v1 buffer schema (no collect)."""
+"""Planning colab_v1 schema + Surplus one-liner (combat 500k buffer read-only)."""
 from __future__ import annotations
 
-import json
-
+from sts2_env.gym_env.combat_buffer import COLAB_V1_COLLECT_OUT
 from sts2_env.gym_env.planning_buffer import (
-    PLANNING_DEFAULT_JSONL,
     PLANNING_DEFAULT_OUT,
     PLANNING_DIR,
     PLANNING_REQUIRED_KEYS,
 )
 
+USAGE = (
+    "python scripts/collect_runenv_combat.py --planning-only --jev off "
+    "--noncombat-policy ppo --combat-policy ppo "
+    "--policy-zip /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip "
+    "--n-envs 8 --n-steps 500000"
+)
+
 
 def main() -> None:
-    print(
-        json.dumps(
-            {
-                "dir": PLANNING_DIR,
-                "npz": PLANNING_DEFAULT_OUT,
-                "jsonl_audit": PLANNING_DEFAULT_JSONL,
-                "keys": list(PLANNING_REQUIRED_KEYS),
-                "obs_size": 151,
-                "action_size": 157,
-                "collect": (
-                    "python scripts/collect_runenv_combat.py --jev off "
-                    "--no-planning  # omit flag to emit planning side-channel"
-                ),
-            },
-            indent=2,
-        )
-    )
+    print("dir:", PLANNING_DIR)
+    print("npz:", PLANNING_DEFAULT_OUT)
+    print("schema:", ", ".join(PLANNING_REQUIRED_KEYS), "| obs 151 run | action/mask 157")
+    print("combat_readonly:", COLAB_V1_COLLECT_OUT, "(n=500k; do not overwrite)")
+    print("usage:", USAGE)
 
 
 if __name__ == "__main__":

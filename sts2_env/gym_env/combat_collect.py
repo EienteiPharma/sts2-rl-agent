@@ -192,7 +192,8 @@ def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
             "seed": seed,
         }
     )
-    save_combat_buffer(shard, arrays, meta)
+    if bool(payload.get("combat_persist", True)):
+        save_combat_buffer(shard, arrays, meta)
     planning_n = 0
     planning_shard = payload.get("planning_shard")
     if planning_recorder is not None and planning_shard:
@@ -209,7 +210,7 @@ def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
             )
             planning_n = int(plan_arrays["obs"].shape[0])
     return {
-        "shard": str(shard),
+        "shard": str(shard) if bool(payload.get("combat_persist", True)) else None,
         "n_transitions": int(arrays["obs"].shape[0]),
         "worker_id": worker_id,
         "planning_shard": str(planning_shard) if planning_shard else None,
@@ -233,9 +234,16 @@ def collect_parallel(
     combat_model: str | None = None,
     planning_out: str | Path | None = None,
     planning_jsonl: str | Path | None = None,
+    planning_only: bool = False,
 ) -> dict[str, Any]:
     """Collect hang combat transitions, optionally across ``n_envs`` workers."""
-    out = refuse_frozen_path(out_path, what="buffer")
+    combat_persist = not bool(planning_only)
+    if combat_persist:
+        out = refuse_frozen_path(out_path, what="buffer")
+    else:
+        import tempfile
+
+        out = Path(tempfile.mkdtemp(prefix="sts2_planning_roll_")) / "transitions.npz"
     n_envs = max(1, int(n_envs))
     combat_policy = combat_policy or policy
     combat_model = combat_model or model
@@ -294,6 +302,7 @@ def collect_parallel(
                 ),
                 "shard": str(shard_dir / f"shard_{i:02d}.npz"),
                 "max_steps": int(max_steps),
+                "combat_persist": combat_persist,
             }
         )
     if len(payloads) == 1:
@@ -304,27 +313,30 @@ def collect_parallel(
         ctx = mp.get_context("spawn")
         with ctx.Pool(len(payloads)) as pool:
             results = pool.map(collect_worker, payloads)
-    parts = []
-    for row in results:
-        arrays, _meta = load_combat_buffer(row["shard"])
-        parts.append(arrays)
-    merged = concat_buffers(parts)
-    meta = hang_protocol_meta()
-    meta.update(
-        {
-            "policy": combat_policy,
-            "combat_policy": combat_policy,
-            "noncombat_policy": noncombat_policy,
-            "jev": "on" if jev_enabled else "off",
-            "typesafe": "on" if jev_enabled else "off",
-            "n_envs": len(payloads),
-            "n_steps_requested": int(n_steps),
-            "seed": int(seed),
-            "shards": [r["shard"] for r in results],
-            **pool_extra,
-        }
-    )
-    save_combat_buffer(out, merged, meta)
+    n_combat = sum(int(r["n_transitions"]) for r in results)
+    if combat_persist:
+        parts = []
+        for row in results:
+            arrays, _meta = load_combat_buffer(row["shard"])
+            parts.append(arrays)
+        merged = concat_buffers(parts)
+        meta = hang_protocol_meta()
+        meta.update(
+            {
+                "policy": combat_policy,
+                "combat_policy": combat_policy,
+                "noncombat_policy": noncombat_policy,
+                "jev": "on" if jev_enabled else "off",
+                "typesafe": "on" if jev_enabled else "off",
+                "n_envs": len(payloads),
+                "n_steps_requested": int(n_steps),
+                "seed": int(seed),
+                "shards": [r["shard"] for r in results],
+                **pool_extra,
+            }
+        )
+        save_combat_buffer(out, merged, meta)
+        n_combat = int(merged["obs"].shape[0])
     planning_result: dict[str, Any] = {}
     if planning_path is not None:
         plan_parts = []
@@ -341,7 +353,8 @@ def collect_parallel(
                 meta={
                     "n_envs": len(payloads),
                     "seed": int(seed),
-                    "combat_out": str(out),
+                    "combat_out": None if planning_only else str(out),
+                    "planning_only": planning_only,
                 },
             )
             planning_result = {
@@ -358,12 +371,14 @@ def collect_parallel(
     if not jev_enabled:
         hang = {**hang, "jev": "off", "typesafe": "off"}
     return {
-        "out": str(out),
-        "n_transitions": int(merged["obs"].shape[0]),
+        "out": None if planning_only else str(out),
+        "combat_written": combat_persist,
+        "n_transitions": n_combat,
         "n_envs": len(payloads),
         "policy": combat_policy,
         "jev": "on" if jev_enabled else "off",
         "typesafe": "on" if jev_enabled else "off",
+        "planning_only": planning_only,
         "hang": hang,
         **pool_extra,
         **planning_result,

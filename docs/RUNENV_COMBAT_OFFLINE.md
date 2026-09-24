@@ -31,7 +31,7 @@ On Cloudflare **1010** / HTTP **403** the client rotates to the next key and bac
 
 **Opt-in colab_v1 (no TypeSafe):** `python scripts/collect_runenv_combat.py --jev off --noncombat-policy ppo --combat-policy ppo --policy-zip /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --out /workspace/sts2-sim/output/runenv_combat_buffer_colab_v1/transitions.npz --n-envs 8 --n-steps 500000` — start receipt line `Jev=off TypeSafe=off`; never write `runenv_combat_buffer_ep/`. Non-combat MAP/REST/CARD: bh_v1 PPO fail-open to legal random (combat obs only).
 
-**Planning split (auto with `--jev off`, skip with `--no-planning`):** `/workspace/sts2-sim/output/runenv_planning_buffer_colab_v1/` → `planning_transitions.npz` + optional `planning_steps_wXX.jsonl`; schema `obs/next_obs`(151), `action`/`action_mask`(157), `reward`, `done`, `phase_code`, `policy_tag` (MAP/REST/CARD auto-noncombat only; Jev off). Does not touch full `runenv_combat_buffer_colab_v1/transitions.npz`. Backfill impossible from combat-only npz — re-collect with `--jev off`.
+**Planning (full combat colab_v1 already n=500k — do not overwrite):** `--planning-only --jev off` → `/workspace/sts2-sim/output/runenv_planning_buffer_colab_v1/planning_transitions.npz` (+ optional `planning_steps_wXX.jsonl`); schema `obs/next_obs`(151), `action`/`action_mask`(157), `reward`, `done`, `phase_code`, `policy_tag`. One-liner: `python scripts/export_planning_buffer_schema.py`.
 
 ```bash
 # Surplus launch — no user re-paste. Pool loads from box-secrets automatically.

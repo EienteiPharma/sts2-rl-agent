@@ -29,6 +29,7 @@ from typing import Any
 from sts2_env.gym_env.combat_buffer import (
     COLAB_V1_COLLECT_OUT,
     HUNG_OUTDIR_NAME,
+    PROTECTED_COLLECT_DIR_NAMES,
     hang_protocol_meta,
     refuse_frozen_path,
 )
@@ -49,6 +50,19 @@ HUNG_COMBAT_ZIP = f"/workspace/sts2-sim/output/{HUNG_OUTDIR_NAME}/final_model.zi
 DEFAULT_OUT = "output/runenv_combat_buffer/transitions.npz"
 PROTOCOL_ID = "hang_protocol_runenv_combat_collect LOCKED 2026-09-22"
 COLAB_V1_PROTOCOL_ID = "colab_v1_collect Jev=off TypeSafe=off bh_v1_ppo"
+PLANNING_ONLY_USAGE = (
+    "python scripts/collect_runenv_combat.py --planning-only --jev off "
+    "--noncombat-policy ppo --combat-policy ppo "
+    "--policy-zip /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip "
+    "--n-envs 8 --n-steps 500000"
+)
+
+
+def _is_protected_combat_npz(path: str | Path) -> bool:
+    out = Path(path).expanduser()
+    if out.name != "transitions.npz":
+        return False
+    return any(name in out.parts for name in PROTECTED_COLLECT_DIR_NAMES)
 
 
 def _resolve_combat_policy(args: argparse.Namespace) -> str:
@@ -74,7 +88,16 @@ def normalize_collect_args(args: argparse.Namespace) -> argparse.Namespace:
         if args.combat_policy is None and args.policy == "random":
             args.policy = "model"
         args.combat_policy_resolved = _resolve_combat_policy(args)
-    if args.no_planning:
+    if getattr(args, "planning_only", False):
+        args.jev = "off"
+        args.jev_enabled = False
+        args.no_planning = False
+        args.planning_out_resolved = args.planning_out or PLANNING_DEFAULT_OUT
+        args.planning_jsonl_resolved = (
+            args.planning_jsonl
+            or str(Path(args.planning_out_resolved).with_suffix(".jsonl"))
+        )
+    elif args.no_planning:
         args.planning_out_resolved = None
         args.planning_jsonl_resolved = None
     elif args.jev_enabled and not args.planning_out:
@@ -189,6 +212,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Skip planning side-channel (combat npz only)",
     )
+    parser.add_argument(
+        "--planning-only",
+        action="store_true",
+        help=(
+            "Jev off: roll env for planning only; never write combat npz "
+            f"(full colab_v1 combat buffer protected). Default planning out: "
+            f"{PLANNING_DEFAULT_OUT}"
+        ),
+    )
     args = parser.parse_args(argv)
     return normalize_collect_args(args)
 
@@ -198,7 +230,10 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     from sts2_env.gym_env.observation import OBS_SIZE
     from sts2_env.gym_env.runenv_onpolicy_combat import RunEnvOnPolicyCombatEnv
 
-    out = refuse_frozen_path(args.out, what="buffer")
+    if getattr(args, "planning_only", False):
+        out = None
+    else:
+        out = refuse_frozen_path(args.out, what="buffer")
     flags = hang_jev_flags()
     pool: dict[str, Any]
     if args.jev_enabled:
@@ -226,7 +261,12 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "protocol": protocol,
         "dry_run": True,
-        "out": str(out),
+        "out": str(out) if out is not None else None,
+        "planning_only": getattr(args, "planning_only", False),
+        "planning_only_usage": (
+            PLANNING_ONLY_USAGE if getattr(args, "planning_only", False) else None
+        ),
+        "combat_colab_v1_protected": COLAB_V1_COLLECT_OUT,
         "n_steps": int(args.n_steps),
         "n_envs": int(args.n_envs),
         "n_envs_note": n_envs_note,
@@ -281,7 +321,16 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def collect(args: argparse.Namespace) -> dict[str, Any]:
-    out = refuse_frozen_path(args.out, what="buffer")
+    planning_only = bool(getattr(args, "planning_only", False))
+    if planning_only:
+        out = None
+    elif _is_protected_combat_npz(args.out):
+        raise SystemExit(
+            f"refusing to overwrite protected full combat buffer {args.out}; "
+            "use --planning-only to emit planning npz only"
+        )
+    else:
+        out = refuse_frozen_path(args.out, what="buffer")
     combat_policy = args.combat_policy_resolved
     if combat_policy in ("model", "ppo") and not Path(args.model).is_file():
         raise SystemExit(f"collect combat zip not found: {args.model}")
@@ -295,12 +344,19 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         pool = {"typesafe_key_count": 0}
         note = None
 
-    print("Collecting hang-protocol RunEnv combat segments")
+    print(
+        "Collecting planning-only (no combat npz write)"
+        if planning_only
+        else "Collecting hang-protocol RunEnv combat segments"
+    )
     if not args.jev_enabled:
         print("Jev=off TypeSafe=off")
         print(f"  policy_zip: {args.model}")
         print("  assist_v3: off (collect path; no jev-turn)")
-    print("  out:       ", out)
+    if planning_only:
+        print("  combat:    (protected; full colab_v1 buffer not touched)")
+    else:
+        print("  out:       ", out)
     print("  n_steps:   ", args.n_steps)
     print("  n_envs:    ", args.n_envs)
     if note:
@@ -319,7 +375,7 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         )
     print()
     result = collect_parallel(
-        out_path=out,
+        out_path=out or COLAB_V1_COLLECT_OUT,
         n_steps=int(args.n_steps),
         n_envs=int(args.n_envs),
         policy=combat_policy,
@@ -333,6 +389,7 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         combat_model=args.model if combat_policy in ("model", "ppo") else None,
         planning_out=args.planning_out_resolved,
         planning_jsonl=args.planning_jsonl_resolved,
+        planning_only=planning_only,
     )
     result["protocol"] = PROTOCOL_ID if args.jev_enabled else COLAB_V1_PROTOCOL_ID
     result["hang"] = hang_protocol_meta() if args.jev_enabled else {

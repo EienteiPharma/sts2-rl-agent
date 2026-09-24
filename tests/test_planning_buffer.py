@@ -70,6 +70,32 @@ def test_refuse_planning_overwrite_colab_v1_combat():
         )
 
 
+def test_planning_only_dry_run_skips_combat_out():
+    import importlib.util
+    import sys
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "collect_runenv_combat.py"
+    spec = importlib.util.spec_from_file_location("collect_planning_only", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    report = mod.dry_run(
+        mod.parse_args(
+            [
+                "--dry-run",
+                "--planning-only",
+                "--out",
+                "/workspace/sts2-sim/output/runenv_combat_buffer_colab_v1/transitions.npz",
+            ]
+        )
+    )
+    assert report["planning_only"] is True
+    assert report["out"] is None
+    assert report["planning_out"] is not None
+    assert report["jev_enabled"] is False
+
+
 def test_colab_v1_dry_run_includes_planning_out():
     import importlib.util
     import sys
