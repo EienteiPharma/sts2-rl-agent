@@ -25,9 +25,11 @@ BH_ASSIST_MANIFEST_NAME = "bh_assist_train_manifest.json"
 BH_ASSIST_CKPT_NAME = "bh_assist_ranker.npz"
 PROTOCOL_ID = "bh_assist_buffer_rank_v1 LOCKED 2026-09-24"
 # Pre-train HOLD eval (assist-on vs assist-off): docs/BH_ASSIST_CONTRACT.md
-# — overall Δ ≥ +3pp AND Boss Δ ≥ +2pp vs jev-turn-only; formal workers=4.
+# lock_eval_then_v3 — formal n_eps=20, workers=8; n_eps=5 diagnostic only (no promotion).
 ASSIST_EVAL_MIN_OVERALL_PP = 3
 ASSIST_EVAL_MIN_BOSS_PP = 2
+ASSIST_EVAL_FORMAL_N_EPS = 20
+ASSIST_EVAL_FORMAL_WORKERS = 8
 MAX_LEGAL_FOR_RANK = 32
 
 
@@ -237,6 +239,8 @@ __all__ = [
     "BH_ASSIST_MANIFEST_NAME",
     "DEFAULT_BH_ASSIST_OUTDIR",
     "AssistTrainRow",
+    "ASSIST_EVAL_FORMAL_N_EPS",
+    "ASSIST_EVAL_FORMAL_WORKERS",
     "ASSIST_EVAL_MIN_BOSS_PP",
     "ASSIST_EVAL_MIN_OVERALL_PP",
     "PROTOCOL_ID",

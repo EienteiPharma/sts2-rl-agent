@@ -1,6 +1,6 @@
 # bh_assist contract (track 2)
 
-**Status:** train entry present (`scripts/train_bh_assist_from_buffer.py`, `sts2_env/eval/bh_assist_train.py`). Default outdir `output/combat_bh_assist_v1`. **No hang runtime swap** — execution stays `bh_v1` / `--combat-policy ppo`. **Pre-train eval gates** (assist-on vs assist-off) are locked below; hang dual gate vs `bh_v1` unchanged (`docs/HOLD_PROTOCOL.md`). Do not treat assist as primary actor.  
+**Status:** train entry + turn-plan eval wiring (`--bh-assist`, `73fc1ed`). Default outdir `output/combat_bh_assist_v1`; in-service assist **v1** only (v2 not promoted). **No hang runtime swap** — execution stays `bh_v1` / `--combat-policy ppo`. **Pre-train eval gates** and **eval stability (`lock_eval_then_v3`)** below; hang dual gate vs `bh_v1` unchanged (`docs/HOLD_PROTOCOL.md`). Do not treat assist as primary actor.  
 **Successor to:** abandoned stepwise `combat_step_choice` / `--combat-policy jev` (see `docs/COMBAT_JEV_HOLD_FAIL.md`).  
 **Related:** turn-plan path A in `sts2_env/eval/combat_turn_plan.py`; hang execution stays **`bh_v1`** until a future **turn-plan HOLD** clears.
 
@@ -87,10 +87,34 @@ Run **before** promoting a trained assist checkpoint into turn-plan Choice wirin
 
 Both arms use the same hung combat zip for **execution** (plan steps / fail-open catastrophe path still fail-open to `bh_v1`, not assist-as-actor). Do not use stepwise `combat_step_choice` or `--combat-policy jev`.
 
+### Eval stability (`lock_eval_then_v3`)
+
+Eval-only lock (no new train on this tip). Hang stays `bh_v1`; assist checkpoint promotion uses **formal** HOLD contrast only.
+
+| Rule | Locked value |
+|---|---|
+| Episodes for **promotion / gate decisions** | **`--n-eps 20`** only (360 fights = hang table shape) |
+| **`n_eps=5` / small-n smoke** | **Diagnostic only** — telemetry sanity, not assist +3/+2, not HOLD promotion, not train promotion |
+| Formal parallel shape | **`--workers 8`** default for Lab formal runs (A/B when possible; same as hang sentry in `docs/HOLD_PROTOCOL.md`) |
+| Contrast seeds | **`HOLD_SEED_BASE=40000`**, formula **`40000 + fixture_index*1000 + enc_id*100 + ep`** (`env.reset(seed=…)`). Implemented as `HOLD_SEED_BASE` / `HOLD_SEED_FORMULA` in `sts2_env/eval/combat_hold.py`. **Do not change** the formula; arms A and B must share the same job list and seeds. |
+
+Suite JSON includes `seed_base` / `seed_formula` via `hold_protocol_meta()`.
+
 ### Protocol
 
-- **Smoke (diagnostic):** `scripts/eval_combat_suite.py --suite loadout_v1 --workers 1` (`w1` single-worker) on A and B; inspect telemetry (`jev_fulfilled_rate`, catastrophe reasons, `pruned_count`, `turn_plan_heuristic_score`) before formal runs.
-- **Formal:** same script with **`--workers 4`** (Lab EP formal HOLD shape).
+- **Smoke (diagnostic):** `scripts/eval_combat_suite.py --suite loadout_v1 --workers 1` (`w1`) on A and B; optional `--n-eps 5` or `--n-eps 1` for quick checks only — **never** for promotion decisions.
+- **Formal (gates):** `--suite loadout_v1 --n-eps 20 --workers 8` on A and B; compare summary JSON overall / Boss for the +3 / +2 bar.
+
+Example formal arm:
+
+```bash
+PYTHONPATH=. python scripts/eval_combat_suite.py \
+  --suite loadout_v1 --n-eps 20 --workers 8 \
+  --combat-policy jev-turn --bh-assist off \
+  --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip
+```
+
+(B arm: same flags with `--bh-assist on` and the same ckpt path.)
 
 ### Assist effectiveness bar (A vs B on `jev-turn`)
 

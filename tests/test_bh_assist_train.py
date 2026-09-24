@@ -10,6 +10,8 @@ import pytest
 
 from sts2_env.eval.bh_assist import bh_assist
 from sts2_env.eval.bh_assist_train import (
+    ASSIST_EVAL_FORMAL_N_EPS,
+    ASSIST_EVAL_FORMAL_WORKERS,
     ASSIST_EVAL_MIN_BOSS_PP,
     ASSIST_EVAL_MIN_OVERALL_PP,
     DEFAULT_BH_ASSIST_OUTDIR,
@@ -28,9 +30,15 @@ def test_pretrain_eval_gate_constants_match_contract():
     text = (root / "docs" / "BH_ASSIST_CONTRACT.md").read_text(encoding="utf-8")
     assert "Pre-train eval gates" in text
     assert "+3pp" in text and "+2pp" in text
-    assert "--workers 4" in text
+    assert "lock_eval_then_v3" in text
+    assert "--workers 8" in text
+    assert "--n-eps 20" in text
+    assert "n_eps=5" in text and "diagnostic" in text.lower()
+    assert "HOLD_SEED_BASE=40000" in text
     assert ASSIST_EVAL_MIN_OVERALL_PP == 3
     assert ASSIST_EVAL_MIN_BOSS_PP == 2
+    assert ASSIST_EVAL_FORMAL_N_EPS == 20
+    assert ASSIST_EVAL_FORMAL_WORKERS == 8
 
 
 def test_refuses_hang_outdir():
