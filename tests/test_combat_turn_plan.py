@@ -13,10 +13,10 @@ from sts2_env.eval.combat_turn_plan import (
     SEMANTIC_END_TURN,
     TurnPlanCandidate,
     TurnPlanPromptConfig,
-    MAX_TYPESAFE_CHOICE_PLANS,
+    MAX_TURN_PLAN_CHOICE_CANDIDATES,
     build_combat_turn_plan_choice_question,
     build_turn_plan_jev_state,
-    cap_plans_for_typesafe_choice,
+    cap_plans_for_turn_plan_choice,
     choose_combat_turn_plan_action,
     enumerate_candidate_plans,
     gym_action_for_semantic_key,
@@ -70,15 +70,15 @@ def test_toy_enumerator_respects_max_len_end_turn_and_legal_keys():
     assert len(set(ids)) == len(ids)
 
 
-def test_typesafe_choice_hard_cap_255_and_pruned_count():
-    keys = tuple(f"k{i}" for i in range(24))
+def test_turn_plan_choice_hard_cap_32_and_pruned_count():
+    keys = tuple(f"k{i}" for i in range(12))
     plans = enumerate_candidate_plans(keys, max_steps=3, max_plans=512)
-    assert len(plans) > MAX_TYPESAFE_CHOICE_PLANS
-    capped, pruned = cap_plans_for_typesafe_choice(plans)
-    assert len(capped) == MAX_TYPESAFE_CHOICE_PLANS
-    assert pruned == len(plans) - MAX_TYPESAFE_CHOICE_PLANS
+    assert len(plans) > MAX_TURN_PLAN_CHOICE_CANDIDATES
+    capped, pruned = cap_plans_for_turn_plan_choice(plans)
+    assert len(capped) == MAX_TURN_PLAN_CHOICE_CANDIDATES
+    assert pruned == len(plans) - MAX_TURN_PLAN_CHOICE_CANDIDATES
     q = build_combat_turn_plan_choice_question(capped)
-    assert len(q["criteria"]) <= MAX_TYPESAFE_CHOICE_PLANS
+    assert len(q["criteria"]) <= MAX_TURN_PLAN_CHOICE_CANDIDATES
 
 
 def test_enumerator_deterministic_and_bounded():
