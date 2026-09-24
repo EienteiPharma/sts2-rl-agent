@@ -268,17 +268,127 @@ def train_critic_smoke(
     }
 
 
+DEFAULT_ONNX_VERIFY_MAX_ABS_ERR = 1e-4
+
+
+def _load_ckpt_blob(pt_path: str | Path) -> dict[str, Any]:
+    t = _require_torch()
+    p = Path(pt_path).expanduser()
+    if not p.is_file():
+        raise FileNotFoundError(p)
+    try:
+        blob = t.load(p, map_location="cpu", weights_only=False)
+    except TypeError:
+        blob = t.load(p, map_location="cpu")
+    if not isinstance(blob, dict) or "state_dict" not in blob:
+        raise ValueError(f"expected tip#2 critic ckpt with state_dict: {p}")
+    return blob
+
+
+def load_critic_net_from_ckpt(pt_path: str | Path):
+    """Rebuild tip#2 ``CombatCriticMLP`` ``.net`` and load weights (eval mode)."""
+    t = _require_torch()
+    blob = _load_ckpt_blob(pt_path)
+    obs_dim = int(blob.get("obs_dim", COMBAT_OBS_DIM))
+    hidden_raw = blob.get("hidden", (128, 64))
+    hidden = tuple(int(h) for h in hidden_raw)
+    model = CombatCriticMLP(obs_dim, hidden=hidden).net
+    model.load_state_dict(blob["state_dict"])
+    model.eval()
+    return model, blob
+
+
+def export_critic_onnx(
+    pt_path: str | Path,
+    onnx_path: str | Path,
+    *,
+    opset_version: int = 17,
+) -> str:
+    """Export tip#2 critic checkpoint to ONNX (``obs`` N×181 → ``value`` N×1 float32)."""
+    t = _require_torch()
+    model, blob = load_critic_net_from_ckpt(pt_path)
+    obs_dim = int(blob.get("obs_dim", COMBAT_OBS_DIM))
+    out_p = Path(onnx_path).expanduser()
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+    dummy = t.zeros(1, obs_dim, dtype=t.float32)
+    with t.no_grad():
+        t.onnx.export(
+            model,
+            dummy,
+            str(out_p),
+            input_names=["obs"],
+            output_names=["value"],
+            dynamic_axes={"obs": {0: "N"}, "value": {0: "N"}},
+            opset_version=int(opset_version),
+            dynamo=False,
+        )
+    return str(out_p.resolve())
+
+
+def verify_critic_onnx(
+    pt_path: str | Path,
+    onnx_path: str | Path,
+    *,
+    batch_size: int = 32,
+    seed: int = 0,
+    max_abs_err: float = DEFAULT_ONNX_VERIFY_MAX_ABS_ERR,
+) -> dict[str, Any]:
+    """Compare PyTorch ``.net`` forward vs ONNX Runtime on one random batch (fp32 gate)."""
+    t = _require_torch()
+    try:
+        import onnxruntime as ort
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError("onnxruntime required for verify; pip install onnxruntime") from exc
+
+    model, _blob = load_critic_net_from_ckpt(pt_path)
+    onnx_p = Path(onnx_path).expanduser()
+    if not onnx_p.is_file():
+        raise FileNotFoundError(onnx_p)
+
+    rng = np.random.default_rng(int(seed))
+    obs = rng.standard_normal((int(batch_size), COMBAT_OBS_DIM), dtype=np.float32)
+    with t.no_grad():
+        torch_out = model(t.as_tensor(obs)).cpu().numpy()
+
+    sess = ort.InferenceSession(
+        str(onnx_p),
+        providers=["CPUExecutionProvider"],
+    )
+    ort_out = sess.run(["value"], {"obs": obs})[0]
+    if ort_out.shape != torch_out.shape:
+        raise ValueError(f"shape mismatch torch {torch_out.shape} vs onnx {ort_out.shape}")
+
+    err = float(np.max(np.abs(torch_out - ort_out)))
+    if not np.isfinite(err):
+        raise ValueError("non-finite ONNX verify error")
+    if err > float(max_abs_err):
+        raise ValueError(
+            f"ONNX max_abs_err {err} > gate {max_abs_err} (fp32 export vs ORT CPU)"
+        )
+    return {
+        "max_abs_err": err,
+        "onnx_path": str(onnx_p.resolve()),
+        "pt_path": str(Path(pt_path).expanduser().resolve()),
+        "batch_size": int(batch_size),
+        "gate_max_abs_err": float(max_abs_err),
+    }
+
+
 __all__ = [
     "COMBAT_OBS_DIM",
     "CriticTrainConfig",
     "CombatCriticMLP",
     "DEFAULT_GAMMA",
     "DEFAULT_MIN_ROWS",
+    "DEFAULT_ONNX_VERIFY_MAX_ABS_ERR",
     "LABEL_MC_RETURN",
     "LABEL_WIN_PROXY",
     "build_targets",
     "episode_win_proxy_targets",
+    "export_critic_onnx",
+    "load_critic_net_from_ckpt",
     "load_obs_reward_done",
     "mc_return_targets",
     "train_critic_smoke",
+    "verify_critic_onnx",
 ]

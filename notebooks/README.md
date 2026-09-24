@@ -29,4 +29,8 @@ Minimal **value network / Critic** smoke on tip #1 features:
 | **Ckpt** | `.pt` via `train_critic_smoke` → `sts2_env/colab/combat_critic.py` |
 | **Gate** | ≥1000 rows, finite loss, no NaN |
 
-CLI: `scripts/colab_train_critic_smoke.py FEATURES OUT.pt`. ONNX export = tip #3 (not opened here).
+CLI: `scripts/colab_train_critic_smoke.py FEATURES OUT.pt`.
+
+## `colab_combat_critic_onnx.ipynb` (tip #3)
+
+Export tip #2 `.pt` → **`combat_critic_smoke.onnx`** on Drive (`MyDrive/sts2/colab/`); ORT verify gate max abs err ≤ **1e-4**. CLI: `scripts/colab_export_critic_onnx.py CKPT OUT.onnx`.
