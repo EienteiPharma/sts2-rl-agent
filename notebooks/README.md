@@ -34,3 +34,7 @@ CLI: `scripts/colab_train_critic_smoke.py FEATURES OUT.pt`.
 ## `colab_combat_critic_onnx.ipynb` (tip #3)
 
 Export tip #2 `.pt` → **`combat_critic_smoke.onnx`** on Drive (`MyDrive/sts2/colab/`); ORT verify gate max abs err ≤ **1e-4**. CLI: `scripts/colab_export_critic_onnx.py CKPT OUT.onnx`.
+
+## `colab_combat_critic_colab_v1.ipynb` (tip #4)
+
+Formal critic on **full** colab_v1 `transitions.npz` (~500k); warm-start `combat_critic_smoke.pt` → `combat_critic_colab_v1.pt` + `.onnx` (ORT ≤ **1e-5**). CLI: `scripts/colab_train_critic_colab_v1.py`.
