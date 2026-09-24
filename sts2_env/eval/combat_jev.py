@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -407,6 +407,7 @@ class CombatJevTelemetry:
     )
     turn_plan_error_samples: list[str] = field(default_factory=list)
     turn_plan_pruned_count: int = 0
+    turn_plan_heuristic_score_samples: list[float] = field(default_factory=list)
 
     def mark(self) -> tuple[int, int]:
         return (self.calls, self.fail_open)
@@ -426,6 +427,20 @@ class CombatJevTelemetry:
         n = int(pruned_count)
         if n > 0:
             self.turn_plan_pruned_count += n
+
+    def record_turn_plan_heuristic_scores(
+        self,
+        summary: dict[str, Any],
+        composites: Sequence[float],
+    ) -> None:
+        del summary
+        if not composites:
+            return
+        self.turn_plan_heuristic_score_samples.extend(float(x) for x in composites)
+        if len(self.turn_plan_heuristic_score_samples) > 4096:
+            self.turn_plan_heuristic_score_samples = (
+                self.turn_plan_heuristic_score_samples[-4096:]
+            )
 
     def record_turn_plan_error_sample(self, detail: str) -> None:
         text = " ".join(str(detail).split())
@@ -482,7 +497,13 @@ class CombatJevTelemetry:
             },
             "jev_turn_catastrophe_error_samples": list(self.turn_plan_error_samples),
             "pruned_count": int(self.turn_plan_pruned_count),
+            "turn_plan_heuristic_score": self._turn_plan_heuristic_score_report(),
         }
+
+    def _turn_plan_heuristic_score_report(self) -> dict[str, Any]:
+        from sts2_env.eval.combat_turn_plan import heuristic_score_distribution
+
+        return heuristic_score_distribution(self.turn_plan_heuristic_score_samples)
 
     def episode_fields(self, start: tuple[int, int]) -> dict[str, int]:
         c0, f0 = start
@@ -516,6 +537,9 @@ class CombatJevTelemetry:
             },
             "turn_plan_error_samples": list(self.turn_plan_error_samples),
             "turn_plan_pruned_count": int(self.turn_plan_pruned_count),
+            "turn_plan_heuristic_score_samples": list(
+                self.turn_plan_heuristic_score_samples
+            ),
         }
 
     @classmethod
@@ -539,6 +563,9 @@ class CombatJevTelemetry:
             str(x) for x in (data.get("turn_plan_error_samples") or [])
         ][:TURN_PLAN_ERROR_SAMPLE_MAX]
         tel.turn_plan_pruned_count = int(data.get("turn_plan_pruned_count") or 0)
+        tel.turn_plan_heuristic_score_samples = [
+            float(x) for x in (data.get("turn_plan_heuristic_score_samples") or [])
+        ]
         return tel
 
     def merge(self, other: "CombatJevTelemetry") -> "CombatJevTelemetry":
@@ -559,6 +586,13 @@ class CombatJevTelemetry:
         for sample in other.turn_plan_error_samples:
             self.record_turn_plan_error_sample(sample)
         self.turn_plan_pruned_count += int(other.turn_plan_pruned_count)
+        self.turn_plan_heuristic_score_samples.extend(
+            other.turn_plan_heuristic_score_samples
+        )
+        if len(self.turn_plan_heuristic_score_samples) > 4096:
+            self.turn_plan_heuristic_score_samples = (
+                self.turn_plan_heuristic_score_samples[-4096:]
+            )
         return self
 
     def as_report(self, *, n_episodes: int = 0) -> dict[str, Any]:

@@ -78,7 +78,7 @@ def test_turn_plan_choice_hard_cap_32_and_pruned_count():
     keys = tuple(f"k{i}" for i in range(12))
     plans = enumerate_candidate_plans(keys, max_steps=3, max_plans=512)
     assert len(plans) > DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
-    capped, pruned = cap_plans_for_turn_plan_choice(plans)
+    capped, pruned, _summary, _comps = cap_plans_for_turn_plan_choice(plans)
     assert len(capped) == DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
     assert pruned == len(plans) - DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
     q = build_combat_turn_plan_choice_question(capped)
@@ -96,7 +96,7 @@ def test_resolve_turn_plan_choice_cap_default_env_cli_and_platform_max():
         )
         == 64
     )
-    capped, pruned = cap_plans_for_turn_plan_choice(
+    capped, pruned, _summary, _comps = cap_plans_for_turn_plan_choice(
         enumerate_candidate_plans(
             tuple(f"k{i}" for i in range(12)), max_steps=3, max_plans=512
         ),
@@ -104,6 +104,67 @@ def test_resolve_turn_plan_choice_cap_default_env_cli_and_platform_max():
     )
     assert len(capped) == 40
     assert pruned > 0
+
+
+def _board_lethal_attack(*, hp: int = 10, block: int = 0, energy: int = 3) -> dict:
+    return {
+        "self": {
+            "hp": hp,
+            "max_hp": 80,
+            "block": block,
+            "energy": energy,
+            "hand": [
+                {"name": "Strike", "cost": "1", "hand_index": 0},
+                {"name": "Defend", "cost": "1", "hand_index": 1},
+            ],
+        },
+        "enemies": [{"intent": "attack 20", "hp": 30, "max_hp": 30, "block": 0}],
+        "turn": {"end_turn_legal": True},
+    }
+
+
+def test_heuristic_prefers_block_over_lower_plan_id():
+    board = _board_lethal_attack()
+    low_id = TurnPlanCandidate(
+        "plan_0000", ("play:Strike:h0@e0", SEMANTIC_END_TURN)
+    )
+    high_id = TurnPlanCandidate(
+        "plan_9999", ("play:Defend:h1@self", SEMANTIC_END_TURN)
+    )
+    top, pruned, summary, _comps = cap_plans_for_turn_plan_choice(
+        (low_id, high_id), board, max_choices=1
+    )
+    assert pruned == 1
+    assert top[0].plan_id == "plan_9999"
+    assert summary["n"] == 2
+
+
+def test_heuristic_tie_break_uses_steps_not_plan_id():
+    board = {
+        "self": {
+            "hp": 70,
+            "max_hp": 80,
+            "block": 5,
+            "energy": 3,
+            "hand": [
+                {"name": "Strike", "cost": "1", "hand_index": 0},
+                {"name": "Strike", "cost": "1", "hand_index": 1},
+            ],
+        },
+        "enemies": [],
+        "turn": {"end_turn_legal": True},
+    }
+    plan_a = TurnPlanCandidate(
+        "plan_0000", ("play:Strike:h1@e0", SEMANTIC_END_TURN)
+    )
+    plan_b = TurnPlanCandidate(
+        "plan_9999", ("play:Strike:h0@e0", SEMANTIC_END_TURN)
+    )
+    top, _pruned, _summary, _comps = cap_plans_for_turn_plan_choice(
+        (plan_a, plan_b), board, max_choices=1
+    )
+    assert top[0].steps == ("play:Strike:h0@e0", SEMANTIC_END_TURN)
+    assert top[0].plan_id == "plan_9999"
 
 
 def test_enumerator_deterministic_and_bounded():
@@ -188,24 +249,26 @@ def test_prompt_layers_default_off():
     assert state["mode"] == "combat_turn_plan"
 
 
-def test_runner_executes_end_turn_plan_low_conf_ok():
+def test_runner_executes_heuristic_top_plan_low_conf_ok():
     env, combat, mask = _reset()
     obs = encode_observation(combat)
     keys = legal_semantic_keys(combat, mask)
-    end_only = next(
-        p for p in enumerate_candidate_plans(keys, max_steps=1, max_plans=64) if p.steps == (SEMANTIC_END_TURN,)
-    )
+    board = serialize_combat_board_full(combat, mask)
+    raw = enumerate_candidate_plans(keys)
+    top, _pr, _sm, _co = cap_plans_for_turn_plan_choice(raw, board, max_choices=32)
+    assert top
+    pick_id = top[0].plan_id
     local, shadow = choose_combat_turn_plan_action(
         combat,
         mask,
         np.random.RandomState(0),
         _Ppo(),
-        adapter=_PlanAdapter(end_only.plan_id, conf=0.05),
+        adapter=_PlanAdapter(pick_id, conf=0.05),
         combat_obs=obs,
         env=env,
     )
     env.close()
-    assert local == ACTION_END_TURN
+    assert int(mask[local]) == 1
     assert shadow["turn_plan_failopen"] is False
 
 

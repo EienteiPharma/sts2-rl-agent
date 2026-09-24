@@ -13,6 +13,7 @@ No live HTTP in this module. Default hang combat remains ``--combat-policy ppo``
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
@@ -308,6 +309,180 @@ def enumerate_candidate_plans(
     return tuple(plans)
 
 
+_PLAY_STEP_RE = re.compile(r"^play:(?P<card>[^:]+):h(?P<hi>\d+)(?:@.*)?$")
+_INTENT_PART_ATTACK_RE = re.compile(
+    r"^(?:attack|multi_attack)\s+(\d+)(?:x(\d+))?$",
+    re.IGNORECASE,
+)
+
+
+def _minimal_board_for_plan_scoring() -> dict[str, Any]:
+    return {
+        "self": {"hp": 70, "max_hp": 80, "block": 0, "energy": 3, "hand": []},
+        "enemies": [],
+        "turn": {"end_turn_legal": True},
+    }
+
+
+def _hand_entry(board: dict[str, Any], hand_index: int) -> dict[str, Any] | None:
+    hand = board.get("self", {}).get("hand") or []
+    for entry in hand:
+        if int(entry.get("hand_index", -1)) == hand_index:
+            return entry
+    if 0 <= hand_index < len(hand):
+        row = hand[hand_index]
+        return row if isinstance(row, dict) else None
+    return None
+
+
+def _parse_energy_cost(cost: str | int | None) -> int:
+    if cost is None:
+        return 1
+    raw = str(cost).strip()
+    if not raw or raw.upper() == "X":
+        return 99
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 1
+
+
+def _est_block_from_card_name(card_name: str) -> int:
+    u = str(card_name or "").upper().replace(" ", "_")
+    if "IMPENETRABLE" in u:
+        return 12
+    if "ENTRENCH" in u:
+        return 6
+    if "DEFEND" in u or "BARRICADE" in u or "GLACIER" in u:
+        return 5
+    if "ARMOR" in u or "SHIELD" in u or "BARRIER" in u:
+        return 4
+    return 0
+
+
+def _est_damage_from_card_name(card_name: str) -> int:
+    u = str(card_name or "").upper()
+    if "STRIKE" in u:
+        return 6
+    if "HEAVY" in u or "BLUDGEON" in u:
+        return 12
+    if "BASH" in u:
+        return 8
+    return 2
+
+
+def incoming_attack_damage_from_board(board: dict[str, Any]) -> int:
+    total = 0
+    for enemy in board.get("enemies") or []:
+        intent = str(enemy.get("intent") or "").lower()
+        for part in intent.split("/"):
+            part = part.strip()
+            if not part or part == "unknown":
+                continue
+            match = _INTENT_PART_ATTACK_RE.match(part)
+            if match:
+                total += int(match.group(1)) * int(match.group(2) or 1)
+    return total
+
+
+def _analyze_plan_steps(
+    steps: Sequence[str], board: dict[str, Any]
+) -> tuple[int, int, int]:
+    """Return (estimated_block, estimated_damage, energy_spent) for plan prefix."""
+    block_gain = 0
+    damage = 0
+    energy = 0
+    for step in steps:
+        if step == SEMANTIC_END_TURN:
+            break
+        m = _PLAY_STEP_RE.match(str(step))
+        if not m:
+            continue
+        card_name = m.group("card")
+        hi = int(m.group("hi"))
+        entry = _hand_entry(board, hi)
+        if entry is not None:
+            card_name = str(entry.get("name") or card_name)
+            energy += _parse_energy_cost(entry.get("cost"))
+        else:
+            energy += 1
+        block_gain += _est_block_from_card_name(card_name)
+        damage += _est_damage_from_card_name(card_name)
+    return block_gain, damage, energy
+
+
+def score_turn_plan_candidate(
+    plan: TurnPlanCandidate, board: dict[str, Any]
+) -> tuple[int, int, int, tuple[str, ...]]:
+    """Deterministic heuristic: block lethal, survive, cost-efficiency; tie = steps."""
+    self_row = board.get("self") or {}
+    hp = int(self_row.get("hp") or 0)
+    block = int(self_row.get("block") or 0)
+    energy = int(self_row.get("energy") or 0)
+    incoming = incoming_attack_damage_from_board(board)
+    plan_block, plan_damage, energy_spent = _analyze_plan_steps(plan.steps, board)
+    effective_block = block + plan_block
+
+    if incoming > 0:
+        if effective_block >= incoming:
+            block_score = 1000
+        elif incoming >= hp:
+            block_score = int(300 * effective_block / max(incoming, 1))
+        else:
+            block_score = int(600 * effective_block / max(incoming, 1))
+    else:
+        block_score = 200
+
+    post_hit = max(0, incoming - effective_block)
+    survive_score = max(0, min(hp, hp - post_hit) + (10 if post_hit == 0 else 0))
+
+    energy_budget = max(1, energy)
+    if energy_spent > energy_budget:
+        eff_score = max(0, 50 - (energy_spent - energy_budget) * 20)
+    else:
+        spare = energy_budget - energy_spent
+        eff_score = 80 + plan_damage * 5 + spare * 3 - energy_spent * 2
+
+    return block_score, survive_score, int(eff_score), plan.steps
+
+
+def composite_heuristic_score(components: tuple[int, int, int]) -> float:
+    block_score, survive_score, eff_score = components
+    return float(block_score * 1_000_000 + survive_score * 1_000 + eff_score)
+
+
+def heuristic_score_distribution(scores: Sequence[float]) -> dict[str, Any]:
+    n = len(scores)
+    if not n:
+        return {
+            "n": 0,
+            "min": None,
+            "p50": None,
+            "p95": None,
+            "max": None,
+            "buckets": {"lt_1e5": 0, "1e5_1e6": 0, "1e6_11e6": 0, "ge_11e6": 0},
+        }
+    arr = np.sort(np.asarray(scores, dtype=float))
+    buckets = {"lt_1e5": 0, "1e5_1e6": 0, "1e6_11e6": 0, "ge_11e6": 0}
+    for x in arr:
+        if x < 1e5:
+            buckets["lt_1e5"] += 1
+        elif x < 1e6:
+            buckets["1e5_1e6"] += 1
+        elif x < 1.1e6:
+            buckets["1e6_11e6"] += 1
+        else:
+            buckets["ge_11e6"] += 1
+    return {
+        "n": n,
+        "min": round(float(arr[0]), 2),
+        "p50": round(float(np.percentile(arr, 50)), 2),
+        "p95": round(float(np.percentile(arr, 95)), 2),
+        "max": round(float(arr[-1]), 2),
+        "buckets": buckets,
+    }
+
+
 def resolve_turn_plan_choice_cap(
     override: int | None = None,
     *,
@@ -330,16 +505,40 @@ def resolve_turn_plan_choice_cap(
 
 def cap_plans_for_turn_plan_choice(
     plans: Sequence[TurnPlanCandidate],
+    board: dict[str, Any] | None = None,
     *,
     max_choices: int | None = None,
-) -> tuple[tuple[TurnPlanCandidate, ...], int]:
-    """Sort by ``plan_id`` then apply ``resolve_turn_plan_choice_cap(max_choices)``."""
-    ordered = tuple(sorted(plans, key=lambda p: p.plan_id))
+) -> tuple[tuple[TurnPlanCandidate, ...], int, dict[str, Any], tuple[float, ...]]:
+    """Heuristic top-K: block/survive/efficiency, tie-break on ``steps`` (not ``plan_id``)."""
+    ctx = board if board is not None else _minimal_board_for_plan_scoring()
     limit = resolve_turn_plan_choice_cap(max_choices)
-    if limit < 1 or len(ordered) <= limit:
-        return ordered, 0
+    if not plans:
+        empty = heuristic_score_distribution(())
+        return (), 0, empty, ()
+
+    scored: list[tuple[tuple[int, int, int, tuple[str, ...]], TurnPlanCandidate]] = []
+    composites: list[float] = []
+    for plan in plans:
+        components = score_turn_plan_candidate(plan, ctx)
+        scored.append((components, plan))
+        composites.append(
+            composite_heuristic_score(components[:3])
+        )
+    scored.sort(
+        key=lambda item: (
+            -item[0][0],
+            -item[0][1],
+            -item[0][2],
+            item[0][3],
+        )
+    )
+    ordered = tuple(p for _c, p in scored)
+    summary = heuristic_score_distribution(composites)
+    comp_tuple = tuple(composites)
+    if len(ordered) <= limit:
+        return ordered, 0, summary, comp_tuple
     pruned = len(ordered) - limit
-    return ordered[:limit], pruned
+    return ordered[:limit], pruned, summary, comp_tuple
 
 
 def build_combat_turn_plan_choice_question(
@@ -686,13 +885,14 @@ def choose_combat_turn_plan_action(
             return int(action), shadow
 
         legal_keys = legal_semantic_keys(combat, mask, owner=owner_creature)
+        board = serialize_combat_board_full(combat, mask, owner=owner_creature)
         raw_plans = enumerate_candidate_plans(legal_keys)
-        plans, pruned_n = cap_plans_for_turn_plan_choice(
-            raw_plans, max_choices=turn_plan_choice_cap
+        plans, pruned_n, score_summary, score_composites = cap_plans_for_turn_plan_choice(
+            raw_plans, board, max_choices=turn_plan_choice_cap
         )
         if pruned_n:
             record_turn_plan_choice_prune(telemetry, pruned_n)
-        board = serialize_combat_board_full(combat, mask, owner=owner_creature)
+        record_turn_plan_heuristic_scores(telemetry, score_summary, score_composites)
         picked, err, err_detail = _pick_plan_via_jev(
             adapter, board, plans, prompt_config=cfg
         )
@@ -738,6 +938,18 @@ def choose_combat_turn_plan_action(
     )
     session.last_shadow = shadow
     return local, shadow
+
+
+def record_turn_plan_heuristic_scores(
+    telemetry: Any,
+    summary: dict[str, Any],
+    composites: Sequence[float],
+) -> None:
+    if telemetry is None or int(summary.get("n") or 0) <= 0:
+        return
+    record = getattr(telemetry, "record_turn_plan_heuristic_scores", None)
+    if callable(record):
+        record(summary, composites)
 
 
 def record_turn_plan_choice_prune(telemetry: Any, pruned_count: int) -> None:
@@ -795,7 +1007,11 @@ __all__ = [
     "TurnPlanRuntime",
     "build_combat_turn_plan_choice_question",
     "cap_plans_for_turn_plan_choice",
+    "composite_heuristic_score",
+    "heuristic_score_distribution",
+    "incoming_attack_damage_from_board",
     "resolve_turn_plan_choice_cap",
+    "score_turn_plan_candidate",
     "build_turn_plan_jev_state",
     "catastrophe_reason_for_telemetry",
     "choose_combat_turn_plan_action",
@@ -804,6 +1020,7 @@ __all__ = [
     "jev_turn_plan_questions",
     "record_jev_turn_plan_turn",
     "record_turn_plan_choice_prune",
+    "record_turn_plan_heuristic_scores",
     "legal_semantic_keys",
     "living_enemy_intent_snapshot",
     "runtime_for_env",
