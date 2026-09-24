@@ -77,6 +77,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--turn-plan-choice-cap",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "jev-turn: max plan_id options in one Jev Choice (default 32, "
+            "override via STS2_TURN_PLAN_CHOICE_CAP; platform max 255)."
+        ),
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -209,6 +219,11 @@ def main(argv: list[str] | None = None) -> int:
         return int(action)
 
     combat_policy = str(getattr(args, "combat_policy", "ppo") or "ppo")
+    from sts2_env.eval.combat_turn_plan import resolve_turn_plan_choice_cap
+
+    turn_plan_choice_cap = resolve_turn_plan_choice_cap(
+        getattr(args, "turn_plan_choice_cap", None)
+    )
     choose_fn = None
     combat_jev_summary = None
     if workers == 1 and combat_policy == "jev":
@@ -257,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
                 combat_obs=obs,
                 env=env,
                 telemetry=telemetry,
+                turn_plan_choice_cap=turn_plan_choice_cap,
             )
             return int(local)
 
@@ -271,6 +287,7 @@ def main(argv: list[str] | None = None) -> int:
         model_path=str(args.model),
         device=device,
         combat_policy=combat_policy,
+        turn_plan_choice_cap=turn_plan_choice_cap,
     )
     n_fights = int(summary["overall"]["n"])
     if combat_jev_summary is not None:
@@ -302,6 +319,9 @@ def main(argv: list[str] | None = None) -> int:
         "n_eps": n_eps,
         "workers": workers,
         "combat_policy": combat_policy,
+        "turn_plan_choice_cap": (
+            turn_plan_choice_cap if combat_policy == "jev-turn" else None
+        ),
         "combat_jev": combat_jev_payload,
     }
     text = (

@@ -284,6 +284,7 @@ def hold_eval_worker(payload: dict[str, Any]) -> dict[str, Any]:
     model_path = str(payload["model"])
     device = str(payload.get("device") or "cpu")
     combat_policy = str(payload.get("combat_policy") or "ppo")
+    turn_plan_choice_cap = payload.get("turn_plan_choice_cap")
     max_steps = int(payload.get("max_steps", 400))
     jobs = [expand_hold_job(j) for j in payload.get("jobs") or []]
 
@@ -356,6 +357,11 @@ def hold_eval_worker(payload: dict[str, Any]) -> dict[str, Any]:
                     combat_obs=obs,
                     env=env,
                     telemetry=telemetry,
+                    turn_plan_choice_cap=(
+                        int(turn_plan_choice_cap)
+                        if turn_plan_choice_cap is not None
+                        else None
+                    ),
                 )
                 return int(local)
 
@@ -374,6 +380,7 @@ def run_hold_jobs_parallel(
     combat_policy: str = "ppo",
     max_steps: int = 400,
     workers: int = 8,
+    turn_plan_choice_cap: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Spawn ProcessPool (same as collect). workers=1 calls hold_eval_worker in-process."""
     shards = split_hold_jobs(jobs, workers)
@@ -386,6 +393,7 @@ def run_hold_jobs_parallel(
                 "device": device,
                 "combat_policy": str(combat_policy or "ppo"),
                 "max_steps": int(max_steps),
+                "turn_plan_choice_cap": turn_plan_choice_cap,
                 "jobs": [compact_hold_job(j) for j in shard],
             }
         )
@@ -427,6 +435,7 @@ def run_hold_smoke(
     model_path: str | None = None,
     device: str = "cpu",
     combat_policy: str = "ppo",
+    turn_plan_choice_cap: int | None = None,
 ) -> dict[str, Any]:
     """Run HOLD episodes with a predict(obs, mask)->action callable. No SB3 import.
 
@@ -461,6 +470,7 @@ def run_hold_smoke(
             combat_policy=combat_policy,
             max_steps=max_steps,
             workers=n_workers,
+            turn_plan_choice_cap=turn_plan_choice_cap,
         )
     summary = summarize_hold_rows(rows)
     summary["passed"] = hold_passes(summary)

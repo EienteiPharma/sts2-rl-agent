@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -169,6 +170,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     ap.add_argument(
+        "--turn-plan-choice-cap",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "jev-turn: max plan_id Choice options (default 32, env "
+            "STS2_TURN_PLAN_CHOICE_CAP, platform max 255)."
+        ),
+    )
+    ap.add_argument(
         "--n",
         type=int,
         default=SEED_COUNT,
@@ -196,6 +207,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    cap_arg = getattr(args, "turn_plan_choice_cap", None)
+    if cap_arg is not None:
+        from sts2_env.eval.combat_turn_plan import (
+            TURN_PLAN_CHOICE_CAP_ENV,
+            resolve_turn_plan_choice_cap,
+        )
+
+        os.environ[TURN_PLAN_CHOICE_CAP_ENV] = str(
+            resolve_turn_plan_choice_cap(cap_arg)
+        )
     validate_policy_args(args)
     model, combat_model = load_policy_models(args)
     jev_enabled = args.policy == "hierarchical" and args.jev == "on"

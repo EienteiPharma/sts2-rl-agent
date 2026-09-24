@@ -13,10 +13,14 @@ from sts2_env.eval.combat_turn_plan import (
     SEMANTIC_END_TURN,
     TurnPlanCandidate,
     TurnPlanPromptConfig,
+    DEFAULT_TURN_PLAN_CHOICE_CANDIDATES,
     MAX_TURN_PLAN_CHOICE_CANDIDATES,
+    TURN_PLAN_CHOICE_CAP_ENV,
+    TYPESAFE_CHOICE_PLATFORM_MAX,
     build_combat_turn_plan_choice_question,
     build_turn_plan_jev_state,
     cap_plans_for_turn_plan_choice,
+    resolve_turn_plan_choice_cap,
     choose_combat_turn_plan_action,
     enumerate_candidate_plans,
     gym_action_for_semantic_key,
@@ -73,12 +77,33 @@ def test_toy_enumerator_respects_max_len_end_turn_and_legal_keys():
 def test_turn_plan_choice_hard_cap_32_and_pruned_count():
     keys = tuple(f"k{i}" for i in range(12))
     plans = enumerate_candidate_plans(keys, max_steps=3, max_plans=512)
-    assert len(plans) > MAX_TURN_PLAN_CHOICE_CANDIDATES
+    assert len(plans) > DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
     capped, pruned = cap_plans_for_turn_plan_choice(plans)
-    assert len(capped) == MAX_TURN_PLAN_CHOICE_CANDIDATES
-    assert pruned == len(plans) - MAX_TURN_PLAN_CHOICE_CANDIDATES
+    assert len(capped) == DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
+    assert pruned == len(plans) - DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
     q = build_combat_turn_plan_choice_question(capped)
-    assert len(q["criteria"]) <= MAX_TURN_PLAN_CHOICE_CANDIDATES
+    assert len(q["criteria"]) <= DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
+
+
+def test_resolve_turn_plan_choice_cap_default_env_cli_and_platform_max():
+    assert resolve_turn_plan_choice_cap(None) == DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
+    assert MAX_TURN_PLAN_CHOICE_CANDIDATES == DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
+    assert resolve_turn_plan_choice_cap(48) == 48
+    assert resolve_turn_plan_choice_cap(999) == TYPESAFE_CHOICE_PLATFORM_MAX
+    assert (
+        resolve_turn_plan_choice_cap(
+            None, environ={TURN_PLAN_CHOICE_CAP_ENV: "64"}
+        )
+        == 64
+    )
+    capped, pruned = cap_plans_for_turn_plan_choice(
+        enumerate_candidate_plans(
+            tuple(f"k{i}" for i in range(12)), max_steps=3, max_plans=512
+        ),
+        max_choices=40,
+    )
+    assert len(capped) == 40
+    assert pruned > 0
 
 
 def test_enumerator_deterministic_and_bounded():

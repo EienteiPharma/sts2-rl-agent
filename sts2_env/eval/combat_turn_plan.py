@@ -12,9 +12,10 @@ No live HTTP in this module. Default hang combat remains ``--combat-policy ppo``
 """
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -35,7 +36,11 @@ CHOICE_COMBAT_TURN_PLAN = "combat_turn_plan_choice"
 SEMANTIC_END_TURN = "end_turn"
 MAX_PLAN_STEPS = 8
 MAX_CANDIDATE_PLANS = 512
-MAX_TURN_PLAN_CHOICE_CANDIDATES = 32
+TYPESAFE_CHOICE_PLATFORM_MAX = 255
+DEFAULT_TURN_PLAN_CHOICE_CANDIDATES = 32
+TURN_PLAN_CHOICE_CAP_ENV = "STS2_TURN_PLAN_CHOICE_CAP"
+# Back-compat alias for tests/docs referring to the product default.
+MAX_TURN_PLAN_CHOICE_CANDIDATES = DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
 MAX_REPLANS_PER_PLAYER_TURN = 3
 
 CATA_FAILOPEN_TIMEOUT = "timeout"
@@ -303,14 +308,34 @@ def enumerate_candidate_plans(
     return tuple(plans)
 
 
+def resolve_turn_plan_choice_cap(
+    override: int | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> int:
+    """Product cap for ``plan_id`` Choice (default 32, clamped to TypeSafe max 255)."""
+    if override is not None:
+        cap = int(override)
+    else:
+        env = os.environ if environ is None else environ
+        raw = str(env.get(TURN_PLAN_CHOICE_CAP_ENV) or "").strip()
+        cap = int(raw) if raw else DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
+    if cap < 1:
+        raise ValueError(
+            f"turn-plan Choice cap must be >= 1 (got {cap}); "
+            f"platform max is {TYPESAFE_CHOICE_PLATFORM_MAX}"
+        )
+    return min(cap, TYPESAFE_CHOICE_PLATFORM_MAX)
+
+
 def cap_plans_for_turn_plan_choice(
     plans: Sequence[TurnPlanCandidate],
     *,
-    max_choices: int = MAX_TURN_PLAN_CHOICE_CANDIDATES,
+    max_choices: int | None = None,
 ) -> tuple[tuple[TurnPlanCandidate, ...], int]:
-    """Sort by ``plan_id`` and keep at most 32 options (product cap; TypeSafe allows 255)."""
+    """Sort by ``plan_id`` then apply ``resolve_turn_plan_choice_cap(max_choices)``."""
     ordered = tuple(sorted(plans, key=lambda p: p.plan_id))
-    limit = int(max_choices)
+    limit = resolve_turn_plan_choice_cap(max_choices)
     if limit < 1 or len(ordered) <= limit:
         return ordered, 0
     pruned = len(ordered) - limit
@@ -572,6 +597,7 @@ def choose_combat_turn_plan_action(
     prompt_config: TurnPlanPromptConfig | None = None,
     runtime: TurnPlanRuntime | None = None,
     telemetry: Any = None,
+    turn_plan_choice_cap: int | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Execute turn-plan path: pick ``plan_id``, run steps, replan on triggers.
 
@@ -661,7 +687,9 @@ def choose_combat_turn_plan_action(
 
         legal_keys = legal_semantic_keys(combat, mask, owner=owner_creature)
         raw_plans = enumerate_candidate_plans(legal_keys)
-        plans, pruned_n = cap_plans_for_turn_plan_choice(raw_plans)
+        plans, pruned_n = cap_plans_for_turn_plan_choice(
+            raw_plans, max_choices=turn_plan_choice_cap
+        )
         if pruned_n:
             record_turn_plan_choice_prune(telemetry, pruned_n)
         board = serialize_combat_board_full(combat, mask, owner=owner_creature)
@@ -754,9 +782,12 @@ __all__ = [
     "CHOICE_COMBAT_TURN_PLAN",
     "COMBAT_TURN_PLAN_INSTRUCTIONS",
     "COMBAT_TURN_PLAN_SYSTEM_RULES",
+    "DEFAULT_TURN_PLAN_CHOICE_CANDIDATES",
     "MAX_CANDIDATE_PLANS",
     "MAX_PLAN_STEPS",
     "MAX_TURN_PLAN_CHOICE_CANDIDATES",
+    "TURN_PLAN_CHOICE_CAP_ENV",
+    "TYPESAFE_CHOICE_PLATFORM_MAX",
     "MAX_REPLANS_PER_PLAYER_TURN",
     "SEMANTIC_END_TURN",
     "TurnPlanCandidate",
@@ -764,6 +795,7 @@ __all__ = [
     "TurnPlanRuntime",
     "build_combat_turn_plan_choice_question",
     "cap_plans_for_turn_plan_choice",
+    "resolve_turn_plan_choice_cap",
     "build_turn_plan_jev_state",
     "catastrophe_reason_for_telemetry",
     "choose_combat_turn_plan_action",
