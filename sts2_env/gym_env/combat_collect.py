@@ -21,6 +21,12 @@ from sts2_env.gym_env.combat_buffer import (
     save_combat_buffer,
     stack_records,
 )
+from sts2_env.gym_env.planning_buffer import (
+    PLANNING_REQUIRED_KEYS,
+    PlanningStepRecorder,
+    concat_planning_buffers,
+    save_planning_buffer,
+)
 
 
 @dataclass
@@ -30,6 +36,8 @@ class CollectWorkerConfig:
     noncombat_model: str | None = None
     combat_policy: str = "random"
     combat_model: str | None = None
+    planning_out: str | None = None
+    planning_jsonl: str | None = None
 
 
 def split_worker_steps(n_steps: int, n_envs: int) -> list[int]:
@@ -117,6 +125,8 @@ def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
         noncombat_model=payload.get("noncombat_model"),
         combat_policy=str(payload.get("combat_policy", payload.get("policy", "random"))),
         combat_model=payload.get("combat_model") or payload.get("model"),
+        planning_out=payload.get("planning_out"),
+        planning_jsonl=payload.get("planning_jsonl"),
     )
 
     if cfg.jev_enabled:
@@ -129,6 +139,7 @@ def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
         if Path(cfg.noncombat_model).is_file():
             noncombat_ppo = _load_maskable_ppo(cfg.noncombat_model)
 
+    planning_recorder = PlanningStepRecorder() if cfg.planning_out else None
     env = RunEnvOnPolicyCombatEnv(
         max_steps=max_steps,
         seed_offset=seed + worker_id,
@@ -136,6 +147,8 @@ def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
         jev_enabled=cfg.jev_enabled,
         noncombat_policy=cfg.noncombat_policy,  # type: ignore[arg-type]
         noncombat_ppo_model=noncombat_ppo,
+        planning_recorder=planning_recorder,
+        planning_jsonl=cfg.planning_jsonl if planning_recorder else None,
     )
 
     combat_model = None
@@ -180,10 +193,27 @@ def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
         }
     )
     save_combat_buffer(shard, arrays, meta)
+    planning_n = 0
+    planning_shard = payload.get("planning_shard")
+    if planning_recorder is not None and planning_shard:
+        plan_arrays = planning_recorder.to_arrays()
+        if plan_arrays is not None:
+            save_planning_buffer(
+                planning_shard,
+                plan_arrays,
+                meta={
+                    "worker_id": worker_id,
+                    "seed": seed,
+                    "jev": "off" if not cfg.jev_enabled else "on",
+                },
+            )
+            planning_n = int(plan_arrays["obs"].shape[0])
     return {
         "shard": str(shard),
         "n_transitions": int(arrays["obs"].shape[0]),
         "worker_id": worker_id,
+        "planning_shard": str(planning_shard) if planning_shard else None,
+        "n_planning_transitions": planning_n,
     }
 
 
@@ -201,6 +231,8 @@ def collect_parallel(
     noncombat_model: str | None = None,
     combat_policy: str | None = None,
     combat_model: str | None = None,
+    planning_out: str | Path | None = None,
+    planning_jsonl: str | Path | None = None,
 ) -> dict[str, Any]:
     """Collect hang combat transitions, optionally across ``n_envs`` workers."""
     out = refuse_frozen_path(out_path, what="buffer")
@@ -223,6 +255,14 @@ def collect_parallel(
     quotas = [q for q in split_worker_steps(n_steps, n_envs) if q > 0]
     shard_dir = out.parent / f".{out.stem}_shards"
     shard_dir.mkdir(parents=True, exist_ok=True)
+    planning_path = Path(planning_out).expanduser() if planning_out else None
+    planning_shard_dir = (
+        planning_path.parent / f".{planning_path.stem}_shards"
+        if planning_path is not None
+        else None
+    )
+    if planning_shard_dir is not None:
+        planning_shard_dir.mkdir(parents=True, exist_ok=True)
     payloads = []
     for i, quota in enumerate(quotas):
         payloads.append(
@@ -237,6 +277,21 @@ def collect_parallel(
                 "jev_enabled": jev_enabled,
                 "noncombat_policy": noncombat_policy,
                 "noncombat_model": noncombat_model,
+                "planning_out": str(planning_path) if planning_path else None,
+                "planning_jsonl": (
+                    str(
+                        Path(planning_jsonl).with_name(
+                            f"{Path(planning_jsonl).stem}_w{i:02d}{Path(planning_jsonl).suffix}"
+                        )
+                    )
+                    if planning_jsonl
+                    else None
+                ),
+                "planning_shard": (
+                    str(planning_shard_dir / f"shard_{i:02d}.npz")
+                    if planning_shard_dir is not None
+                    else None
+                ),
                 "shard": str(shard_dir / f"shard_{i:02d}.npz"),
                 "max_steps": int(max_steps),
             }
@@ -270,6 +325,35 @@ def collect_parallel(
         }
     )
     save_combat_buffer(out, merged, meta)
+    planning_result: dict[str, Any] = {}
+    if planning_path is not None:
+        plan_parts = []
+        for row in results:
+            ps = row.get("planning_shard")
+            if ps and Path(ps).is_file():
+                with np.load(ps, allow_pickle=True) as z:
+                    plan_parts.append({k: np.asarray(z[k]) for k in PLANNING_REQUIRED_KEYS})
+        if plan_parts:
+            merged_plan = concat_planning_buffers(plan_parts)
+            save_planning_buffer(
+                planning_path,
+                merged_plan,
+                meta={
+                    "n_envs": len(payloads),
+                    "seed": int(seed),
+                    "combat_out": str(out),
+                },
+            )
+            planning_result = {
+                "planning_out": str(planning_path.resolve()),
+                "n_planning_transitions": int(merged_plan["obs"].shape[0]),
+            }
+        else:
+            planning_result = {
+                "planning_out": str(planning_path),
+                "n_planning_transitions": 0,
+                "planning_note": "no non-combat steps recorded (re-run collect with --jev off)",
+            }
     hang = hang_protocol_meta()
     if not jev_enabled:
         hang = {**hang, "jev": "off", "typesafe": "off"}
@@ -282,6 +366,7 @@ def collect_parallel(
         "typesafe": "on" if jev_enabled else "off",
         "hang": hang,
         **pool_extra,
+        **planning_result,
     }
 
 

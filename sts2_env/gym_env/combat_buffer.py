@@ -35,7 +35,10 @@ FROZEN_OUTDIR_NAMES = (
     ONPOLICY_FROZEN_OUTDIR,
     ANTIFORGET_FROZEN_OUTDIR,
 )
-PROTECTED_COLLECT_DIR_NAMES = ("runenv_combat_buffer_ep",)
+PROTECTED_COLLECT_DIR_NAMES = (
+    "runenv_combat_buffer_ep",
+    "runenv_combat_buffer_colab_v1",
+)
 COLAB_V1_COLLECT_OUT = (
     "/workspace/sts2-sim/output/runenv_combat_buffer_colab_v1/transitions.npz"
 )
@@ -69,9 +72,13 @@ def refuse_frozen_path(path: str | Path, *, what: str = "path") -> Path:
             )
     for name in PROTECTED_COLLECT_DIR_NAMES:
         if name in parts and out.name == "transitions.npz":
+            hint = (
+                "planning-only: keep --out elsewhere; set --planning-out default"
+                if name == "runenv_combat_buffer_colab_v1"
+                else f"use {COLAB_V1_COLLECT_OUT} for colab_v1"
+            )
             raise SystemExit(
-                f"refusing to overwrite protected ep collect {what} {out}; "
-                f"use {COLAB_V1_COLLECT_OUT} for colab_v1"
+                f"refusing to overwrite protected collect {what} {out}; {hint}"
             )
     return out
 

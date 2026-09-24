@@ -36,6 +36,7 @@ from sts2_env.gym_env.combat_collect import (
     collect_parallel,
     split_worker_steps,
 )
+from sts2_env.gym_env.planning_buffer import PLANNING_DEFAULT_OUT
 from sts2_env.gym_env.runenv_onpolicy_combat import (
     HANG_JEV,
     HANG_JEV_EVENT,
@@ -73,6 +74,18 @@ def normalize_collect_args(args: argparse.Namespace) -> argparse.Namespace:
         if args.combat_policy is None and args.policy == "random":
             args.policy = "model"
         args.combat_policy_resolved = _resolve_combat_policy(args)
+    if args.no_planning:
+        args.planning_out_resolved = None
+        args.planning_jsonl_resolved = None
+    elif args.jev_enabled and not args.planning_out:
+        args.planning_out_resolved = None
+        args.planning_jsonl_resolved = None
+    else:
+        args.planning_out_resolved = args.planning_out or PLANNING_DEFAULT_OUT
+        args.planning_jsonl_resolved = (
+            args.planning_jsonl
+            or str(Path(args.planning_out_resolved).with_suffix(".jsonl"))
+        )
     return args
 
 
@@ -158,6 +171,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Hang env + flags; no npz write, no torch",
     )
+    parser.add_argument(
+        "--planning-out",
+        default=None,
+        help=(
+            "Non-combat planning npz (default when --jev off: "
+            f"{PLANNING_DEFAULT_OUT})"
+        ),
+    )
+    parser.add_argument(
+        "--planning-jsonl",
+        default=None,
+        help="Optional per-worker jsonl audit (phase/action/tag); default beside planning npz",
+    )
+    parser.add_argument(
+        "--no-planning",
+        action="store_true",
+        help="Skip planning side-channel (combat npz only)",
+    )
     args = parser.parse_args(argv)
     return normalize_collect_args(args)
 
@@ -234,6 +265,13 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "typesafe_key_count": pool["typesafe_key_count"],
         "typesafe_key_pool": pool.get("typesafe_key_pool"),
         "recommended_n_envs_max": pool.get("recommended_n_envs_max"),
+        "planning_out": args.planning_out_resolved,
+        "planning_jsonl": args.planning_jsonl_resolved,
+        "planning_schema": (
+            "obs/next_obs (151) run; action/mask (157); phase_code; policy_tag"
+            if args.planning_out_resolved
+            else None
+        ),
         "note": (
             "Jev stays on collect; train_combat_from_buffer.py is the learn half"
             if args.jev_enabled
@@ -269,6 +307,8 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         print("  n_envs:    ", note)
     print("  combat:    ", combat_policy, args.model)
     print("  noncombat: ", args.noncombat_policy, args.noncombat_model or args.model)
+    if args.planning_out_resolved:
+        print("  planning:  ", args.planning_out_resolved)
     if args.jev_enabled:
         print("  hang:      jev on / event off / neow off / start_with_neow")
         print("  allows_event:", flags.allows_event(), "allows_neow", flags.allows_neow())
@@ -291,6 +331,8 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         noncombat_model=args.noncombat_model or args.model,
         combat_policy=combat_policy,
         combat_model=args.model if combat_policy in ("model", "ppo") else None,
+        planning_out=args.planning_out_resolved,
+        planning_jsonl=args.planning_jsonl_resolved,
     )
     result["protocol"] = PROTOCOL_ID if args.jev_enabled else COLAB_V1_PROTOCOL_ID
     result["hang"] = hang_protocol_meta() if args.jev_enabled else {

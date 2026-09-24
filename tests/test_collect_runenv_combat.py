@@ -198,7 +198,7 @@ def test_colab_v1_collect_dry_run_no_typesafe(monkeypatch):
                 "--policy-zip",
                 "output/combat_ppo_obs_v1_bh_v1/final_model.zip",
                 "--out",
-                "/workspace/sts2-sim/output/runenv_combat_buffer_colab_v1/transitions.npz",
+                "output/runenv_combat_buffer_colab_v1_smoke/transitions.npz",
                 "--n-envs",
                 "8",
                 "--n-steps",
@@ -217,6 +217,13 @@ def test_colab_v1_collect_dry_run_no_typesafe(monkeypatch):
 def test_refuse_protected_ep_buffer():
     with pytest.raises(SystemExit, match="runenv_combat_buffer_ep"):
         refuse_frozen_path("output/runenv_combat_buffer_ep/transitions.npz")
+
+
+def test_refuse_protected_colab_v1_combat_buffer():
+    with pytest.raises(SystemExit, match="runenv_combat_buffer_colab_v1"):
+        refuse_frozen_path(
+            "/workspace/sts2-sim/output/runenv_combat_buffer_colab_v1/transitions.npz"
+        )
 
 
 def test_select_noncombat_jev_off_never_calls_jev(monkeypatch):
