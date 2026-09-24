@@ -108,6 +108,8 @@ from sts2_env.eval.jev_client import (
     TYPESAFE_API_URL,
     TYPESAFE_HTTP_USER_AGENT,
     TYPESAFE_MODEL,
+    TYPESAFE_NETWORK_BACKOFF_S,
+    TYPESAFE_NETWORK_RETRY_MAX,
     build_jev_adapter,
     is_cloudflare_1010,
     is_typesafe_forbidden,

@@ -31,6 +31,19 @@ TYPESAFE_MODEL = "jev-1.13.0"
 TYPESAFE_HTTP_USER_AGENT = "sts2-rl-agent-jev/1.0"
 CLOUDFLARE_1010_MIN_INTERVAL_S = 1.0
 HTTP_TIMEOUT_S = 20.0
+TYPESAFE_NETWORK_RETRY_MAX = 4
+TYPESAFE_NETWORK_BACKOFF_S = (0.25, 0.5, 1.0)
+
+
+def _is_transient_network_url_error(err: urllib.error.URLError) -> bool:
+    """True for DNS / other errors that often clear on a quick retry."""
+    msg = str(err).lower()
+    if "temporary failure in name resolution" in msg:
+        return True
+    reason = err.reason
+    if isinstance(reason, OSError) and getattr(reason, "errno", None) == -3:
+        return True
+    return False
 
 
 class JevClient(Protocol):
@@ -125,6 +138,37 @@ class LiveJevClient:
         )
         return True
 
+    def _urlopen_json_with_network_retry(
+        self, req: urllib.request.Request
+    ) -> dict[str, Any]:
+        last_url_err: urllib.error.URLError | None = None
+        for net_attempt in range(TYPESAFE_NETWORK_RETRY_MAX):
+            try:
+                with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.URLError as e:
+                if isinstance(e, urllib.error.HTTPError):
+                    raise
+                last_url_err = e
+                if (
+                    not _is_transient_network_url_error(e)
+                    or net_attempt + 1 >= TYPESAFE_NETWORK_RETRY_MAX
+                ):
+                    raise JevError(f"typesafe network error: {e}") from e
+                delay = TYPESAFE_NETWORK_BACKOFF_S[
+                    min(net_attempt, len(TYPESAFE_NETWORK_BACKOFF_S) - 1)
+                ]
+                logger.warning(
+                    "TypeSafe transient network/DNS error; backoff %.2fs then retry "
+                    "(%s/%s): %s",
+                    delay,
+                    net_attempt + 1,
+                    TYPESAFE_NETWORK_RETRY_MAX - 1,
+                    e,
+                )
+                time.sleep(delay)
+        raise JevError(f"typesafe network error: {last_url_err}") from last_url_err
+
     def system_one(
         self,
         state: Any,
@@ -167,8 +211,7 @@ class LiveJevClient:
                 headers=typesafe_http_headers(self.api_key),
             )
             try:
-                with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
-                    payload = json.loads(resp.read().decode("utf-8"))
+                payload = self._urlopen_json_with_network_retry(req)
                 break
             except urllib.error.HTTPError as e:
                 detail = e.read().decode("utf-8", errors="replace")[:400]
@@ -186,8 +229,6 @@ class LiveJevClient:
                         time.sleep(CLOUDFLARE_1010_MIN_INTERVAL_S)
                         continue
                 raise last_http from e
-            except urllib.error.URLError as e:
-                raise JevError(f"typesafe network error: {e}") from e
         else:
             raise last_http or JevError("typesafe HTTP failed")
         if not isinstance(payload, dict):
@@ -246,6 +287,8 @@ def build_jev_adapter(
 __all__ = [
     "CLOUDFLARE_1010_MIN_INTERVAL_S",
     "HTTP_TIMEOUT_S",
+    "TYPESAFE_NETWORK_BACKOFF_S",
+    "TYPESAFE_NETWORK_RETRY_MAX",
     "JevClient",
     "LiveJevClient",
     "StubJevClient",
