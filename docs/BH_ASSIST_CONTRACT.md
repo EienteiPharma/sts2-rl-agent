@@ -162,3 +162,7 @@ HOLD smoke collapsed twice with Jev **selecting combat steps** (`combat_step_cho
 ## Stub
 
 Reference API: `sts2_env/eval/bh_assist.py` (heuristic hints); train helpers: `sts2_env/eval/bh_assist_train.py`.
+
+## Boss residual pack + forward inject (T3)
+
+Offline only — no policy/prompt/ranker changes. Slice `hold_turn_plan_replay_v1` JSONL → `boss_fail_pack_v1` (`scripts/pack_hold_turn_replay.py`); rebuild HOLD reset jobs for the same seeds (`scripts/boss_forward_inject.py`). **No engine rewind** from turn logs; forward inject reproduces Boss fight **starts** for assist v3 data after Lab go. See `docs/BOSS_FORWARD_INJECT.md`.
