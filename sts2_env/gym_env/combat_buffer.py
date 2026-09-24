@@ -35,6 +35,8 @@ FROZEN_OUTDIR_NAMES = (
     ONPOLICY_FROZEN_OUTDIR,
     ANTIFORGET_FROZEN_OUTDIR,
 )
+PROTECTED_COLLECT_DIR_NAMES = ("runenv_combat_buffer_ep",)
+COLAB_V1_COLLECT_OUT = "output/runenv_combat_buffer_colab_v1/transitions.npz"
 
 
 def hang_protocol_meta() -> dict[str, Any]:
@@ -62,6 +64,12 @@ def refuse_frozen_path(path: str | Path, *, what: str = "path") -> Path:
         if out.name == name or name in parts:
             raise SystemExit(
                 f"refusing to overwrite frozen {what} {out}; pick a new outdir"
+            )
+    for name in PROTECTED_COLLECT_DIR_NAMES:
+        if name in parts and out.name == "transitions.npz":
+            raise SystemExit(
+                f"refusing to overwrite protected ep collect {what} {out}; "
+                f"use {COLAB_V1_COLLECT_OUT} for colab_v1"
             )
     return out
 
@@ -214,6 +222,7 @@ def episode_starts(done: np.ndarray) -> np.ndarray:
 
 # Backwards compatibility re-exports from collect and replay modules
 from sts2_env.gym_env.combat_collect import (
+    CollectWorkerConfig,
     collect_parallel,
     collect_transitions,
     collect_worker,
@@ -229,8 +238,10 @@ __all__ = [
     "ANTIFORGET_FROZEN_OUTDIR",
     "BUFFER_VERSION",
     "FROZEN_OUTDIR_NAMES",
+    "COLAB_V1_COLLECT_OUT",
     "HUNG_OUTDIR_NAME",
     "ONPOLICY_FROZEN_OUTDIR",
+    "PROTECTED_COLLECT_DIR_NAMES",
     "REQUIRED_KEYS",
     "concat_buffers",
     "episode_starts",
@@ -243,6 +254,7 @@ __all__ = [
     "synthetic_combat_buffer",
     "validate_buffer",
     # Collect (re-exported from combat_collect)
+    "CollectWorkerConfig",
     "collect_parallel",
     "collect_transitions",
     "collect_worker",

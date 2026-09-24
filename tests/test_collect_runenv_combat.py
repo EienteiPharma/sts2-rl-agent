@@ -44,6 +44,7 @@ from sts2_env.gym_env.runenv_onpolicy_combat import (
     HANG_JEV_NEOW,
     HANG_START_WITH_NEOW,
     RunEnvOnPolicyCombatEnv,
+    hang_jev_flags,
 )
 
 _COLLECT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "collect_runenv_combat.py"
@@ -144,16 +145,97 @@ def test_split_worker_steps():
 def test_collect_cli_hang_defaults():
     args = collect_mod.parse_args([])
     assert args.policy == "random"
+    assert args.jev_enabled is True
+    assert args.noncombat_policy == "jev"
     assert args.n_envs == 1
     assert args.n_steps == 256
     assert args.dry_run is False
     assert "bh_v1" in args.model
     text = _COLLECT_PATH.read_text()
-    assert "--jev off" not in text
+    assert "--jev off" in text
     assert "HANG_JEV_EVENT" in text
     assert "start_with_neow" in text
     with pytest.raises(SystemExit):
         collect_mod.parse_args(["--policy", "off"])
+
+
+def test_colab_v1_collect_dry_run_no_typesafe(monkeypatch):
+    called = {"jev": 0, "typesafe": 0}
+
+    def _boom(*_a, **_k):
+        called["typesafe"] += 1
+        raise AssertionError("TypeSafe must not load in colab_v1 collect")
+
+    def _jev(*_a, **_k):
+        called["jev"] += 1
+        raise AssertionError("choose_jev_noncombat must not run")
+
+    monkeypatch.setattr(
+        "sts2_env.eval.jev.load_typesafe_api_keys",
+        _boom,
+    )
+    monkeypatch.setattr(
+        "sts2_env.gym_env.runenv_onpolicy_combat.choose_jev_noncombat",
+        _jev,
+    )
+    report = collect_mod.dry_run(
+        collect_mod.parse_args(
+            [
+                "--dry-run",
+                "--jev",
+                "off",
+                "--noncombat-policy",
+                "ppo",
+                "--combat-policy",
+                "ppo",
+                "--policy-zip",
+                "output/combat_ppo_obs_v1_bh_v1/final_model.zip",
+                "--out",
+                "output/runenv_combat_buffer_colab_v1/transitions.npz",
+                "--n-envs",
+                "8",
+                "--n-steps",
+                "500000",
+            ]
+        )
+    )
+    assert report["jev_enabled"] is False
+    assert report["typesafe"] == "off"
+    assert report["typesafe_key_count"] == 0
+    assert report["receipt"].startswith("Jev=off TypeSafe=off")
+    assert called["typesafe"] == 0
+    assert called["jev"] == 0
+
+
+def test_refuse_protected_ep_buffer():
+    with pytest.raises(SystemExit, match="runenv_combat_buffer_ep"):
+        refuse_frozen_path("output/runenv_combat_buffer_ep/transitions.npz")
+
+
+def test_select_noncombat_jev_off_never_calls_jev(monkeypatch):
+    from sts2_env.gym_env.runenv_onpolicy_combat import (
+        select_runenv_noncombat_action,
+    )
+
+    monkeypatch.setattr(
+        "sts2_env.gym_env.runenv_onpolicy_combat.choose_jev_noncombat",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no jev")),
+    )
+    class _Env:
+        _mgr = None
+
+    action, tag = select_runenv_noncombat_action(
+        _Env(),
+        np.array([0, 1, 0]),
+        np.random.RandomState(0),
+        jev_enabled=False,
+        noncombat_policy="ppo",
+        jev_adapter=None,
+        jev_flags=hang_jev_flags(),
+        ppo_model=None,
+    )
+    assert action in (1,)
+    assert tag == "noncombat_ppo_failopen_random"
 
 
 def test_collect_dry_run_hang_flags():

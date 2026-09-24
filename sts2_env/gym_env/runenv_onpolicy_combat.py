@@ -13,7 +13,7 @@ This is **not** ``STS2CombatEnv`` loadout-fixture training and **not**
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import gymnasium
 import numpy as np
@@ -49,6 +49,11 @@ DEFAULT_MAX_AUTO_STEPS = 2_000
 DEFAULT_MAX_RESET_RETRIES = 16
 OBS_VALUE_LOW = -1.0
 OBS_VALUE_HIGH = 10.0
+
+NoncombatPolicy = Literal["jev", "ppo", "random"]
+NONCOMBAT_POLICY_JEV: NoncombatPolicy = "jev"
+NONCOMBAT_POLICY_PPO: NoncombatPolicy = "ppo"
+NONCOMBAT_POLICY_RANDOM: NoncombatPolicy = "random"
 
 
 def hang_jev_flags() -> JevPolicyFlags:
@@ -127,6 +132,58 @@ def to_runenv_combat_action(local: int) -> int:
     return _COMBAT_START + local
 
 
+def legal_random_runenv_action(mask, rng: np.random.RandomState) -> int:
+    valid = np.flatnonzero(np.asarray(mask) == 1)
+    if valid.size == 0:
+        return 0
+    return int(rng.choice(valid))
+
+
+def select_runenv_noncombat_action(
+    env: STS2RunEnv,
+    mask,
+    rng: np.random.RandomState,
+    *,
+    jev_enabled: bool,
+    noncombat_policy: NoncombatPolicy,
+    jev_adapter: Any | None,
+    jev_flags: JevPolicyFlags,
+    ppo_model: Any | None = None,
+) -> tuple[int, str]:
+    """Pick a RunEnv action for MAP/REST/CARD/etc. Never calls TypeSafe when ``jev_enabled`` is False."""
+    if jev_enabled and noncombat_policy == NONCOMBAT_POLICY_JEV:
+        action, _log = choose_jev_noncombat(
+            env,
+            mask,
+            rng,
+            jev_adapter,
+            flags=jev_flags,
+        )
+        return int(action), "jev"
+
+    if noncombat_policy == NONCOMBAT_POLICY_PPO:
+        # bh_v1 MaskablePPO is combat obs_v1 only; MAP/REST/CARD use fail-open legal random.
+        if ppo_model is not None and is_combat_phase(env):
+            try:
+                combat_obs = combat_observation(env)
+                combat_mask = combat_action_mask(env)
+                if int(combat_mask.sum()) >= 1:
+                    action, _ = ppo_model.predict(
+                        np.asarray(combat_obs),
+                        action_masks=combat_mask,
+                        deterministic=False,
+                    )
+                    return to_runenv_combat_action(int(action)), "noncombat_ppo_combat_slice"
+            except Exception:
+                pass
+        return (
+            legal_random_runenv_action(mask, rng),
+            "noncombat_ppo_failopen_random",
+        )
+
+    return legal_random_runenv_action(mask, rng), "legal_random"
+
+
 class RunEnvOnPolicyCombatEnv(gymnasium.Env):
     """Gymnasium env: PPO timestep = one hang-protocol combat step.
 
@@ -146,6 +203,9 @@ class RunEnvOnPolicyCombatEnv(gymnasium.Env):
         jev_adapter: Any | None = None,
         jev_flags: JevPolicyFlags | None = None,
         jev_key_index: int = 0,
+        jev_enabled: bool = True,
+        noncombat_policy: NoncombatPolicy = NONCOMBAT_POLICY_JEV,
+        noncombat_ppo_model: Any | None = None,
         render_mode: str | None = None,
         seed_offset: int = 0,
     ):
@@ -161,10 +221,18 @@ class RunEnvOnPolicyCombatEnv(gymnasium.Env):
         self.max_reset_retries = int(max_reset_retries)
         self.seed_offset = int(seed_offset)
         self.render_mode = render_mode
+        self.jev_enabled = bool(jev_enabled)
+        self.noncombat_policy: NoncombatPolicy = noncombat_policy
+        self.noncombat_ppo_model = noncombat_ppo_model
         self.jev_flags = jev_flags or hang_jev_flags()
-        self.jev_adapter = jev_adapter or build_jev_adapter(
-            enabled=True, key_index=int(jev_key_index)
-        )
+        if self.jev_enabled:
+            self.jev_adapter = jev_adapter or build_jev_adapter(
+                enabled=True, key_index=int(jev_key_index)
+            )
+        else:
+            self.jev_adapter = None
+            if self.noncombat_policy == NONCOMBAT_POLICY_JEV:
+                self.noncombat_policy = NONCOMBAT_POLICY_PPO
         self.inner = STS2RunEnv(
             character_id=HANG_CHARACTER,
             ascension_level=HANG_ASCENSION,
@@ -175,11 +243,12 @@ class RunEnvOnPolicyCombatEnv(gymnasium.Env):
         self._rng = np.random.RandomState(0)
         self._combat_steps = 0
         self._noncombat_auto_steps = 0
+        self._last_noncombat_tag: str | None = None
         self._last_obs = np.zeros(OBS_SIZE, dtype=np.float32)
 
     def hang_protocol(self) -> dict[str, Any]:
-        return {
-            "jev": HANG_JEV,
+        proto: dict[str, Any] = {
+            "jev": HANG_JEV if self.jev_enabled else "off",
             "jev_event": HANG_JEV_EVENT,
             "jev_neow": HANG_JEV_NEOW,
             "jev_phases": HANG_JEV_PHASES,
@@ -190,8 +259,14 @@ class RunEnvOnPolicyCombatEnv(gymnasium.Env):
             "allows_neow": self.jev_flags.allows_neow(),
             "combat_obs_size": OBS_SIZE,
             "combat_action_size": ACTION_SPACE_SIZE,
-            **typesafe_key_pool_summary(),
+            "noncombat_policy": self.noncombat_policy,
+            "typesafe": "on" if self.jev_enabled else "off",
         }
+        if self.jev_enabled:
+            proto.update(typesafe_key_pool_summary())
+        else:
+            proto["typesafe_key_count"] = 0
+        return proto
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -291,16 +366,20 @@ class RunEnvOnPolicyCombatEnv(gymnasium.Env):
                 break
             mask = self.inner.action_masks()
             try:
-                action, _log = choose_jev_noncombat(
+                action, tag = select_runenv_noncombat_action(
                     self.inner,
                     mask,
                     self._rng,
-                    self.jev_adapter,
-                    flags=self.jev_flags,
+                    jev_enabled=self.jev_enabled,
+                    noncombat_policy=self.noncombat_policy,
+                    jev_adapter=self.jev_adapter,
+                    jev_flags=self.jev_flags,
+                    ppo_model=self.noncombat_ppo_model,
                 )
+                self._last_noncombat_tag = tag
             except Exception:
-                valid = np.flatnonzero(np.asarray(mask) == 1)
-                action = int(self._rng.choice(valid)) if valid.size else 0
+                action = legal_random_runenv_action(mask, self._rng)
+                self._last_noncombat_tag = "legal_random_exception"
             _obs, _reward, terminated, trunc, _info = self.inner.step(int(action))
             self._noncombat_auto_steps += 1
             auto += 1
@@ -319,11 +398,14 @@ class RunEnvOnPolicyCombatEnv(gymnasium.Env):
             "combat_steps": self._combat_steps,
             "noncombat_auto_steps": self._noncombat_auto_steps,
             "start_with_neow": HANG_START_WITH_NEOW,
-            "jev": HANG_JEV,
+            "jev": HANG_JEV if self.jev_enabled else "off",
             "jev_event": HANG_JEV_EVENT,
             "jev_neow": HANG_JEV_NEOW,
             "jev_phases": HANG_JEV_PHASES,
             "combat_obs_size": OBS_SIZE,
+            "noncombat_policy": self.noncombat_policy,
+            "last_noncombat_tag": self._last_noncombat_tag,
+            "typesafe": "on" if self.jev_enabled else "off",
             "loadout": None,
         }
         if inner_info:

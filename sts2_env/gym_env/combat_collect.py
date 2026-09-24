@@ -1,11 +1,12 @@
 """Hang-protocol combat transition collection (offline collect).
 
-Collector rolls ``RunEnvOnPolicyCombatEnv`` (MAP/REST/CARD Jev still on).
-Only combat transitions are stored. Supports single worker and parallel collection.
+Default collectors use hang Jev non-combat. Opt-in ``jev_enabled=False`` skips
+TypeSafe and uses PPO/random non-combat (see ``collect_runenv_combat.py``).
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,15 @@ from sts2_env.gym_env.combat_buffer import (
 )
 
 
+@dataclass
+class CollectWorkerConfig:
+    jev_enabled: bool = True
+    noncombat_policy: str = "jev"
+    noncombat_model: str | None = None
+    combat_policy: str = "random"
+    combat_model: str | None = None
+
+
 def split_worker_steps(n_steps: int, n_envs: int) -> list[int]:
     n_envs = max(1, int(n_envs))
     n_steps = max(0, int(n_steps))
@@ -36,6 +46,14 @@ def legal_random_action(mask, rng: np.random.RandomState) -> int:
     if valid.size == 0:
         return 0
     return int(rng.choice(valid))
+
+
+def _load_maskable_ppo(model_path: str):
+    try:
+        from sb3_contrib import MaskablePPO
+    except ImportError as e:
+        raise SystemExit("collect --policy model requires sb3-contrib / torch") from e
+    return MaskablePPO.load(str(model_path), device="cpu")
 
 
 def collect_transitions(
@@ -83,43 +101,55 @@ def collect_transitions(
 
 
 def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
-    """Top-level multiprocessing target. Each worker is hang-protocol Jev."""
-    from sts2_env.eval.jev import load_typesafe_api_keys
+    """Top-level multiprocessing target."""
     from sts2_env.gym_env.runenv_onpolicy_combat import RunEnvOnPolicyCombatEnv
 
     n_steps = int(payload["n_steps"])
     worker_id = int(payload.get("worker_id", 0))
     seed = int(payload.get("seed", 0))
-    policy = str(payload.get("policy", "random"))
     shard = Path(payload["shard"])
     max_steps = int(payload.get("max_steps", 2000))
     rng = np.random.RandomState(seed + worker_id * 100003)
-    load_typesafe_api_keys()
+
+    cfg = CollectWorkerConfig(
+        jev_enabled=bool(payload.get("jev_enabled", True)),
+        noncombat_policy=str(payload.get("noncombat_policy", "jev")),
+        noncombat_model=payload.get("noncombat_model"),
+        combat_policy=str(payload.get("combat_policy", payload.get("policy", "random"))),
+        combat_model=payload.get("combat_model") or payload.get("model"),
+    )
+
+    if cfg.jev_enabled:
+        from sts2_env.eval.jev import load_typesafe_api_keys
+
+        load_typesafe_api_keys()
+
+    noncombat_ppo = None
+    if cfg.noncombat_policy == "ppo" and cfg.noncombat_model:
+        if Path(cfg.noncombat_model).is_file():
+            noncombat_ppo = _load_maskable_ppo(cfg.noncombat_model)
 
     env = RunEnvOnPolicyCombatEnv(
         max_steps=max_steps,
         seed_offset=seed + worker_id,
         jev_key_index=worker_id,
+        jev_enabled=cfg.jev_enabled,
+        noncombat_policy=cfg.noncombat_policy,  # type: ignore[arg-type]
+        noncombat_ppo_model=noncombat_ppo,
     )
-    model = None
-    if policy == "model":
-        model_path = payload.get("model")
+
+    combat_model = None
+    if cfg.combat_policy in ("model", "ppo"):
+        model_path = cfg.combat_model
         if not model_path or not Path(model_path).is_file():
             env.close()
-            raise SystemExit(f"collect --policy model zip not found: {model_path}")
-        try:
-            from sb3_contrib import MaskablePPO
-        except ImportError as e:
-            env.close()
-            raise SystemExit(
-                "collect --policy model requires sb3-contrib / torch"
-            ) from e
-        model = MaskablePPO.load(str(model_path), device="cpu")
+            raise SystemExit(f"collect combat zip not found: {model_path}")
+        combat_model = _load_maskable_ppo(model_path)
 
     def select_fn(obs, mask):
-        if model is None:
+        if combat_model is None:
             return legal_random_action(mask, rng)
-        action, _ = model.predict(
+        action, _ = combat_model.predict(
             np.asarray(obs), action_masks=mask, deterministic=False
         )
         return int(action)
@@ -139,7 +169,11 @@ def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
     meta.update(
         {
             "worker_id": worker_id,
-            "policy": policy,
+            "policy": cfg.combat_policy,
+            "combat_policy": cfg.combat_policy,
+            "noncombat_policy": cfg.noncombat_policy,
+            "jev": "on" if cfg.jev_enabled else "off",
+            "typesafe": "on" if cfg.jev_enabled else "off",
             "n_steps_requested": n_steps,
             "seed": seed,
         }
@@ -161,14 +195,28 @@ def collect_parallel(
     model: str | None = None,
     seed: int = 0,
     max_steps: int = 2000,
+    jev_enabled: bool = True,
+    noncombat_policy: str = "jev",
+    noncombat_model: str | None = None,
+    combat_policy: str | None = None,
+    combat_model: str | None = None,
 ) -> dict[str, Any]:
     """Collect hang combat transitions, optionally across ``n_envs`` workers."""
-    from sts2_env.eval.jev import load_typesafe_api_keys, typesafe_key_pool_summary, warn_n_envs
-
     out = refuse_frozen_path(out_path, what="buffer")
     n_envs = max(1, int(n_envs))
-    load_typesafe_api_keys()
-    note = warn_n_envs(n_envs)
+    combat_policy = combat_policy or policy
+    combat_model = combat_model or model
+
+    if jev_enabled:
+        from sts2_env.eval.jev import load_typesafe_api_keys, typesafe_key_pool_summary, warn_n_envs
+
+        load_typesafe_api_keys()
+        note = warn_n_envs(n_envs)
+        pool_extra = typesafe_key_pool_summary()
+    else:
+        note = None
+        pool_extra = {"typesafe_key_count": 0, "typesafe_key_pool": "off"}
+
     if note:
         print(note)
     quotas = [q for q in split_worker_steps(n_steps, n_envs) if q > 0]
@@ -181,8 +229,13 @@ def collect_parallel(
                 "n_steps": quota,
                 "worker_id": i,
                 "seed": int(seed),
-                "policy": policy,
-                "model": model,
+                "policy": combat_policy,
+                "combat_policy": combat_policy,
+                "combat_model": combat_model,
+                "model": combat_model,
+                "jev_enabled": jev_enabled,
+                "noncombat_policy": noncombat_policy,
+                "noncombat_model": noncombat_model,
                 "shard": str(shard_dir / f"shard_{i:02d}.npz"),
                 "max_steps": int(max_steps),
             }
@@ -203,26 +256,36 @@ def collect_parallel(
     meta = hang_protocol_meta()
     meta.update(
         {
-            "policy": policy,
+            "policy": combat_policy,
+            "combat_policy": combat_policy,
+            "noncombat_policy": noncombat_policy,
+            "jev": "on" if jev_enabled else "off",
+            "typesafe": "on" if jev_enabled else "off",
             "n_envs": len(payloads),
             "n_steps_requested": int(n_steps),
             "seed": int(seed),
             "shards": [r["shard"] for r in results],
-            **typesafe_key_pool_summary(),
+            **pool_extra,
         }
     )
     save_combat_buffer(out, merged, meta)
+    hang = hang_protocol_meta()
+    if not jev_enabled:
+        hang = {**hang, "jev": "off", "typesafe": "off"}
     return {
         "out": str(out),
         "n_transitions": int(merged["obs"].shape[0]),
         "n_envs": len(payloads),
-        "policy": policy,
-        "hang": hang_protocol_meta(),
-        **typesafe_key_pool_summary(),
+        "policy": combat_policy,
+        "jev": "on" if jev_enabled else "off",
+        "typesafe": "on" if jev_enabled else "off",
+        "hang": hang,
+        **pool_extra,
     }
 
 
 __all__ = [
+    "CollectWorkerConfig",
     "collect_parallel",
     "collect_transitions",
     "collect_worker",

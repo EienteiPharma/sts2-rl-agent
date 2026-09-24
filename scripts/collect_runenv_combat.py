@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Collect hang-protocol RunEnv combat transitions to a disk buffer.
 
-Non-combat is auto-stepped with locked hang Jev (MAP/REST/CARD live,
-EVENT off, Neow random, --start-with-neow). Only combat (obs, action,
-reward, done, action_mask) is written. TypeSafe stays on this collect
-path; ``train_combat_from_buffer.py`` learns without Jev.
+**Default (unchanged):** non-combat auto-steps with hang Jev + TypeSafe.
+**Opt-in colab_v1 / Pharma lock:** ``--jev off --noncombat-policy ppo
+--combat-policy ppo --policy-zip …/bh_v1/final_model.zip`` — zero TypeSafe.
 
 Usage:
     python scripts/collect_runenv_combat.py --dry-run
@@ -12,13 +11,12 @@ Usage:
         --out output/runenv_combat_buffer/transitions.npz \\
         --n-envs 1 --n-steps 32 --policy random
     python scripts/collect_runenv_combat.py \\
-        --out output/runenv_combat_buffer/transitions.npz \\
-        --n-envs 4 --n-steps 50000 --policy model \\
-        --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip
+        --jev off --noncombat-policy ppo --combat-policy ppo \\
+        --policy-zip output/combat_ppo_obs_v1_bh_v1/final_model.zip \\
+        --out output/runenv_combat_buffer_colab_v1/transitions.npz \\
+        --n-envs 8 --n-steps 500000
 
-Never writes into ``bh_v1``. Hang flags/bars unchanged.
-TypeSafe pool loads from box-secrets card.TYPESAFE_API_KEY + _1..4
-automatically (no user re-paste; process env need not be pre-injected).
+Never writes into ``bh_v1`` or ``runenv_combat_buffer_ep/``.
 """
 
 from __future__ import annotations
@@ -29,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from sts2_env.gym_env.combat_buffer import (
+    COLAB_V1_COLLECT_OUT,
     HUNG_OUTDIR_NAME,
     hang_protocol_meta,
     refuse_frozen_path,
@@ -48,48 +47,106 @@ from sts2_env.gym_env.runenv_onpolicy_combat import (
 HUNG_COMBAT_ZIP = f"/workspace/sts2-sim/output/{HUNG_OUTDIR_NAME}/final_model.zip"
 DEFAULT_OUT = "output/runenv_combat_buffer/transitions.npz"
 PROTOCOL_ID = "hang_protocol_runenv_combat_collect LOCKED 2026-09-22"
+COLAB_V1_PROTOCOL_ID = "colab_v1_collect Jev=off TypeSafe=off bh_v1_ppo"
+
+
+def _resolve_combat_policy(args: argparse.Namespace) -> str:
+    if args.combat_policy is not None:
+        cp = args.combat_policy
+        return "model" if cp == "ppo" else cp
+    return "model" if args.policy == "model" else args.policy
+
+
+def normalize_collect_args(args: argparse.Namespace) -> argparse.Namespace:
+    if args.no_jev:
+        args.jev = "off"
+    args.jev_enabled = args.jev == "on"
+    if not args.jev_enabled and args.noncombat_policy == "jev":
+        raise SystemExit("--noncombat-policy jev requires --jev on")
+    if args.noncombat_policy is None:
+        args.noncombat_policy = "jev" if args.jev_enabled else "ppo"
+    args.combat_policy_resolved = _resolve_combat_policy(args)
+    if args.policy_zip:
+        args.model = args.policy_zip
+    if not args.jev_enabled:
+        args.noncombat_model = args.noncombat_model or args.model
+    return args
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Roll hang-protocol RunEnv; write combat-only transitions to npz. "
-            "Does not turn Jev off. Does not overwrite bh_v1."
+            "Default keeps hang Jev on. Use --jev off for colab_v1 (no TypeSafe)."
         )
     )
     parser.add_argument(
         "--out",
         type=str,
         default=DEFAULT_OUT,
-        help=f"Output npz (default {DEFAULT_OUT})",
+        help=f"Output npz (default {DEFAULT_OUT}; colab_v1: {COLAB_V1_COLLECT_OUT})",
     )
     parser.add_argument(
         "--n-steps",
         type=int,
         default=256,
-        help="Combat transitions to collect (default 256 smoke; Surplus e.g. 50000)",
+        help="Combat transitions to collect (default 256 smoke; Surplus e.g. 500000)",
     )
     parser.add_argument(
         "--n-envs",
         type=int,
         default=1,
         help=(
-            "Parallel hang-protocol collectors (each worker still Jev). "
-            "First recipe 2-4, not 16. Optional TypeSafe key pool: one key per env."
+            "Parallel collectors. Default hang Jev: 2-4 workers recommended. "
+            "colab_v1 (no TypeSafe): e.g. 8 workers."
         ),
     )
     parser.add_argument(
         "--policy",
         choices=("random", "model"),
         default="random",
-        help="Combat action policy. random=legal mask (no torch). model=MaskablePPO zip",
+        help="Combat policy (legacy). model=MaskablePPO zip",
+    )
+    parser.add_argument(
+        "--combat-policy",
+        choices=("random", "model", "ppo"),
+        default=None,
+        help="Combat policy alias (ppo == model)",
     )
     parser.add_argument(
         "--model",
         "--continue-from",
         dest="model",
         default=HUNG_COMBAT_ZIP,
-        help=f"Combat zip when --policy model (default {HUNG_COMBAT_ZIP})",
+        help=f"Combat zip when using model/ppo (default {HUNG_COMBAT_ZIP})",
+    )
+    parser.add_argument(
+        "--policy-zip",
+        dest="policy_zip",
+        default=None,
+        help="Alias for --model (colab_v1 bh_v1 path)",
+    )
+    parser.add_argument(
+        "--jev",
+        choices=("on", "off"),
+        default="on",
+        help="Non-combat Jev/TypeSafe (default on for ep recipes)",
+    )
+    parser.add_argument(
+        "--no-jev",
+        action="store_true",
+        help="Shorthand for --jev off",
+    )
+    parser.add_argument(
+        "--noncombat-policy",
+        choices=("jev", "ppo", "random"),
+        default=None,
+        help="Non-combat auto-step policy (default jev when --jev on, else ppo)",
+    )
+    parser.add_argument(
+        "--noncombat-model",
+        default=None,
+        help=f"Zip for --noncombat-policy ppo (default combat --model / {HUNG_COMBAT_ZIP})",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-steps", type=int, default=2000)
@@ -98,37 +155,62 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Hang env + flags; no npz write, no torch",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    return normalize_collect_args(args)
 
 
 def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     from sts2_env.core.constants import ACTION_SPACE_SIZE
-    from sts2_env.eval.jev import load_typesafe_api_keys, typesafe_key_pool_summary, warn_n_envs
     from sts2_env.gym_env.observation import OBS_SIZE
     from sts2_env.gym_env.runenv_onpolicy_combat import RunEnvOnPolicyCombatEnv
 
     out = refuse_frozen_path(args.out, what="buffer")
     flags = hang_jev_flags()
-    load_typesafe_api_keys()
-    env = RunEnvOnPolicyCombatEnv(max_steps=min(int(args.max_steps), 80), seed_offset=0)
+    pool: dict[str, Any]
+    if args.jev_enabled:
+        from sts2_env.eval.jev import load_typesafe_api_keys, typesafe_key_pool_summary, warn_n_envs
+
+        load_typesafe_api_keys()
+        pool = typesafe_key_pool_summary()
+        n_envs_note = warn_n_envs(args.n_envs)
+    else:
+        pool = {"typesafe_key_count": 0, "typesafe_key_pool": "off", "recommended_n_envs_max": 0}
+        n_envs_note = None
+
+    env = RunEnvOnPolicyCombatEnv(
+        max_steps=min(int(args.max_steps), 80),
+        seed_offset=0,
+        jev_enabled=args.jev_enabled,
+        noncombat_policy=args.noncombat_policy,
+    )
     obs, info = env.reset(seed=0)
     mask = env.action_masks()
     proto = env.hang_protocol()
     env.close()
     quotas = split_worker_steps(int(args.n_steps), int(args.n_envs))
-    pool = typesafe_key_pool_summary()
+    protocol = PROTOCOL_ID if args.jev_enabled else COLAB_V1_PROTOCOL_ID
     return {
-        "protocol": PROTOCOL_ID,
+        "protocol": protocol,
         "dry_run": True,
         "out": str(out),
         "n_steps": int(args.n_steps),
         "n_envs": int(args.n_envs),
-        "n_envs_note": warn_n_envs(args.n_envs),
+        "n_envs_note": n_envs_note,
         "worker_quotas": quotas,
-        "policy": args.policy,
+        "policy": args.combat_policy_resolved,
+        "combat_policy": args.combat_policy_resolved,
+        "noncombat_policy": args.noncombat_policy,
         "model": args.model,
+        "noncombat_model": args.noncombat_model or args.model,
+        "jev_enabled": args.jev_enabled,
+        "typesafe": "on" if args.jev_enabled else "off",
+        "receipt": (
+            f"Jev=off TypeSafe=off policy_zip={args.model}"
+            if not args.jev_enabled
+            else None
+        ),
         "hang": {
-            "jev": HANG_JEV,
+            "jev": HANG_JEV if args.jev_enabled else "off",
             "jev_event": HANG_JEV_EVENT,
             "jev_neow": HANG_JEV_NEOW,
             "start_with_neow": HANG_START_WITH_NEOW,
@@ -141,49 +223,76 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "obs_shape": list(obs.shape),
         "mask_size": int(mask.shape[-1]),
         "phase": info.get("phase"),
-        "jev_event": info.get("jev_event"),
-        "jev_neow": info.get("jev_neow"),
+        "jev": info.get("jev"),
+        "typesafe_env": info.get("typesafe"),
         "start_with_neow": info.get("start_with_neow"),
         "loadout": info.get("loadout"),
         "keys": ["obs", "next_obs", "action", "reward", "done", "action_mask"],
         "typesafe_key_count": pool["typesafe_key_count"],
-        "typesafe_key_pool": pool["typesafe_key_pool"],
-        "recommended_n_envs_max": pool["recommended_n_envs_max"],
-        "note": "Jev stays on collect; train_combat_from_buffer.py is the learn half",
+        "typesafe_key_pool": pool.get("typesafe_key_pool"),
+        "recommended_n_envs_max": pool.get("recommended_n_envs_max"),
+        "note": (
+            "Jev stays on collect; train_combat_from_buffer.py is the learn half"
+            if args.jev_enabled
+            else "colab_v1: non-combat PPO fail-open random; zero TypeSafe calls"
+        ),
     }
 
 
 def collect(args: argparse.Namespace) -> dict[str, Any]:
     out = refuse_frozen_path(args.out, what="buffer")
-    if args.policy == "model" and not Path(args.model).is_file():
-        raise SystemExit(f"collect --policy model zip not found: {args.model}")
+    combat_policy = args.combat_policy_resolved
+    if combat_policy in ("model", "ppo") and not Path(args.model).is_file():
+        raise SystemExit(f"collect combat zip not found: {args.model}")
     flags = hang_jev_flags()
-    from sts2_env.eval.jev import load_typesafe_api_keys, typesafe_key_pool_summary, warn_n_envs
+    if args.jev_enabled:
+        from sts2_env.eval.jev import load_typesafe_api_keys, typesafe_key_pool_summary, warn_n_envs
 
-    pool = typesafe_key_pool_summary(load_typesafe_api_keys())
-    note = warn_n_envs(args.n_envs)
+        pool = typesafe_key_pool_summary(load_typesafe_api_keys())
+        note = warn_n_envs(args.n_envs)
+    else:
+        pool = {"typesafe_key_count": 0}
+        note = None
+
     print("Collecting hang-protocol RunEnv combat segments")
+    if not args.jev_enabled:
+        print(f"Jev=off TypeSafe=off policy_zip={args.model}")
     print("  out:       ", out)
     print("  n_steps:   ", args.n_steps)
     print("  n_envs:    ", args.n_envs)
     if note:
         print("  n_envs:    ", note)
-    print("  policy:    ", args.policy)
-    print("  hang:      jev on / event off / neow off / start_with_neow")
-    print("  allows_event:", flags.allows_event(), "allows_neow", flags.allows_neow())
-    print("  typesafe keys:", pool["typesafe_key_count"], "(box-secrets auto-load; values not printed)")
+    print("  combat:    ", combat_policy, args.model)
+    print("  noncombat: ", args.noncombat_policy, args.noncombat_model or args.model)
+    if args.jev_enabled:
+        print("  hang:      jev on / event off / neow off / start_with_neow")
+        print("  allows_event:", flags.allows_event(), "allows_neow", flags.allows_neow())
+        print(
+            "  typesafe keys:",
+            pool["typesafe_key_count"],
+            "(box-secrets auto-load; values not printed)",
+        )
     print()
     result = collect_parallel(
         out_path=out,
         n_steps=int(args.n_steps),
         n_envs=int(args.n_envs),
-        policy=args.policy,
-        model=args.model if args.policy == "model" else None,
+        policy=combat_policy,
+        model=args.model if combat_policy in ("model", "ppo") else None,
         seed=int(args.seed),
         max_steps=int(args.max_steps),
+        jev_enabled=args.jev_enabled,
+        noncombat_policy=args.noncombat_policy,
+        noncombat_model=args.noncombat_model or args.model,
+        combat_policy=combat_policy,
+        combat_model=args.model if combat_policy in ("model", "ppo") else None,
     )
-    result["protocol"] = PROTOCOL_ID
-    result["hang"] = hang_protocol_meta()
+    result["protocol"] = PROTOCOL_ID if args.jev_enabled else COLAB_V1_PROTOCOL_ID
+    result["hang"] = hang_protocol_meta() if args.jev_enabled else {
+        **hang_protocol_meta(),
+        "jev": "off",
+        "typesafe": "off",
+    }
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return result
 
