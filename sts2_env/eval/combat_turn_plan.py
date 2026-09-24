@@ -40,6 +40,8 @@ MAX_CANDIDATE_PLANS = 512
 TYPESAFE_CHOICE_PLATFORM_MAX = 255
 DEFAULT_TURN_PLAN_CHOICE_CANDIDATES = 32
 TURN_PLAN_CHOICE_CAP_ENV = "STS2_TURN_PLAN_CHOICE_CAP"
+# Off by default (Lab: ``37a066c`` remap lowered replan_cap but skewed B / Δ vs d9d9fff).
+TURN_PLAN_EXECUTE_REMAP_ENV = "STS2_TURN_PLAN_EXECUTE_REMAP"
 # Back-compat alias for tests/docs referring to the product default.
 MAX_TURN_PLAN_CHOICE_CANDIDATES = DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
 MAX_REPLANS_PER_PLAYER_TURN = 3
@@ -623,6 +625,36 @@ def heuristic_score_distribution(scores: Sequence[float]) -> dict[str, Any]:
     }
 
 
+def resolve_turn_plan_execute_remap(
+    override: bool | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether execute path remaps drifted hand/potion slots (default **off**)."""
+    if override is not None:
+        return bool(override)
+    env = os.environ if environ is None else environ
+    raw = str(env.get(TURN_PLAN_EXECUTE_REMAP_ENV) or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def resolve_plan_step_for_execute(
+    key: str,
+    legal: set[str] | frozenset[str],
+    *,
+    execute_remap: bool,
+) -> str | None:
+    """Resolve planned step to a legal semantic key (strict unless remap enabled)."""
+    want = str(key).strip()
+    if not want:
+        return None
+    if want in legal:
+        return want
+    if not execute_remap:
+        return None
+    return remap_plan_step_semantic_key(want, legal)
+
+
 def resolve_turn_plan_choice_cap(
     override: int | None = None,
     *,
@@ -1093,6 +1125,7 @@ def choose_combat_turn_plan_action(
     telemetry: Any = None,
     turn_plan_choice_cap: int | None = None,
     bh_assist_config: Any | None = None,
+    execute_remap: bool | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Execute turn-plan path: pick ``plan_id``, run steps, replan on triggers.
 
@@ -1109,6 +1142,7 @@ def choose_combat_turn_plan_action(
         session = TurnPlanRuntime()
     cfg = prompt_config or DEFAULT_TURN_PLAN_PROMPT_CONFIG
     owner_creature = owner or combat.primary_player
+    do_execute_remap = resolve_turn_plan_execute_remap(execute_remap)
 
     turn_id = player_turn_id(combat)
     if session.player_turn_id != turn_id:
@@ -1172,7 +1206,9 @@ def choose_combat_turn_plan_action(
         if session.plan is not None and session.step_index < len(session.plan.steps):
             key = session.plan.steps[session.step_index]
             legal = set(legal_semantic_keys(combat, mask, owner=owner_creature))
-            resolved = remap_plan_step_semantic_key(key, legal)
+            resolved = resolve_plan_step_for_execute(
+                key, legal, execute_remap=do_execute_remap
+            )
             if resolved is None:
                 _increment_turn_plan_replan(
                     session, env, telemetry, "illegal_step"
@@ -1386,6 +1422,7 @@ __all__ = [
     "MAX_PLAN_STEPS",
     "MAX_TURN_PLAN_CHOICE_CANDIDATES",
     "TURN_PLAN_CHOICE_CAP_ENV",
+    "TURN_PLAN_EXECUTE_REMAP_ENV",
     "TYPESAFE_CHOICE_PLATFORM_MAX",
     "MAX_REPLANS_PER_PLAYER_TURN",
     "REPLAN_CAP_BUCKET_SHORTLIST_IDLE",
@@ -1400,7 +1437,9 @@ __all__ = [
     "composite_heuristic_score",
     "heuristic_score_distribution",
     "incoming_attack_damage_from_board",
+    "resolve_plan_step_for_execute",
     "resolve_turn_plan_choice_cap",
+    "resolve_turn_plan_execute_remap",
     "score_turn_plan_candidate",
     "build_turn_plan_jev_state",
     "summarize_board_for_turn_plan_choice",
