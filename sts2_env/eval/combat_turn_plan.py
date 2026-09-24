@@ -60,7 +60,8 @@ COMBAT_TURN_PLAN_INSTRUCTIONS = (
     "Choose exactly one plan_id from the legal shortlist. Each plan is a "
     "fixed, code-enumerated sequence of semantic combat steps for this turn "
     "(not free-generated text). Do not invent plan_ids or steps outside the "
-    "shortlist."
+    "shortlist. Use the combat snapshot (HP, block, energy, enemy intents, "
+    "incoming damage) to block lethal telegraphed attacks before greedy damage."
 )
 
 _TRACKED_POWERS = (
@@ -273,10 +274,108 @@ class TurnPlanCandidate:
     steps: tuple[str, ...]
 
 
-def _plan_criteria_summary(plan: TurnPlanCandidate) -> str:
+def _humanize_semantic_step(step: str, board: dict[str, Any] | None) -> str:
+    key = str(step).strip()
+    if key == SEMANTIC_END_TURN:
+        return "End turn"
+    m = _PLAY_STEP_RE.match(key)
+    if m:
+        card = m.group("card")
+        hi = int(m.group("hi"))
+        entry = _hand_entry(board or {}, hi) if board else None
+        if entry is not None:
+            card = str(entry.get("name") or card)
+            cost = entry.get("cost", "?")
+        else:
+            cost = "?"
+        target = "self"
+        if "@e" in key:
+            target = f"enemy slot {key.split('@e', 1)[-1]}"
+        return f"Play {card} (cost {cost}) → {target}"
+    if key.startswith("potion:"):
+        return f"Potion step {key}"
+    return key
+
+
+def _plan_criteria_summary(
+    plan: TurnPlanCandidate, *, board: dict[str, Any] | None = None
+) -> str:
     if not plan.steps:
         return "(empty)"
-    return " → ".join(plan.steps)
+    return " → ".join(_humanize_semantic_step(s, board) for s in plan.steps)
+
+
+def summarize_board_for_turn_plan_choice(board: dict[str, Any]) -> dict[str, Any]:
+    """Compact combat snapshot for turn-plan Choice (full board optional separately)."""
+    self_row = board.get("self") or {}
+    hand = self_row.get("hand") or []
+    enemies = board.get("enemies") or []
+    turn = board.get("turn") or {}
+    piles = board.get("piles") or {}
+    incoming = incoming_attack_damage_from_board(board)
+    return {
+        "player": {
+            "hp": int(self_row.get("hp") or 0),
+            "max_hp": int(self_row.get("max_hp") or 0),
+            "block": int(self_row.get("block") or 0),
+            "energy": int(self_row.get("energy") or 0),
+            "powers": dict(self_row.get("powers") or {}),
+        },
+        "incoming_attack_damage": incoming,
+        "end_turn_legal": bool(turn.get("end_turn_legal")),
+        "hand": [
+            {
+                "hand_index": int(c.get("hand_index", i)),
+                "name": str(c.get("name") or "?"),
+                "cost": str(c.get("cost") or "?"),
+                "playable": bool(c.get("playable", True)),
+            }
+            for i, c in enumerate(hand)
+        ],
+        "enemies": [
+            {
+                "slot": int(e.get("slot", i)),
+                "name": str(e.get("name") or "?"),
+                "hp": int(e.get("hp") or 0),
+                "max_hp": int(e.get("max_hp") or 0),
+                "block": int(e.get("block") or 0),
+                "intent": str(e.get("intent") or "unknown"),
+                "vuln": int(e.get("vuln") or 0),
+                "weak": int(e.get("weak") or 0),
+            }
+            for i, e in enumerate(enemies)
+        ],
+        "piles_n": {
+            "draw": int(piles.get("draw_n") or 0),
+            "discard": int(piles.get("discard_n") or 0),
+            "exhaust": int(piles.get("exhaust_n") or 0),
+        },
+    }
+
+
+def _choice_instructions_with_board(board: dict[str, Any], instructions: str) -> str:
+    snap = summarize_board_for_turn_plan_choice(board)
+    player = snap["player"]
+    parts = [
+        instructions,
+        (
+            f"Snapshot: player {player['hp']}/{player['max_hp']} HP, "
+            f"block {player['block']}, energy {player['energy']}, "
+            f"incoming attack ~{snap['incoming_attack_damage']}."
+        ),
+    ]
+    for enemy in snap["enemies"]:
+        parts.append(
+            f"Enemy {enemy['slot']} ({enemy['name']}): intent {enemy['intent']}, "
+            f"hp {enemy['hp']}/{enemy['max_hp']}, block {enemy['block']}."
+        )
+    if snap["hand"]:
+        hand_bits = [
+            f"h{row['hand_index']} {row['name']} cost {row['cost']}"
+            for row in snap["hand"]
+        ]
+        parts.append("Hand: " + "; ".join(hand_bits) + ".")
+    return " ".join(parts)
 
 
 def enumerate_candidate_plans(
@@ -544,13 +643,16 @@ def cap_plans_for_turn_plan_choice(
 def build_combat_turn_plan_choice_question(
     plans: Sequence[TurnPlanCandidate],
     *,
+    board: dict[str, Any] | None = None,
     instructions: str = COMBAT_TURN_PLAN_INSTRUCTIONS,
 ) -> dict[str, Any]:
     """Jev Choice payload: criteria keys are ``plan_id`` strings only."""
     return {
         "type": "choice",
         "instructions": instructions,
-        "criteria": {p.plan_id: _plan_criteria_summary(p) for p in plans},
+        "criteria": {
+            p.plan_id: _plan_criteria_summary(p, board=board) for p in plans
+        },
     }
 
 
@@ -560,28 +662,30 @@ def jev_turn_plan_questions(
     *,
     prompt_config: "TurnPlanPromptConfig | None" = None,
 ) -> dict[str, dict[str, Any]]:
-    """Question map for system_one (board may be omitted when layers are off)."""
-    del board
-    cfg = prompt_config or TurnPlanPromptConfig()
-    instructions = COMBAT_TURN_PLAN_INSTRUCTIONS
+    """Question map for system_one with board-aware instructions and criteria."""
+    cfg = prompt_config or DEFAULT_TURN_PLAN_PROMPT_CONFIG
+    instructions = _choice_instructions_with_board(board, COMBAT_TURN_PLAN_INSTRUCTIONS)
     if cfg.system_rules:
         instructions = COMBAT_TURN_PLAN_SYSTEM_RULES + " " + instructions
     if cfg.human_exemplars:
         instructions += " (See bundled exemplars in state when enabled.)"
     return {
         CHOICE_COMBAT_TURN_PLAN: build_combat_turn_plan_choice_question(
-            plans, instructions=instructions
+            plans, board=board, instructions=instructions
         )
     }
 
 
 @dataclass
 class TurnPlanPromptConfig:
-    """Layered prompt toggles (defaults OFF for first smoke)."""
+    """Layered prompt toggles for turn-plan Choice."""
 
-    system_rules: bool = False
-    board_json: bool = False
+    system_rules: bool = True
+    board_json: bool = True
     human_exemplars: bool = False
+
+
+DEFAULT_TURN_PLAN_PROMPT_CONFIG = TurnPlanPromptConfig()
 
 
 @dataclass
@@ -631,8 +735,11 @@ def build_turn_plan_jev_state(
     *,
     prompt_config: TurnPlanPromptConfig | None = None,
 ) -> dict[str, Any]:
-    cfg = prompt_config or TurnPlanPromptConfig()
-    state: dict[str, Any] = {"mode": "combat_turn_plan"}
+    cfg = prompt_config or DEFAULT_TURN_PLAN_PROMPT_CONFIG
+    state: dict[str, Any] = {
+        "mode": "combat_turn_plan",
+        "combat_snapshot": summarize_board_for_turn_plan_choice(board),
+    }
     if cfg.board_json:
         state["board"] = board
     if cfg.human_exemplars:
@@ -755,7 +862,7 @@ def _pick_plan_via_jev(
     if not plans:
         return None, CATA_FAILOPEN_EMPTY, None
     by_id = {p.plan_id: p for p in plans}
-    cfg = prompt_config or TurnPlanPromptConfig()
+    cfg = prompt_config or DEFAULT_TURN_PLAN_PROMPT_CONFIG
     state = build_turn_plan_jev_state(board, prompt_config=cfg)
     questions = jev_turn_plan_questions(board, plans, prompt_config=cfg)
     try:
@@ -811,7 +918,7 @@ def choose_combat_turn_plan_action(
         session = runtime_for_env(env)
     else:
         session = TurnPlanRuntime()
-    cfg = prompt_config or TurnPlanPromptConfig()
+    cfg = prompt_config or DEFAULT_TURN_PLAN_PROMPT_CONFIG
     owner_creature = owner or combat.primary_player
 
     turn_id = player_turn_id(combat)
@@ -994,6 +1101,7 @@ __all__ = [
     "CHOICE_COMBAT_TURN_PLAN",
     "COMBAT_TURN_PLAN_INSTRUCTIONS",
     "COMBAT_TURN_PLAN_SYSTEM_RULES",
+    "DEFAULT_TURN_PLAN_PROMPT_CONFIG",
     "DEFAULT_TURN_PLAN_CHOICE_CANDIDATES",
     "MAX_CANDIDATE_PLANS",
     "MAX_PLAN_STEPS",
@@ -1013,6 +1121,7 @@ __all__ = [
     "resolve_turn_plan_choice_cap",
     "score_turn_plan_candidate",
     "build_turn_plan_jev_state",
+    "summarize_board_for_turn_plan_choice",
     "catastrophe_reason_for_telemetry",
     "choose_combat_turn_plan_action",
     "enumerate_candidate_plans",

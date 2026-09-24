@@ -239,14 +239,33 @@ def test_plans_from_live_legal_keys_max_steps():
     assert len(plans[0].steps) >= 1
 
 
-def test_prompt_layers_default_off():
-    cfg = TurnPlanPromptConfig()
-    assert cfg.system_rules is False
-    assert cfg.board_json is False
-    assert cfg.human_exemplars is False
-    state = build_turn_plan_jev_state({"self": {"hp": 1}}, prompt_config=cfg)
-    assert "board" not in state
+def test_prompt_layers_default_rich_choice_state():
+    from sts2_env.eval.combat_turn_plan import DEFAULT_TURN_PLAN_PROMPT_CONFIG
+
+    cfg = DEFAULT_TURN_PLAN_PROMPT_CONFIG
+    assert cfg.system_rules is True
+    assert cfg.board_json is True
+    board = _board_lethal_attack()
+    state = build_turn_plan_jev_state(board, prompt_config=cfg)
     assert state["mode"] == "combat_turn_plan"
+    assert "combat_snapshot" in state
+    assert state["combat_snapshot"]["incoming_attack_damage"] == 20
+    assert "board" in state
+    plans = (
+        TurnPlanCandidate("plan_0000", ("play:Defend:h1@self", SEMANTIC_END_TURN)),
+    )
+    q = build_combat_turn_plan_choice_question(plans, board=board)
+    assert "Defend" in q["criteria"]["plan_0000"]
+    assert "End turn" in q["criteria"]["plan_0000"]
+    wrapped = jev_turn_plan_questions(board, plans)
+    instr = wrapped[CHOICE_COMBAT_TURN_PLAN]["instructions"]
+    assert "incoming attack" in instr.lower()
+    assert "Hand:" in instr
+
+    sparse = TurnPlanPromptConfig(system_rules=False, board_json=False)
+    state_sparse = build_turn_plan_jev_state(board, prompt_config=sparse)
+    assert "board" not in state_sparse
+    assert "combat_snapshot" in state_sparse
 
 
 def test_runner_executes_heuristic_top_plan_low_conf_ok():
