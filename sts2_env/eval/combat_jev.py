@@ -408,6 +408,7 @@ class CombatJevTelemetry:
     turn_plan_error_samples: list[str] = field(default_factory=list)
     turn_plan_pruned_count: int = 0
     turn_plan_heuristic_score_samples: list[float] = field(default_factory=list)
+    turn_plan_replan_trigger: dict[str, int] = field(default_factory=dict)
 
     def mark(self) -> tuple[int, int]:
         return (self.calls, self.fail_open)
@@ -427,6 +428,12 @@ class CombatJevTelemetry:
         n = int(pruned_count)
         if n > 0:
             self.turn_plan_pruned_count += n
+
+    def record_turn_plan_replan_trigger(self, reason: str) -> None:
+        key = str(reason).strip() or "unknown"
+        self.turn_plan_replan_trigger[key] = (
+            int(self.turn_plan_replan_trigger.get(key, 0)) + 1
+        )
 
     def record_turn_plan_heuristic_scores(
         self,
@@ -498,6 +505,7 @@ class CombatJevTelemetry:
             "jev_turn_catastrophe_error_samples": list(self.turn_plan_error_samples),
             "pruned_count": int(self.turn_plan_pruned_count),
             "turn_plan_heuristic_score": self._turn_plan_heuristic_score_report(),
+            "turn_plan_replan_trigger": dict(self.turn_plan_replan_trigger),
         }
 
     def _turn_plan_heuristic_score_report(self) -> dict[str, Any]:
@@ -562,6 +570,7 @@ class CombatJevTelemetry:
             "turn_plan_heuristic_score_samples": list(
                 self.turn_plan_heuristic_score_samples
             ),
+            "turn_plan_replan_trigger": dict(self.turn_plan_replan_trigger),
         }
 
     @classmethod
@@ -588,6 +597,11 @@ class CombatJevTelemetry:
         tel.turn_plan_heuristic_score_samples = [
             float(x) for x in (data.get("turn_plan_heuristic_score_samples") or [])
         ]
+        triggers = data.get("turn_plan_replan_trigger") or {}
+        if isinstance(triggers, dict):
+            tel.turn_plan_replan_trigger = {
+                str(k): int(v) for k, v in triggers.items()
+            }
         return tel
 
     def merge(self, other: "CombatJevTelemetry") -> "CombatJevTelemetry":
@@ -615,6 +629,10 @@ class CombatJevTelemetry:
             self.turn_plan_heuristic_score_samples = (
                 self.turn_plan_heuristic_score_samples[-4096:]
             )
+        for key, count in other.turn_plan_replan_trigger.items():
+            self.turn_plan_replan_trigger[key] = int(
+                self.turn_plan_replan_trigger.get(key, 0)
+            ) + int(count)
         return self
 
     def as_report(self, *, n_episodes: int = 0) -> dict[str, Any]:

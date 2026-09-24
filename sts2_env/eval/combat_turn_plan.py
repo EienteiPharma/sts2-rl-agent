@@ -409,6 +409,47 @@ def enumerate_candidate_plans(
 
 
 _PLAY_STEP_RE = re.compile(r"^play:(?P<card>[^:]+):h(?P<hi>\d+)(?:@.*)?$")
+_PLAN_STEP_POTION_RE = re.compile(
+    r"^potion:(?P<pid>[^:]+):s(?P<slot>\d+)(?:@(?P<tgt>.*))?$"
+)
+
+
+def plan_step_action_signature(key: str) -> tuple[str, ...] | None:
+    """Card/potion/end signature ignoring hand index or potion slot."""
+    raw = str(key).strip()
+    if not raw:
+        return None
+    if raw == SEMANTIC_END_TURN:
+        return (SEMANTIC_END_TURN,)
+    after = raw.split("@", 1)
+    target = after[1] if len(after) > 1 else "self"
+    m = _PLAY_STEP_RE.match(raw)
+    if m:
+        return ("play", m.group("card"), target)
+    m = _PLAN_STEP_POTION_RE.match(raw)
+    if m:
+        return ("potion", m.group("pid"), target)
+    return None
+
+
+def remap_plan_step_semantic_key(
+    key: str, legal_keys: set[str] | frozenset[str]
+) -> str | None:
+    """Resolve a planned step to a current legal key when only index/slot drifted."""
+    want = str(key).strip()
+    if not want:
+        return None
+    if want in legal_keys:
+        return want
+    sig = plan_step_action_signature(want)
+    if sig is None:
+        return None
+    matches = sorted(
+        lk for lk in legal_keys if plan_step_action_signature(lk) == sig
+    )
+    if matches:
+        return matches[0]
+    return None
 _INTENT_PART_ATTACK_RE = re.compile(
     r"^(?:attack|multi_attack)\s+(\d+)(?:x(\d+))?$",
     re.IGNORECASE,
@@ -841,6 +882,25 @@ def _patch_replay_replan_count(env: Any | None, session: TurnPlanRuntime) -> Non
     rec.patch_last_turn_replan_count(int(session.replans))
 
 
+def record_turn_plan_replan_trigger(telemetry: Any, reason: str) -> None:
+    if telemetry is None:
+        return
+    record = getattr(telemetry, "record_turn_plan_replan_trigger", None)
+    if callable(record):
+        record(str(reason))
+
+
+def _increment_turn_plan_replan(
+    session: TurnPlanRuntime,
+    env: Any | None,
+    telemetry: Any,
+    reason: str,
+) -> None:
+    session.replans += 1
+    record_turn_plan_replan_trigger(telemetry, reason)
+    _patch_replay_replan_count(env, session)
+
+
 def _catastrophe_fail_open(
     combat_model: Any,
     combat_obs: np.ndarray,
@@ -1015,22 +1075,27 @@ def choose_combat_turn_plan_action(
         if session.plan is not None and session.step_index < len(session.plan.steps):
             key = session.plan.steps[session.step_index]
             legal = set(legal_semantic_keys(combat, mask, owner=owner_creature))
-            if key not in legal:
-                session.replans += 1
-                _patch_replay_replan_count(env, session)
+            resolved = remap_plan_step_semantic_key(key, legal)
+            if resolved is None:
+                _increment_turn_plan_replan(
+                    session, env, telemetry, "illegal_step"
+                )
                 session.clear_plan()
                 continue
+            key = resolved
             if living_enemy_intent_snapshot(combat) != (session.intent_snapshot or {}):
-                session.replans += 1
-                _patch_replay_replan_count(env, session)
+                _increment_turn_plan_replan(
+                    session, env, telemetry, "intent_drift"
+                )
                 session.clear_plan()
                 continue
             action = gym_action_for_semantic_key(
                 combat, mask, key, owner=owner_creature
             )
             if action is None:
-                session.replans += 1
-                _patch_replay_replan_count(env, session)
+                _increment_turn_plan_replan(
+                    session, env, telemetry, "action_map_none"
+                )
                 session.clear_plan()
                 continue
             session.step_index += 1
@@ -1241,6 +1306,9 @@ __all__ = [
     "record_jev_turn_plan_turn",
     "record_turn_plan_choice_prune",
     "record_turn_plan_heuristic_scores",
+    "record_turn_plan_replan_trigger",
+    "plan_step_action_signature",
+    "remap_plan_step_semantic_key",
     "legal_semantic_keys",
     "living_enemy_intent_snapshot",
     "runtime_for_env",
