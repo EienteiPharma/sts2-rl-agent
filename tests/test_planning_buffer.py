@@ -8,9 +8,13 @@ import numpy as np
 import pytest
 
 from sts2_env.gym_env.planning_buffer import (
+    EMPIRICAL_PLANNING_YIELD_V0,
     PLANNING_DEFAULT_OUT,
+    PLANNING_TARGET_ROWS,
     PlanningStepRecorder,
+    combat_steps_for_planning_rows,
     phase_to_code,
+    planning_shard_path,
     refuse_planning_path,
     save_planning_buffer,
     validate_planning_buffer,
@@ -61,6 +65,46 @@ def test_planning_skips_combat_phase():
         policy_tag="skip",
     )
     assert rec.to_arrays() is None
+
+
+def test_run_obs_size_is_201():
+    assert RUN_OBS_SIZE == 201
+
+
+def test_planning_yield_formula():
+    steps = combat_steps_for_planning_rows(PLANNING_TARGET_ROWS)
+    assert steps == int(__import__("math").ceil(PLANNING_TARGET_ROWS / EMPIRICAL_PLANNING_YIELD_V0))
+
+
+def test_planning_recorder_stats_skip_phase():
+    rec = PlanningStepRecorder()
+    obs = np.zeros(RUN_OBS_SIZE, dtype=np.float32)
+    rec.note_auto_noncombat_step()
+    rec.record_step(
+        obs=obs,
+        next_obs=obs,
+        action=0,
+        reward=0.0,
+        done=False,
+        action_mask=np.zeros(TOTAL_ACTIONS, dtype=np.int8),
+        phase="COMBAT",
+        policy_tag="skip",
+    )
+    assert rec.stats.recorded == 0
+    assert rec.stats.skipped_phase == 1
+
+
+def test_planning_shard_path():
+    p = planning_shard_path("shard01")
+    assert p.name == "planning_shard01.npz"
+    assert "shards" in p.parts
+
+
+def test_refuse_planning_v0_backup():
+    with pytest.raises(SystemExit, match="runenv_planning_buffer_colab_v0"):
+        refuse_planning_path(
+            "/workspace/sts2-sim/output/runenv_planning_buffer_colab_v0/planning_transitions.npz"
+        )
 
 
 def test_refuse_planning_overwrite_colab_v1_combat():

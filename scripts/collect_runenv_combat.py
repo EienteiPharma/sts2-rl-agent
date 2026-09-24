@@ -37,7 +37,13 @@ from sts2_env.gym_env.combat_collect import (
     collect_parallel,
     split_worker_steps,
 )
-from sts2_env.gym_env.planning_buffer import PLANNING_DEFAULT_OUT
+from sts2_env.gym_env.planning_buffer import (
+    EMPIRICAL_PLANNING_YIELD_V0,
+    PLANNING_DEFAULT_OUT,
+    PLANNING_TARGET_ROWS,
+    combat_steps_for_planning_rows,
+    planning_shard_path,
+)
 from sts2_env.gym_env.runenv_onpolicy_combat import (
     HANG_JEV,
     HANG_JEV_EVENT,
@@ -88,11 +94,14 @@ def normalize_collect_args(args: argparse.Namespace) -> argparse.Namespace:
         if args.combat_policy is None and args.policy == "random":
             args.policy = "model"
         args.combat_policy_resolved = _resolve_combat_policy(args)
+    if getattr(args, "planning_shard", None):
+        args.planning_out_resolved = str(planning_shard_path(args.planning_shard))
     if getattr(args, "planning_only", False):
         args.jev = "off"
         args.jev_enabled = False
         args.no_planning = False
-        args.planning_out_resolved = args.planning_out or PLANNING_DEFAULT_OUT
+        if not args.planning_out_resolved:
+            args.planning_out_resolved = args.planning_out or PLANNING_DEFAULT_OUT
         args.planning_jsonl_resolved = (
             args.planning_jsonl
             or str(Path(args.planning_out_resolved).with_suffix(".jsonl"))
@@ -221,7 +230,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             f"{PLANNING_DEFAULT_OUT}"
         ),
     )
+    parser.add_argument(
+        "--planning-shard",
+        default=None,
+        help=(
+            "Append-safe shard id → …/runenv_planning_buffer_colab_v1/shards/"
+            "planning_<ID>.npz (does not overwrite v0 backup or merged shard0)"
+        ),
+    )
     args = parser.parse_args(argv)
+    args.planning_out_resolved = None
     return normalize_collect_args(args)
 
 
@@ -308,9 +326,13 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "planning_out": args.planning_out_resolved,
         "planning_jsonl": args.planning_jsonl_resolved,
         "planning_schema": (
-            "obs/next_obs (151) run; action/mask (157); phase_code; policy_tag"
+            "obs/next_obs (201) run obs_v1+tail; action/mask (157); phase_code; policy_tag"
             if args.planning_out_resolved
             else None
+        ),
+        "planning_yield_empirical_v0": EMPIRICAL_PLANNING_YIELD_V0,
+        "combat_steps_for_500k_planning": combat_steps_for_planning_rows(
+            PLANNING_TARGET_ROWS
         ),
         "note": (
             "Jev stays on collect; train_combat_from_buffer.py is the learn half"

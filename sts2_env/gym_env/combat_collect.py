@@ -209,12 +209,16 @@ def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
                 },
             )
             planning_n = int(plan_arrays["obs"].shape[0])
+    plan_stats = (
+        planning_recorder.stats.to_dict() if planning_recorder is not None else None
+    )
     return {
         "shard": str(shard) if bool(payload.get("combat_persist", True)) else None,
         "n_transitions": int(arrays["obs"].shape[0]),
         "worker_id": worker_id,
         "planning_shard": str(planning_shard) if planning_shard else None,
         "n_planning_transitions": planning_n,
+        "planning_stats": plan_stats,
     }
 
 
@@ -357,9 +361,28 @@ def collect_parallel(
                     "planning_only": planning_only,
                 },
             )
+            agg_stats = {
+                "auto_noncombat_steps": 0,
+                "recorded": 0,
+                "skipped_phase": 0,
+                "step_errors": 0,
+            }
+            for row in results:
+                ps = row.get("planning_stats") or {}
+                for k in agg_stats:
+                    agg_stats[k] += int(ps.get(k, 0))
+            n_combat_total = n_combat
+            planning_yield = (
+                float(merged_plan["obs"].shape[0]) / float(n_combat_total)
+                if n_combat_total > 0
+                else 0.0
+            )
             planning_result = {
                 "planning_out": str(planning_path.resolve()),
                 "n_planning_transitions": int(merged_plan["obs"].shape[0]),
+                "n_combat_steps": int(n_combat_total),
+                "planning_yield_per_combat_step": planning_yield,
+                "planning_stats": agg_stats,
             }
         else:
             planning_result = {

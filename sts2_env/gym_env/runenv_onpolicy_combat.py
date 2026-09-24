@@ -390,32 +390,43 @@ class RunEnvOnPolicyCombatEnv(gymnasium.Env):
                 action = legal_random_runenv_action(mask, self._rng)
                 self._last_noncombat_tag = "legal_random_exception"
                 tag = self._last_noncombat_tag
-            _obs, _reward, terminated, trunc, _info = self.inner.step(int(action))
             if self.planning_recorder is not None:
-                next_obs = self.inner._encode_obs()
-                done = bool(terminated or trunc or _run_over(self.inner))
-                self.planning_recorder.record_step(
-                    obs=pre_obs,
-                    next_obs=next_obs,
-                    action=int(action),
-                    reward=float(_reward),
-                    done=done,
-                    action_mask=mask,
-                    phase=pre_phase,
-                    policy_tag=str(tag),
-                )
-                if self.planning_jsonl:
-                    self.planning_recorder.append_jsonl_line(
-                        self.planning_jsonl,
-                        {
-                            "phase": pre_phase,
-                            "action": int(action),
-                            "policy_tag": str(tag),
-                            "reward": float(_reward),
-                            "done": done,
-                            "floor": _info.get("floor"),
-                        },
+                self.planning_recorder.note_auto_noncombat_step()
+            try:
+                _obs, _reward, terminated, trunc, _info = self.inner.step(int(action))
+            except Exception:
+                if self.planning_recorder is not None:
+                    self.planning_recorder.note_step_error()
+                raise
+            if self.planning_recorder is not None:
+                try:
+                    next_obs = self.inner._encode_obs()
+                    done = bool(terminated or trunc or _run_over(self.inner))
+                    self.planning_recorder.record_step(
+                        obs=pre_obs,
+                        next_obs=next_obs,
+                        action=int(action),
+                        reward=float(_reward),
+                        done=done,
+                        action_mask=mask,
+                        phase=pre_phase,
+                        policy_tag=str(tag),
                     )
+                    if self.planning_jsonl:
+                        self.planning_recorder.append_jsonl_line(
+                            self.planning_jsonl,
+                            {
+                                "phase": pre_phase,
+                                "action": int(action),
+                                "policy_tag": str(tag),
+                                "reward": float(_reward),
+                                "done": done,
+                                "floor": _info.get("floor"),
+                            },
+                        )
+                except Exception:
+                    self.planning_recorder.note_step_error()
+                    raise
             self._noncombat_auto_steps += 1
             auto += 1
             if terminated:

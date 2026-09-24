@@ -1,6 +1,7 @@
 """Non-combat planning transitions from colab_v1 collect (Jev off, no TypeSafe).
 
-Schema (npz): ``obs`` (N,151) run obs, ``next_obs``, ``action`` (RunEnv 157),
+Schema (npz): ``obs`` (N,201) run obs (181 combat obs_v1 + 20 run tail), ``next_obs``,
+``action`` (RunEnv 157),
 ``reward``, ``done``, ``action_mask`` (N,157), ``phase_code`` (uint8),
 ``policy_tag`` (N,) unicode. Emitted only from ``RunEnvOnPolicyCombatEnv``
 auto-noncombat steps (MAP/REST/CARD/…); combat ``transitions.npz`` unchanged.
@@ -9,6 +10,7 @@ auto-noncombat steps (MAP/REST/CARD/…); combat ``transitions.npz`` unchanged.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,8 +21,16 @@ from sts2_env.run.run_manager import RunManager
 
 PLANNING_BUFFER_VERSION = 1
 PLANNING_DIR = "/workspace/sts2-sim/output/runenv_planning_buffer_colab_v1"
+PLANNING_V0_BACKUP_DIR = "/workspace/sts2-sim/output/runenv_planning_buffer_colab_v0"
 PLANNING_DEFAULT_OUT = f"{PLANNING_DIR}/planning_transitions.npz"
 PLANNING_DEFAULT_JSONL = f"{PLANNING_DIR}/planning_steps.jsonl"
+PLANNING_SHARDS_SUBDIR = "shards"
+
+# Empirical shard0 (500k combat steps, w=8): planning_v0 n≈44158 — not a crash artifact.
+EMPIRICAL_COMBAT_STEPS_V0 = 500_000
+EMPIRICAL_PLANNING_ROWS_V0 = 44_158
+EMPIRICAL_PLANNING_YIELD_V0 = EMPIRICAL_PLANNING_ROWS_V0 / EMPIRICAL_COMBAT_STEPS_V0
+PLANNING_TARGET_ROWS = 500_000
 
 _FROZEN_OUTDIRS = (
     "combat_ppo_obs_v1_bh_v1",
@@ -31,16 +41,58 @@ _PROTECTED_COMBAT_COLLECT_DIRS = (
     "runenv_combat_buffer_ep",
     "runenv_combat_buffer_colab_v1",
 )
+_PROTECTED_PLANNING_DIRS = (
+    "runenv_planning_buffer_colab_v0",
+)
 
 
 def _meta_json_path(npz_path: str | Path) -> Path:
     return Path(npz_path).expanduser().with_suffix(".meta.json")
 
 
-def refuse_planning_path(path: str | Path, *, what: str = "planning buffer") -> Path:
+def planning_shard_path(shard_id: str, *, base_dir: str | Path = PLANNING_DIR) -> Path:
+    """New shard file under ``…/shards/planning_{shard_id}.npz`` (append-safe)."""
+    sid = str(shard_id).strip().replace("/", "_")
+    if not sid:
+        raise ValueError("planning shard id required")
+    return Path(base_dir).expanduser() / PLANNING_SHARDS_SUBDIR / f"planning_{sid}.npz"
+
+
+def combat_steps_for_planning_rows(
+    target_planning_rows: int,
+    *,
+    yield_rate: float = EMPIRICAL_PLANNING_YIELD_V0,
+) -> int:
+    """``n_steps`` (total combat transitions, all workers) for ``target`` planning rows."""
+    if yield_rate <= 0:
+        raise ValueError("yield_rate must be > 0")
+    return int(np.ceil(int(target_planning_rows) / float(yield_rate)))
+
+
+def refuse_planning_path(
+    path: str | Path,
+    *,
+    what: str = "planning buffer",
+    allow_existing_merge: bool = False,
+) -> Path:
     """Never write into bh_v1 / protected full combat buffers."""
     out = Path(path).expanduser()
     parts = set(out.parts)
+    for name in _PROTECTED_PLANNING_DIRS:
+        if name in parts:
+            raise SystemExit(
+                f"refusing to overwrite protected planning backup {what} {out}"
+            )
+    if (
+        not allow_existing_merge
+        and out.resolve() == Path(PLANNING_DEFAULT_OUT).expanduser().resolve()
+        and out.is_file()
+        and out.stat().st_size > 0
+    ):
+        raise SystemExit(
+            f"refusing to overwrite merged planning {out} (shard0/v0 backed up); "
+            f"use --planning-shard ID → {PLANNING_DIR}/{PLANNING_SHARDS_SUBDIR}/planning_<ID>.npz"
+        )
     for name in _FROZEN_OUTDIRS:
         if out.name == name or name in parts:
             raise SystemExit(
@@ -166,14 +218,43 @@ def save_planning_buffer(
     return out
 
 
+@dataclass
+class PlanningRecordStats:
+    auto_noncombat_steps: int = 0
+    recorded: int = 0
+    skipped_phase: int = 0
+    step_errors: int = 0
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "auto_noncombat_steps": int(self.auto_noncombat_steps),
+            "recorded": int(self.recorded),
+            "skipped_phase": int(self.skipped_phase),
+            "step_errors": int(self.step_errors),
+        }
+
+    @property
+    def yield_per_auto_step(self) -> float:
+        if self.auto_noncombat_steps <= 0:
+            return 0.0
+        return float(self.recorded) / float(self.auto_noncombat_steps)
+
+
 class PlanningStepRecorder:
     """In-memory non-combat step log (side channel; does not touch combat npz)."""
 
     def __init__(self) -> None:
         self._records: dict[str, list] = {k: [] for k in PLANNING_REQUIRED_KEYS}
+        self.stats = PlanningRecordStats()
 
     def __len__(self) -> int:
         return len(self._records["obs"])
+
+    def note_auto_noncombat_step(self) -> None:
+        self.stats.auto_noncombat_steps += 1
+
+    def note_step_error(self) -> None:
+        self.stats.step_errors += 1
 
     def record_step(
         self,
@@ -188,7 +269,9 @@ class PlanningStepRecorder:
         policy_tag: str,
     ) -> None:
         if phase not in PLANNING_RECORD_PHASES:
+            self.stats.skipped_phase += 1
             return
+        self.stats.recorded += 1
         self._records["obs"].append(np.asarray(obs, dtype=np.float32))
         self._records["next_obs"].append(np.asarray(next_obs, dtype=np.float32))
         self._records["action"].append(int(action))
@@ -219,14 +302,20 @@ class PlanningStepRecorder:
 
 
 __all__ = [
+    "EMPIRICAL_PLANNING_YIELD_V0",
     "PLANNING_DEFAULT_JSONL",
     "PLANNING_DEFAULT_OUT",
     "PLANNING_DIR",
     "PLANNING_RECORD_PHASES",
     "PLANNING_REQUIRED_KEYS",
+    "PLANNING_TARGET_ROWS",
+    "PLANNING_V0_BACKUP_DIR",
+    "PlanningRecordStats",
     "PlanningStepRecorder",
+    "combat_steps_for_planning_rows",
     "concat_planning_buffers",
     "phase_to_code",
+    "planning_shard_path",
     "refuse_planning_path",
     "save_planning_buffer",
     "stack_planning_records",
