@@ -1032,6 +1032,9 @@ def choose_combat_turn_plan_action(
             prompt_config=cfg,
             bh_assist=assist,
         )
+        from sts2_env.eval.hold_turn_replay import replay_recorder_from_env
+
+        replay_rec = replay_recorder_from_env(env) if env is not None else None
         if err is not None:
             session.clear_plan()
             local, shadow, tel_reason, tel_detail = _catastrophe_fail_open(
@@ -1042,6 +1045,17 @@ def choose_combat_turn_plan_action(
                 err,
                 error_detail=err_detail,
             )
+            if replay_rec is not None:
+                replay_rec.record_plan_choice(
+                    player_turn=turn_id,
+                    plans=plans,
+                    board=board,
+                    pruned_plan_count=pruned_n,
+                    picked_plan_id=None,
+                    pick_error=err,
+                    bh_assist=assist,
+                    shadow=shadow,
+                )
             _log_turn_plan_telemetry(
                 session,
                 telemetry,
@@ -1051,6 +1065,17 @@ def choose_combat_turn_plan_action(
             )
             session.last_shadow = shadow
             return local, shadow
+        if replay_rec is not None and picked is not None:
+            replay_rec.record_plan_choice(
+                player_turn=turn_id,
+                plans=plans,
+                board=board,
+                pruned_plan_count=pruned_n,
+                picked_plan_id=picked.plan_id,
+                pick_error=None,
+                bh_assist=assist,
+                shadow=None,
+            )
         assert picked is not None
         session.plan = picked
         session.intent_snapshot = living_enemy_intent_snapshot(combat)

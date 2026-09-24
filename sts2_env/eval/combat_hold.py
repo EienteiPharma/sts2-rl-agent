@@ -212,25 +212,41 @@ def run_hold_job_list(
     *,
     choose_fn: Callable[[Any, np.ndarray, np.ndarray], int] | None = None,
     max_steps: int = 400,
+    turn_replay_writer: Any | None = None,
+    turn_replay_meta: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Run a list of HOLD jobs serially. Used by workers=1 and each parallel worker."""
     from sts2_env.gym_env.combat_env import STS2CombatEnv
+
+    replay_mod = None
+    if turn_replay_writer is not None:
+        from sts2_env.eval import hold_turn_replay as replay_mod
 
     rows: list[dict[str, Any]] = []
     for job in jobs:
         options = options_from_hold_fixture(job["fixture"])
         env = STS2CombatEnv(encounter_pool=[job["encounter_setup"]])
+        episode_replay = None
+        if turn_replay_writer is not None and replay_mod is not None:
+            episode_replay = replay_mod.HoldTurnPlanEpisodeReplay.from_hold_job(
+                job, run_meta=turn_replay_meta or {}
+            )
+            setattr(env, replay_mod.HOLD_TURN_REPLAY_ENV_ATTR, episode_replay)
         obs, info = env.reset(seed=int(job["seed"]), options=options)
         done = False
         steps = 0
         reward = 0.0
         terminated = False
         truncated = False
+        last_mask: np.ndarray | None = None
+        combat = None
         while not done and steps < max_steps:
             mask = info.get("action_mask")
             if mask is None:
                 mask = env.action_masks()
             mask_arr = np.asarray(mask)
+            last_mask = mask_arr
+            combat = getattr(env, "combat", None)
             if choose_fn is not None:
                 action = int(choose_fn(env, obs, mask_arr))
             else:
@@ -238,10 +254,23 @@ def run_hold_job_list(
             obs, reward, terminated, truncated, info = env.step(action)
             steps += 1
             done = terminated or truncated
+        win = bool(terminated and reward > 0)
+        if (
+            turn_replay_writer is not None
+            and episode_replay is not None
+            and last_mask is not None
+        ):
+            turn_replay_writer.maybe_write_episode(
+                episode_replay,
+                win=win,
+                steps=steps,
+                combat=combat,
+                mask=last_mask,
+            )
         env.close()
         rows.append(
             {
-                "win": bool(terminated and reward > 0),
+                "win": win,
                 "bucket": job["bucket"],
                 "enc_id": job["enc_id"],
                 "fixture_index": job["fixture_index"],
@@ -287,6 +316,7 @@ def hold_eval_worker(payload: dict[str, Any]) -> dict[str, Any]:
     turn_plan_choice_cap = payload.get("turn_plan_choice_cap")
     bh_assist = payload.get("bh_assist")
     bh_assist_ckpt = payload.get("bh_assist_ckpt")
+    turn_replay_dir = payload.get("turn_replay_dir")
     max_steps = int(payload.get("max_steps", 400))
     jobs = [expand_hold_job(j) for j in payload.get("jobs") or []]
 
@@ -373,11 +403,43 @@ def hold_eval_worker(payload: dict[str, Any]) -> dict[str, Any]:
                 )
                 return int(local)
 
+    turn_replay_writer = None
+    turn_replay_meta: dict[str, Any] | None = None
+    if turn_replay_dir and combat_policy == "jev-turn":
+        from sts2_env.eval.hold_turn_replay import HoldTurnReplayWriter
+
+        replay_path = (
+            Path(str(turn_replay_dir))
+            / f"hold_turn_replay_w{worker_id}.jsonl"
+        )
+        turn_replay_writer = HoldTurnReplayWriter(replay_path)
+        turn_replay_meta = {
+            "combat_policy": combat_policy,
+            "bh_assist": str(bh_assist or "off"),
+            "bh_assist_ckpt": bh_assist_ckpt,
+        }
+
     rows = run_hold_job_list(
-        jobs, predict_fn, choose_fn=choose_fn, max_steps=max_steps
+        jobs,
+        predict_fn,
+        choose_fn=choose_fn,
+        max_steps=max_steps,
+        turn_replay_writer=turn_replay_writer,
+        turn_replay_meta=turn_replay_meta,
+    )
+    replay_written = (
+        int(turn_replay_writer.written) if turn_replay_writer is not None else 0
     )
     tel_blob = telemetry.to_dict() if telemetry is not None else None
-    return {"worker_id": worker_id, "rows": rows, "combat_jev": tel_blob}
+    out: dict[str, Any] = {
+        "worker_id": worker_id,
+        "rows": rows,
+        "combat_jev": tel_blob,
+    }
+    if turn_replay_writer is not None:
+        out["turn_replay_path"] = str(turn_replay_writer.path)
+        out["turn_replay_written"] = replay_written
+    return out
 
 
 def run_hold_jobs_parallel(
@@ -391,6 +453,7 @@ def run_hold_jobs_parallel(
     turn_plan_choice_cap: int | None = None,
     bh_assist: str | None = None,
     bh_assist_ckpt: str | None = None,
+    turn_replay_dir: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Spawn ProcessPool (same as collect). workers=1 calls hold_eval_worker in-process."""
     shards = split_hold_jobs(jobs, workers)
@@ -406,6 +469,7 @@ def run_hold_jobs_parallel(
                 "turn_plan_choice_cap": turn_plan_choice_cap,
                 "bh_assist": bh_assist,
                 "bh_assist_ckpt": bh_assist_ckpt,
+                "turn_replay_dir": turn_replay_dir,
                 "jobs": [compact_hold_job(j) for j in shard],
             }
         )
@@ -421,8 +485,14 @@ def run_hold_jobs_parallel(
             results = pool.map(hold_eval_worker, payloads)
     rows: list[dict[str, Any]] = []
     tel = None
+    replay_paths: list[str] = []
+    replay_written = 0
     for row in results:
         rows.extend(row.get("rows") or [])
+        rp = row.get("turn_replay_path")
+        if rp:
+            replay_paths.append(str(rp))
+        replay_written += int(row.get("turn_replay_written") or 0)
         blob = row.get("combat_jev")
         if blob:
             from sts2_env.eval.combat_jev import CombatJevTelemetry
@@ -433,7 +503,17 @@ def run_hold_jobs_parallel(
             else:
                 tel.merge(piece)
     rows.sort(key=lambda r: (int(r["fixture_index"]), int(r["enc_id"]), int(r["seed"])))
-    return rows, (tel.to_dict() if tel is not None else None)
+    tel_out = tel.to_dict() if tel is not None else None
+    if tel_out is not None and replay_paths:
+        tel_out = dict(tel_out)
+        tel_out["turn_replay_paths"] = replay_paths
+        tel_out["turn_replay_written"] = replay_written
+    elif replay_paths:
+        tel_out = {
+            "turn_replay_paths": replay_paths,
+            "turn_replay_written": replay_written,
+        }
+    return rows, tel_out
 
 
 def run_hold_smoke(
@@ -450,6 +530,8 @@ def run_hold_smoke(
     turn_plan_choice_cap: int | None = None,
     bh_assist: str | None = None,
     bh_assist_ckpt: str | None = None,
+    turn_replay_dir: str | None = None,
+    turn_replay_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run HOLD episodes with a predict(obs, mask)->action callable. No SB3 import.
 
@@ -467,10 +549,33 @@ def run_hold_smoke(
     jobs = hold_jobs(n_eps=n_eps, fixture_dir=fixture_dir)
     n_workers = max(1, int(workers))
     tel_blob: dict[str, Any] | None = None
+    turn_replay_writer = None
+    replay_paths: list[str] = []
+    replay_written = 0
+    if turn_replay_dir and str(combat_policy) == "jev-turn":
+        from sts2_env.eval.hold_turn_replay import HoldTurnReplayWriter
+
+        replay_path = Path(str(turn_replay_dir)) / "hold_turn_replay_w0.jsonl"
+        turn_replay_writer = HoldTurnReplayWriter(replay_path)
+        replay_paths.append(str(replay_path))
+        if turn_replay_meta is None:
+            turn_replay_meta = {
+                "combat_policy": str(combat_policy),
+                "bh_assist": str(bh_assist or "off"),
+                "bh_assist_ckpt": bh_assist_ckpt,
+            }
+
     if n_workers <= 1:
         rows = run_hold_job_list(
-            jobs, predict_fn, choose_fn=choose_fn, max_steps=max_steps
+            jobs,
+            predict_fn,
+            choose_fn=choose_fn,
+            max_steps=max_steps,
+            turn_replay_writer=turn_replay_writer,
+            turn_replay_meta=turn_replay_meta,
         )
+        if turn_replay_writer is not None:
+            replay_written = int(turn_replay_writer.written)
     else:
         if not model_path:
             raise SystemExit(
@@ -487,7 +592,11 @@ def run_hold_smoke(
             turn_plan_choice_cap=turn_plan_choice_cap,
             bh_assist=bh_assist,
             bh_assist_ckpt=bh_assist_ckpt,
+            turn_replay_dir=turn_replay_dir,
         )
+        if isinstance(tel_blob, dict) and tel_blob.get("turn_replay_paths"):
+            replay_paths = list(tel_blob.get("turn_replay_paths") or [])
+            replay_written = int(tel_blob.get("turn_replay_written") or 0)
     summary = summarize_hold_rows(rows)
     summary["passed"] = hold_passes(summary)
     summary["n_eps"] = int(n_eps)
@@ -495,4 +604,10 @@ def run_hold_smoke(
     summary["workers"] = n_workers
     if tel_blob is not None:
         summary["combat_jev_telemetry"] = tel_blob
+    if replay_paths:
+        summary["turn_replay"] = {
+            "dir": str(turn_replay_dir),
+            "paths": replay_paths,
+            "episodes_written": replay_written,
+        }
     return summary

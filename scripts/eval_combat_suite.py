@@ -107,6 +107,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--turn-replay-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "jev-turn only: write fail+Boss episode JSONL replays (plan shortlist, "
+            "Choice pick, terminal deck/HP). Default evals/hold_turn_replay; "
+            "use 'none' to disable."
+        ),
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -251,6 +261,13 @@ def main(argv: list[str] | None = None) -> int:
         bh_assist=bh_assist_mode,
         bh_assist_ckpt=getattr(args, "bh_assist_ckpt", None),
     )
+    from sts2_env.eval.hold_turn_replay import resolve_hold_turn_replay_dir
+
+    replay_dir = resolve_hold_turn_replay_dir(
+        getattr(args, "turn_replay_dir", None),
+        combat_policy=combat_policy,
+    )
+    turn_replay_dir = str(replay_dir) if replay_dir is not None else None
     choose_fn = None
     combat_jev_summary = None
     if workers == 1 and combat_policy == "jev":
@@ -322,6 +339,14 @@ def main(argv: list[str] | None = None) -> int:
             if combat_policy == "jev-turn" and bh_assist_config is not None
             else None
         ),
+        turn_replay_dir=turn_replay_dir,
+        turn_replay_meta={
+            "combat_policy": combat_policy,
+            "bh_assist": bh_assist_mode,
+            "bh_assist_ckpt": (
+                bh_assist_config.ckpt_path if bh_assist_config is not None else None
+            ),
+        },
     )
     n_fights = int(summary["overall"]["n"])
     if combat_jev_summary is not None:
@@ -365,6 +390,7 @@ def main(argv: list[str] | None = None) -> int:
             else None
         ),
         "combat_jev": combat_jev_payload,
+        "turn_replay": summary.get("turn_replay"),
     }
     text = (
         f"HOLD loadout_v1 n_eps={n_eps} workers={workers} "
