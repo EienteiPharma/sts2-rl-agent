@@ -815,6 +815,23 @@ def _log_turn_plan_telemetry(
     session.telemetry_logged_turn = session.player_turn_id
 
 
+def _patch_replay_turn_trajectory(
+    env: Any | None,
+    combat: CombatState,
+    mask: np.ndarray,
+    session: TurnPlanRuntime,
+) -> None:
+    from sts2_env.eval.hold_turn_replay import replay_recorder_from_env
+
+    rec = replay_recorder_from_env(env) if env is not None else None
+    if rec is None:
+        return
+    board = serialize_combat_board_full(
+        combat, mask, owner=combat.primary_player
+    )
+    rec.patch_last_turn_trajectory(board, replan_count=int(session.replans))
+
+
 def _catastrophe_fail_open(
     combat_model: Any,
     combat_obs: np.ndarray,
@@ -1002,6 +1019,7 @@ def choose_combat_turn_plan_action(
             }
             if plan_completed:
                 _log_turn_plan_telemetry(session, telemetry, fulfilled=True)
+                _patch_replay_turn_trajectory(env, combat, mask, session)
             session.last_shadow = shadow
             return int(action), shadow
 
@@ -1055,7 +1073,14 @@ def choose_combat_turn_plan_action(
                     pick_error=err,
                     bh_assist=assist,
                     shadow=shadow,
+                    replan_count=int(session.replans),
+                    replan_cap_hit=err == CATA_FAILOPEN_CAP,
+                    fail_open=True,
+                    fail_open_reason=str(
+                        shadow.get("turn_plan_failopen_reason") or err
+                    ),
                 )
+                _patch_replay_turn_trajectory(env, combat, mask, session)
             _log_turn_plan_telemetry(
                 session,
                 telemetry,
@@ -1075,6 +1100,10 @@ def choose_combat_turn_plan_action(
                 pick_error=None,
                 bh_assist=assist,
                 shadow=None,
+                replan_count=int(session.replans),
+                replan_cap_hit=False,
+                fail_open=False,
+                fail_open_reason=None,
             )
         assert picked is not None
         session.plan = picked

@@ -15,6 +15,36 @@ import numpy as np
 HOLD_TURN_REPLAY_ENV_ATTR = "_hold_turn_plan_replay"
 HOLD_TURN_REPLAY_PROTOCOL = "hold_turn_plan_replay_v1"
 DEFAULT_HOLD_TURN_REPLAY_DIR = "evals/hold_turn_replay"
+# Additive turn keys (v1 readers ignore unknown fields). n=1 replay smoke is diagnostic only —
+# not a promotion / eval gate (see lock_eval_then_v3 formal n=20).
+REPLAY_TURN_TRAJECTORY_KEYS = (
+    "player_hp_start",
+    "player_hp_end",
+    "enemies_hp",
+    "replan_count",
+    "replan_cap_hit",
+    "fail_open",
+    "fail_open_reason",
+)
+
+
+def enemies_hp_from_board(board: Mapping[str, Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for i, row in enumerate(board.get("enemies") or []):
+        if not isinstance(row, Mapping):
+            continue
+        slot = row.get("slot", i)
+        name = row.get("name")
+        ident = str(name) if name else f"slot_{int(slot)}"
+        out.append({"id": ident, "hp": int(row.get("hp") or 0)})
+    return out
+
+
+def player_hp_from_board(board: Mapping[str, Any]) -> int:
+    self_row = board.get("self") if isinstance(board, Mapping) else {}
+    if not isinstance(self_row, Mapping):
+        return 0
+    return int(self_row.get("hp") or 0)
 
 
 def should_retain_hold_turn_replay(*, win: bool, bucket: str) -> bool:
@@ -110,9 +140,15 @@ class HoldTurnPlanEpisodeReplay:
         pick_error: str | None,
         bh_assist: Any | None,
         shadow: Mapping[str, Any] | None = None,
+        replan_count: int = 0,
+        replan_cap_hit: bool = False,
+        fail_open: bool = False,
+        fail_open_reason: str | None = None,
     ) -> None:
         from sts2_env.eval.combat_turn_plan import _plan_criteria_summary
 
+        hp_start = player_hp_from_board(board)
+        enemies = enemies_hp_from_board(board)
         shortlist = [
             {
                 "plan_id": str(p.plan_id),
@@ -135,12 +171,33 @@ class HoldTurnPlanEpisodeReplay:
             "plan_shortlist": shortlist,
             "pruned_plan_count": int(pruned_plan_count),
             "choice_pick": choice,
+            "player_hp_start": hp_start,
+            "player_hp_end": hp_start,
+            "enemies_hp": enemies,
+            "replan_count": int(replan_count),
+            "replan_cap_hit": bool(replan_cap_hit),
+            "fail_open": bool(fail_open),
+            "fail_open_reason": fail_open_reason if fail_open else None,
         }
         if bh_assist is not None:
             entry["bh_assist"] = bh_assist.as_dict()
         if shadow and shadow.get("turn_plan_step"):
             entry["executed_step"] = shadow.get("turn_plan_step")
         self.turns.append(entry)
+
+    def patch_last_turn_trajectory(
+        self,
+        board: Mapping[str, Any],
+        *,
+        replan_count: int,
+    ) -> None:
+        """End-of-player-turn HP/enemy snapshot (additive update to last turn row)."""
+        if not self.turns:
+            return
+        last = self.turns[-1]
+        last["player_hp_end"] = player_hp_from_board(board)
+        last["enemies_hp"] = enemies_hp_from_board(board)
+        last["replan_count"] = int(replan_count)
 
     def to_document(
         self,
@@ -197,6 +254,9 @@ __all__ = [
     "DEFAULT_HOLD_TURN_REPLAY_DIR",
     "HOLD_TURN_REPLAY_ENV_ATTR",
     "HOLD_TURN_REPLAY_PROTOCOL",
+    "REPLAY_TURN_TRAJECTORY_KEYS",
+    "enemies_hp_from_board",
+    "player_hp_from_board",
     "HoldTurnPlanEpisodeReplay",
     "HoldTurnReplayWriter",
     "replay_recorder_from_env",

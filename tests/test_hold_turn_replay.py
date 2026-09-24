@@ -12,6 +12,7 @@ from sts2_env.eval.combat_turn_plan import (
     choose_combat_turn_plan_action,
 )
 from sts2_env.eval.hold_turn_replay import (
+    REPLAY_TURN_TRAJECTORY_KEYS,
     HoldTurnReplayWriter,
     should_retain_hold_turn_replay,
 )
@@ -33,6 +34,42 @@ class _Ppo:
     def predict(self, obs, action_masks=None, deterministic=True):
         valid = np.flatnonzero(np.asarray(action_masks) == 1)
         return int(valid[0]), None
+
+
+def test_record_plan_choice_includes_trajectory_keys():
+    from sts2_env.eval.combat_turn_plan import TurnPlanCandidate
+    from sts2_env.eval.hold_turn_replay import HoldTurnPlanEpisodeReplay
+
+    board = {
+        "self": {"hp": 42, "max_hp": 70, "block": 0, "energy": 3, "hand": []},
+        "enemies": [{"name": "Slime", "slot": 0, "hp": 8, "max_hp": 20, "block": 0, "intent": "?"}],
+        "turn": {},
+        "piles": {},
+    }
+    rec = HoldTurnPlanEpisodeReplay(1, 0, 19, "boss", 0)
+    rec.record_plan_choice(
+        player_turn=0,
+        plans=[TurnPlanCandidate("plan_0000", ("end_turn",))],
+        board=board,
+        pruned_plan_count=0,
+        picked_plan_id="plan_0000",
+        pick_error=None,
+        bh_assist=None,
+        replan_count=1,
+        replan_cap_hit=False,
+        fail_open=False,
+        fail_open_reason=None,
+    )
+    rec.patch_last_turn_trajectory(
+        {**board, "self": {**board["self"], "hp": 40}},
+        replan_count=1,
+    )
+    turn = rec.turns[0]
+    for key in REPLAY_TURN_TRAJECTORY_KEYS:
+        assert key in turn
+    assert turn["player_hp_start"] == 42
+    assert turn["player_hp_end"] == 40
+    assert turn["enemies_hp"][0]["hp"] == 8
 
 
 def test_should_retain_fail_and_boss_only():
@@ -89,6 +126,11 @@ def test_hold_turn_replay_boss_fail_episode_jsonl(tmp_path):
     assert doc["bucket"] == "boss"
     assert doc["turns"]
     turn0 = doc["turns"][0]
+    for key in REPLAY_TURN_TRAJECTORY_KEYS:
+        assert key in turn0, key
+    assert isinstance(turn0["enemies_hp"], list)
+    assert turn0["fail_open"] is True
+    assert turn0["fail_open_reason"] == "illegal_plan"
     assert turn0["plan_shortlist"]
     assert turn0["plan_shortlist"][0]["plan_id"]
     assert turn0["plan_shortlist"][0]["criteria"]
