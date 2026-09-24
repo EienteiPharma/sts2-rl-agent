@@ -520,6 +520,28 @@ class CombatJevTelemetry:
             "turn_plan_catastrophe_failopen": self.turn_plan_catastrophe - c0,
         }
 
+    def turn_plan_snapshot(self) -> tuple[int, int, int]:
+        return (
+            int(self.turn_plan_turns),
+            int(self.turn_plan_fulfilled),
+            int(self.turn_plan_catastrophe),
+        )
+
+    def turn_plan_reason_snapshot(self) -> dict[str, int]:
+        return {
+            k: int(self.catastrophe_failopen_reason.get(k, 0))
+            for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS
+        }
+
+    def episode_turn_plan_catastrophe_reasons(
+        self, start: dict[str, int]
+    ) -> dict[str, int]:
+        return {
+            k: int(self.catastrophe_failopen_reason.get(k, 0))
+            - int(start.get(k, 0))
+            for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS
+        }
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "calls": int(self.calls),

@@ -46,8 +46,11 @@ def test_hold_turn_replay_boss_fail_episode_jsonl(tmp_path):
     boss_job = next(j for j in jobs if j["bucket"] == "boss")
     replay_path = tmp_path / "hold_turn_replay_w0.jsonl"
     writer = HoldTurnReplayWriter(replay_path)
+    from sts2_env.eval.combat_jev import CombatJevTelemetry
+
     ppo = _Ppo()
     adapter = _PlanAdapter("plan_not_in_list")
+    telemetry = CombatJevTelemetry()
 
     def choose_fn(env, obs, mask):
         combat = getattr(env, "combat", None)
@@ -61,6 +64,7 @@ def test_hold_turn_replay_boss_fail_episode_jsonl(tmp_path):
             adapter=adapter,
             combat_obs=obs,
             env=env,
+            telemetry=telemetry,
         )
         return int(local)
 
@@ -71,8 +75,11 @@ def test_hold_turn_replay_boss_fail_episode_jsonl(tmp_path):
         max_steps=400,
         turn_replay_writer=writer,
         turn_replay_meta={"combat_policy": "jev-turn", "bh_assist": "off"},
+        combat_jev_telemetry=telemetry,
     )
     assert rows
+    assert rows[0].get("had_turn_plan_catastrophe") is True
+    assert int(rows[0].get("turn_plan_catastrophe_turns") or 0) >= 1
     assert replay_path.is_file()
     line = replay_path.read_text(encoding="utf-8").strip().splitlines()[0]
     doc = json.loads(line)

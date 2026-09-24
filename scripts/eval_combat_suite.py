@@ -347,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
                 bh_assist_config.ckpt_path if bh_assist_config is not None else None
             ),
         },
+        combat_jev_telemetry=combat_jev_summary,
     )
     n_fights = int(summary["overall"]["n"])
     if combat_jev_summary is not None:
@@ -391,6 +392,8 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "combat_jev": combat_jev_payload,
         "turn_replay": summary.get("turn_replay"),
+        "wr_any": summary.get("wr_any") or summary.get("overall"),
+        "turn_plan_episode_buckets": summary.get("turn_plan_episode_buckets"),
     }
     text = (
         f"HOLD loadout_v1 n_eps={n_eps} workers={workers} "

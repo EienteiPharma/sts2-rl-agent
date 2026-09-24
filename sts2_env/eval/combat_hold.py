@@ -72,12 +72,22 @@ def summarize_hold_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         wins = sum(1 for r in subset if r.get("win"))
         return {"n": n, "win_rate": round(wins / n, 4)}
 
-    return {
-        "overall": _sum(rows),
+    overall = _sum(rows)
+    out: dict[str, Any] = {
+        "overall": overall,
         "elite": _sum([r for r in rows if r.get("bucket") == "elite"]),
         "boss": _sum([r for r in rows if r.get("bucket") == "boss"]),
         "gate": {"overall_min": HOLD_OVERALL_MIN, "boss_min": HOLD_BOSS_MIN},
+        "wr_any": dict(overall),
     }
+    if any(
+        "had_turn_plan_catastrophe" in r or int(r.get("turn_plan_turns") or 0) > 0
+        for r in rows
+    ):
+        from sts2_env.eval.hold_turn_plan_buckets import summarize_turn_plan_episode_buckets
+
+        out["turn_plan_episode_buckets"] = summarize_turn_plan_episode_buckets(rows)
+    return out
 
 
 def load_hold_fixtures(fixture_dir: Path | None = None) -> list[dict[str, Any]]:
@@ -214,6 +224,7 @@ def run_hold_job_list(
     max_steps: int = 400,
     turn_replay_writer: Any | None = None,
     turn_replay_meta: dict[str, Any] | None = None,
+    combat_jev_telemetry: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Run a list of HOLD jobs serially. Used by workers=1 and each parallel worker."""
     from sts2_env.gym_env.combat_env import STS2CombatEnv
@@ -226,6 +237,12 @@ def run_hold_job_list(
     for job in jobs:
         options = options_from_hold_fixture(job["fixture"])
         env = STS2CombatEnv(encounter_pool=[job["encounter_setup"]])
+        turn_plan_start: tuple[int, int, int] | None = None
+        turn_plan_reason_start: dict[str, int] | None = None
+        if combat_jev_telemetry is not None:
+            turn_plan_start = combat_jev_telemetry.turn_plan_snapshot()
+            turn_plan_reason_start = combat_jev_telemetry.turn_plan_reason_snapshot()
+
         episode_replay = None
         if turn_replay_writer is not None and replay_mod is not None:
             episode_replay = replay_mod.HoldTurnPlanEpisodeReplay.from_hold_job(
@@ -268,16 +285,27 @@ def run_hold_job_list(
                 mask=last_mask,
             )
         env.close()
-        rows.append(
-            {
-                "win": win,
-                "bucket": job["bucket"],
-                "enc_id": job["enc_id"],
-                "fixture_index": job["fixture_index"],
-                "seed": job["seed"],
-                "steps": steps,
-            }
-        )
+        row: dict[str, Any] = {
+            "win": win,
+            "bucket": job["bucket"],
+            "enc_id": job["enc_id"],
+            "fixture_index": job["fixture_index"],
+            "seed": job["seed"],
+            "steps": steps,
+        }
+        if combat_jev_telemetry is not None and turn_plan_start is not None:
+            from sts2_env.eval.hold_turn_plan_buckets import attach_turn_plan_episode_row_fields
+
+            tp_fields = combat_jev_telemetry.episode_turn_plan_fields(turn_plan_start)
+            tp_reasons = combat_jev_telemetry.episode_turn_plan_catastrophe_reasons(
+                turn_plan_reason_start or {}
+            )
+            attach_turn_plan_episode_row_fields(
+                row,
+                turn_plan_fields=tp_fields,
+                catastrophe_reasons=tp_reasons,
+            )
+        rows.append(row)
     return rows
 
 
@@ -426,6 +454,7 @@ def hold_eval_worker(payload: dict[str, Any]) -> dict[str, Any]:
         max_steps=max_steps,
         turn_replay_writer=turn_replay_writer,
         turn_replay_meta=turn_replay_meta,
+        combat_jev_telemetry=telemetry,
     )
     replay_written = (
         int(turn_replay_writer.written) if turn_replay_writer is not None else 0
@@ -532,6 +561,7 @@ def run_hold_smoke(
     bh_assist_ckpt: str | None = None,
     turn_replay_dir: str | None = None,
     turn_replay_meta: dict[str, Any] | None = None,
+    combat_jev_telemetry: Any | None = None,
 ) -> dict[str, Any]:
     """Run HOLD episodes with a predict(obs, mask)->action callable. No SB3 import.
 
@@ -573,6 +603,7 @@ def run_hold_smoke(
             max_steps=max_steps,
             turn_replay_writer=turn_replay_writer,
             turn_replay_meta=turn_replay_meta,
+            combat_jev_telemetry=combat_jev_telemetry,
         )
         if turn_replay_writer is not None:
             replay_written = int(turn_replay_writer.written)

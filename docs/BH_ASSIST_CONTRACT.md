@@ -116,6 +116,20 @@ PYTHONPATH=. python scripts/eval_combat_suite.py \
 
 (B arm: same flags with `--bh-assist on` and the same ckpt path.)
 
+### Episode buckets — catastrophe vs plan quality (reporting)
+
+Overall WR (`wr_any`, same as `overall.win_rate`) mixes Jev-fulfilled turns with turn-plan **catastrophe** fail-open (timeout / error / illegal_plan / replan_cap / …). Reporting-only split (does **not** change `passed` dual-gate or assist +3/+2 math):
+
+| Summary key | Meaning |
+|---|---|
+| `wr_any` | Alias of existing overall WR (unchanged gate input) |
+| `episodes_clean` / `episodes_with_catastrophe` | Episode had **no** / **any** turn-plan catastrophe fail-open |
+| `win_rate_clean` / `win_rate_had_catastrophe` | WR within those episode sets |
+| `boss_win_rate_clean` / `boss_win_rate_had_catastrophe` | Boss-bucket subset |
+| `combat_jev` block | Turn-level `jev_fulfilled_rate`, `catastrophe_failopen_rate`, reason histogram (unchanged) |
+
+Per-fight rows (jev-turn) include `had_turn_plan_catastrophe`, `turn_plan_fulfilled_turns`, `turn_plan_catastrophe_turns`, `turn_plan_catastrophe_reasons`.
+
 ### Assist effectiveness bar (A vs B on `jev-turn`)
 
 Assist counts as **effective** only if arm B beats arm A on loadout_v1 HOLD win rates by:
@@ -128,6 +142,18 @@ Report Δ as `B − A` on overall / elite / Boss columns from the suite summary 
 ### Collapse / STOP (still applies)
 
 Any HOLD run that includes hang comparison still uses existing **collapse STOP** thresholds vs hang arm A (`--combat-policy ppo` / `bh_v1`) where Lab protocol requires it (large negative Δ vs 74.2 / 49.4 table — see `docs/HOLD_PROTOCOL.md`, `docs/COMBAT_JEV_HOLD_FAIL.md`). The **+3 / +2** rule above is additional: even without hang collapse, assist-off vs assist-on must clear the effectiveness bar before train promotion.
+
+### Three-arm contrast (hang \| A \| B) + hang-gap STOP
+
+Helper: `sts2_env/eval/hold_assist_contrast.py` and `scripts/contrast_hold_assist.py --hang … --a … --b …` on three HOLD summary JSONs.
+
+| Column | Arm |
+|---|---|
+| hang | `--combat-policy ppo` / `bh_v1` |
+| A | `jev-turn` assist off |
+| B | `jev-turn` assist on |
+
+Emits overall / elite / Boss WR table, Δ_A vs hang, Δ_B vs hang, Δ_assist (B−A) in **percentage points**. **Hang-gap STOP (locked):** trigger if **overall** Δ_A ≤ **−3.0pp** or overall Δ_B ≤ **−3.0pp** (hang baseline worsened by ≥3pp). Assist promotion bar remains **B−A** overall ≥ +3pp and Boss ≥ +2pp (unchanged). STOP does not replace dual-gate `passed` on a single summary file.
 
 ## Why not stepwise Jev
 
