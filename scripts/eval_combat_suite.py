@@ -87,6 +87,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--bh-assist",
+        choices=["off", "on"],
+        default="off",
+        help=(
+            "jev-turn only: inject bh_assist ranked_semantic + risk_notes into "
+            "plan Choice state/prompt when checkpoint loads (fail-open to "
+            "assist-off on missing ckpt or errors). Hang execution stays bh_v1."
+        ),
+    )
+    parser.add_argument(
+        "--bh-assist-ckpt",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Assist ranker npz (default "
+            "/workspace/sts2-sim/output/combat_bh_assist_v1/bh_assist_ranker.npz "
+            "or STS2_BH_ASSIST_CKPT)."
+        ),
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -224,6 +244,13 @@ def main(argv: list[str] | None = None) -> int:
     turn_plan_choice_cap = resolve_turn_plan_choice_cap(
         getattr(args, "turn_plan_choice_cap", None)
     )
+    from sts2_env.eval.bh_assist import resolve_turn_plan_bh_assist_from_flags
+
+    bh_assist_mode = str(getattr(args, "bh_assist", "off") or "off")
+    bh_assist_config = resolve_turn_plan_bh_assist_from_flags(
+        bh_assist=bh_assist_mode,
+        bh_assist_ckpt=getattr(args, "bh_assist_ckpt", None),
+    )
     choose_fn = None
     combat_jev_summary = None
     if workers == 1 and combat_policy == "jev":
@@ -273,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
                 env=env,
                 telemetry=telemetry,
                 turn_plan_choice_cap=turn_plan_choice_cap,
+                bh_assist_config=bh_assist_config,
             )
             return int(local)
 
@@ -288,6 +316,12 @@ def main(argv: list[str] | None = None) -> int:
         device=device,
         combat_policy=combat_policy,
         turn_plan_choice_cap=turn_plan_choice_cap,
+        bh_assist=bh_assist_mode if combat_policy == "jev-turn" else None,
+        bh_assist_ckpt=(
+            bh_assist_config.ckpt_path
+            if combat_policy == "jev-turn" and bh_assist_config is not None
+            else None
+        ),
     )
     n_fights = int(summary["overall"]["n"])
     if combat_jev_summary is not None:
@@ -321,6 +355,14 @@ def main(argv: list[str] | None = None) -> int:
         "combat_policy": combat_policy,
         "turn_plan_choice_cap": (
             turn_plan_choice_cap if combat_policy == "jev-turn" else None
+        ),
+        "bh_assist": bh_assist_mode if combat_policy == "jev-turn" else None,
+        "bh_assist_ckpt": (
+            bh_assist_config.ckpt_path
+            if combat_policy == "jev-turn"
+            and bh_assist_config is not None
+            and bh_assist_config.enabled
+            else None
         ),
         "combat_jev": combat_jev_payload,
     }

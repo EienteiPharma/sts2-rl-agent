@@ -285,6 +285,8 @@ def hold_eval_worker(payload: dict[str, Any]) -> dict[str, Any]:
     device = str(payload.get("device") or "cpu")
     combat_policy = str(payload.get("combat_policy") or "ppo")
     turn_plan_choice_cap = payload.get("turn_plan_choice_cap")
+    bh_assist = payload.get("bh_assist")
+    bh_assist_ckpt = payload.get("bh_assist_ckpt")
     max_steps = int(payload.get("max_steps", 400))
     jobs = [expand_hold_job(j) for j in payload.get("jobs") or []]
 
@@ -339,10 +341,15 @@ def hold_eval_worker(payload: dict[str, Any]) -> dict[str, Any]:
                 )
                 return int(local)
         else:
+            from sts2_env.eval.bh_assist import resolve_turn_plan_bh_assist_from_flags
             from sts2_env.eval.combat_jev import CombatJevTelemetry
             from sts2_env.eval.combat_turn_plan import choose_combat_turn_plan_action
 
             telemetry = CombatJevTelemetry()
+            bh_assist_config = resolve_turn_plan_bh_assist_from_flags(
+                bh_assist=str(bh_assist or "off"),
+                bh_assist_ckpt=bh_assist_ckpt,
+            )
 
             def choose_fn(env, obs, mask):
                 combat = getattr(env, "combat", None)
@@ -362,6 +369,7 @@ def hold_eval_worker(payload: dict[str, Any]) -> dict[str, Any]:
                         if turn_plan_choice_cap is not None
                         else None
                     ),
+                    bh_assist_config=bh_assist_config,
                 )
                 return int(local)
 
@@ -381,6 +389,8 @@ def run_hold_jobs_parallel(
     max_steps: int = 400,
     workers: int = 8,
     turn_plan_choice_cap: int | None = None,
+    bh_assist: str | None = None,
+    bh_assist_ckpt: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Spawn ProcessPool (same as collect). workers=1 calls hold_eval_worker in-process."""
     shards = split_hold_jobs(jobs, workers)
@@ -394,6 +404,8 @@ def run_hold_jobs_parallel(
                 "combat_policy": str(combat_policy or "ppo"),
                 "max_steps": int(max_steps),
                 "turn_plan_choice_cap": turn_plan_choice_cap,
+                "bh_assist": bh_assist,
+                "bh_assist_ckpt": bh_assist_ckpt,
                 "jobs": [compact_hold_job(j) for j in shard],
             }
         )
@@ -436,6 +448,8 @@ def run_hold_smoke(
     device: str = "cpu",
     combat_policy: str = "ppo",
     turn_plan_choice_cap: int | None = None,
+    bh_assist: str | None = None,
+    bh_assist_ckpt: str | None = None,
 ) -> dict[str, Any]:
     """Run HOLD episodes with a predict(obs, mask)->action callable. No SB3 import.
 
@@ -471,6 +485,8 @@ def run_hold_smoke(
             max_steps=max_steps,
             workers=n_workers,
             turn_plan_choice_cap=turn_plan_choice_cap,
+            bh_assist=bh_assist,
+            bh_assist_ckpt=bh_assist_ckpt,
         )
     summary = summarize_hold_rows(rows)
     summary["passed"] = hold_passes(summary)

@@ -661,14 +661,19 @@ def jev_turn_plan_questions(
     plans: Sequence[TurnPlanCandidate],
     *,
     prompt_config: "TurnPlanPromptConfig | None" = None,
+    bh_assist: Any | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Question map for system_one with board-aware instructions and criteria."""
+    from sts2_env.eval.bh_assist import bh_assist_instruction_suffix
+
     cfg = prompt_config or DEFAULT_TURN_PLAN_PROMPT_CONFIG
     instructions = _choice_instructions_with_board(board, COMBAT_TURN_PLAN_INSTRUCTIONS)
     if cfg.system_rules:
         instructions = COMBAT_TURN_PLAN_SYSTEM_RULES + " " + instructions
     if cfg.human_exemplars:
         instructions += " (See bundled exemplars in state when enabled.)"
+    if bh_assist is not None:
+        instructions += bh_assist_instruction_suffix(bh_assist)
     return {
         CHOICE_COMBAT_TURN_PLAN: build_combat_turn_plan_choice_question(
             plans, board=board, instructions=instructions
@@ -734,6 +739,7 @@ def build_turn_plan_jev_state(
     board: dict[str, Any],
     *,
     prompt_config: TurnPlanPromptConfig | None = None,
+    bh_assist: Any | None = None,
 ) -> dict[str, Any]:
     cfg = prompt_config or DEFAULT_TURN_PLAN_PROMPT_CONFIG
     state: dict[str, Any] = {
@@ -744,6 +750,8 @@ def build_turn_plan_jev_state(
         state["board"] = board
     if cfg.human_exemplars:
         state["human_exemplars"] = []
+    if bh_assist is not None:
+        state["bh_assist"] = bh_assist.as_dict()
     return state
 
 
@@ -856,6 +864,7 @@ def _pick_plan_via_jev(
     plans: Sequence[TurnPlanCandidate],
     *,
     prompt_config: TurnPlanPromptConfig | None = None,
+    bh_assist: Any | None = None,
 ) -> tuple[TurnPlanCandidate | None, str | None, str | None]:
     from sts2_env.eval.combat_jev import format_turn_plan_error_sample
 
@@ -863,8 +872,12 @@ def _pick_plan_via_jev(
         return None, CATA_FAILOPEN_EMPTY, None
     by_id = {p.plan_id: p for p in plans}
     cfg = prompt_config or DEFAULT_TURN_PLAN_PROMPT_CONFIG
-    state = build_turn_plan_jev_state(board, prompt_config=cfg)
-    questions = jev_turn_plan_questions(board, plans, prompt_config=cfg)
+    state = build_turn_plan_jev_state(
+        board, prompt_config=cfg, bh_assist=bh_assist
+    )
+    questions = jev_turn_plan_questions(
+        board, plans, prompt_config=cfg, bh_assist=bh_assist
+    )
     try:
         answers = adapter.system_one(state, questions)
     except JevError as e:
@@ -904,6 +917,7 @@ def choose_combat_turn_plan_action(
     runtime: TurnPlanRuntime | None = None,
     telemetry: Any = None,
     turn_plan_choice_cap: int | None = None,
+    bh_assist_config: Any | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Execute turn-plan path: pick ``plan_id``, run steps, replan on triggers.
 
@@ -1000,8 +1014,23 @@ def choose_combat_turn_plan_action(
         if pruned_n:
             record_turn_plan_choice_prune(telemetry, pruned_n)
         record_turn_plan_heuristic_scores(telemetry, score_summary, score_composites)
+        from sts2_env.eval.bh_assist import try_turn_plan_bh_assist
+
+        assist = try_turn_plan_bh_assist(
+            board,
+            legal_keys,
+            config=bh_assist_config,
+            combat_obs=combat_obs,
+            combat=combat,
+            mask=mask,
+            owner=owner_creature,
+        )
         picked, err, err_detail = _pick_plan_via_jev(
-            adapter, board, plans, prompt_config=cfg
+            adapter,
+            board,
+            plans,
+            prompt_config=cfg,
+            bh_assist=assist,
         )
         if err is not None:
             session.clear_plan()

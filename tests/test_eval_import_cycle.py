@@ -69,7 +69,8 @@ def test_eval_combat_suite_help_succeeds_without_combat_jev():
     assert "--workers" in proc.stdout
     assert "--combat-policy" in proc.stdout
     assert "experimental" in proc.stdout
-    assert "failed HOLD bypass" in proc.stdout
+    assert "failed stepwise HOLD" in proc.stdout
+    assert "--bh-assist" in proc.stdout
 
 
 def test_eval_combat_suite_help_does_not_import_combat_jev_module():

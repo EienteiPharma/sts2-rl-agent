@@ -74,6 +74,13 @@ def test_dry_run_manifest_default_outdir():
     assert payload["n_assist_rows"] > 0
 
 
+def test_load_bh_assist_ranker_missing_fail_open():
+    from sts2_env.eval.bh_assist import _RANKER_CACHE, load_bh_assist_ranker
+
+    _RANKER_CACHE.clear()
+    assert load_bh_assist_ranker("/no/such/bh_assist_ranker.npz") is None
+
+
 def test_bh_assist_heuristic_subset_of_legal():
     board = {
         "self": {"hp": 12, "max_hp": 70, "block": 0, "energy": 3, "hand": []},

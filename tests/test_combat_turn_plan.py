@@ -310,7 +310,122 @@ def test_runner_illegal_plan_catastrophe_fail_open():
     assert shadow["turn_plan_failopen_reason"] == CATA_FAILOPEN_ILLEGAL_PLAN
 
 
-def test_eval_combat_suite_accepts_jev_turn():
+def test_turn_plan_bh_assist_off_no_state_key():
+    class _CaptureAdapter(_PlanAdapter):
+        last_state = None
+
+        def system_one(self, state, questions):
+            type(self).last_state = state
+            return super().system_one(state, questions)
+
+    from sts2_env.eval.bh_assist import TurnPlanBhAssistConfig
+
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    keys = legal_semantic_keys(combat, mask)
+    board = serialize_combat_board_full(combat, mask)
+    raw = enumerate_candidate_plans(keys)
+    top, _pr, _sm, _co = cap_plans_for_turn_plan_choice(raw, board, max_choices=32)
+    _CaptureAdapter.last_state = None
+    choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        _Ppo(),
+        adapter=_CaptureAdapter(top[0].plan_id),
+        combat_obs=obs,
+        env=env,
+        bh_assist_config=TurnPlanBhAssistConfig(enabled=False),
+    )
+    env.close()
+    assert _CaptureAdapter.last_state is not None
+    assert "bh_assist" not in _CaptureAdapter.last_state
+
+
+def test_turn_plan_bh_assist_on_missing_ckpt_fail_open():
+    class _CaptureAdapter(_PlanAdapter):
+        last_state = None
+
+        def system_one(self, state, questions):
+            type(self).last_state = state
+            return super().system_one(state, questions)
+
+    import sts2_env.eval.bh_assist as bh_mod
+    from sts2_env.eval.bh_assist import TurnPlanBhAssistConfig
+
+    bh_mod._RANKER_CACHE.clear()
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    keys = legal_semantic_keys(combat, mask)
+    board = serialize_combat_board_full(combat, mask)
+    raw = enumerate_candidate_plans(keys)
+    top, _pr, _sm, _co = cap_plans_for_turn_plan_choice(raw, board, max_choices=32)
+    _CaptureAdapter.last_state = None
+    choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        _Ppo(),
+        adapter=_CaptureAdapter(top[0].plan_id),
+        combat_obs=obs,
+        env=env,
+        bh_assist_config=TurnPlanBhAssistConfig(
+            enabled=True, ckpt_path="/nonexistent/bh_assist_ranker.npz"
+        ),
+    )
+    env.close()
+    assert "bh_assist" not in (_CaptureAdapter.last_state or {})
+
+
+def test_turn_plan_bh_assist_on_fixture_injects_choice_payload(tmp_path):
+    class _CaptureAdapter(_PlanAdapter):
+        last_state = None
+        last_questions = None
+
+        def system_one(self, state, questions):
+            type(self).last_state = state
+            type(self).last_questions = questions
+            return super().system_one(state, questions)
+
+    import sts2_env.eval.bh_assist as bh_mod
+    from sts2_env.eval.bh_assist import TurnPlanBhAssistConfig
+    from sts2_env.eval.bh_assist_train import save_assist_checkpoint
+    from sts2_env.gym_env.observation import OBS_SIZE
+
+    bh_mod._RANKER_CACHE.clear()
+    ckpt = save_assist_checkpoint(
+        tmp_path,
+        {
+            "w": np.zeros(OBS_SIZE, dtype=np.float32),
+            "obs_size": np.array([OBS_SIZE], dtype=np.int64),
+        },
+        {"test": True},
+    )
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    keys = legal_semantic_keys(combat, mask)
+    board = serialize_combat_board_full(combat, mask)
+    raw = enumerate_candidate_plans(keys)
+    top, _pr, _sm, _co = cap_plans_for_turn_plan_choice(raw, board, max_choices=32)
+    _CaptureAdapter.last_state = None
+    choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        _Ppo(),
+        adapter=_CaptureAdapter(top[0].plan_id),
+        combat_obs=obs,
+        env=env,
+        bh_assist_config=TurnPlanBhAssistConfig(enabled=True, ckpt_path=str(ckpt)),
+    )
+    env.close()
+    assert "bh_assist" in _CaptureAdapter.last_state
+    assert _CaptureAdapter.last_state["bh_assist"]["ranked_semantic"]
+    instr = _CaptureAdapter.last_questions[CHOICE_COMBAT_TURN_PLAN]["instructions"]
+    assert "ranked_semantic" in instr.lower()
+
+
+def test_eval_combat_suite_accepts_jev_turn_and_bh_assist():
     import importlib.util
     import sys
     from pathlib import Path
@@ -324,6 +439,8 @@ def test_eval_combat_suite_accepts_jev_turn():
     args = mod.parse_args(["--combat-policy", "jev-turn"])
     assert args.combat_policy == "jev-turn"
     assert mod.parse_args([]).combat_policy == "ppo"
+    on = mod.parse_args(["--combat-policy", "jev-turn", "--bh-assist", "on"])
+    assert on.bh_assist == "on"
 
 
 def test_jev_turn_plan_telemetry_hook_and_report_rates():

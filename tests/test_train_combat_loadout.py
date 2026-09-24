@@ -315,7 +315,8 @@ def test_eval_combat_suite_cli_is_hang_hold():
     src = inspect.getsource(mod.parse_args)
     assert 'default="ppo"' in src
     assert "experimental" in src
-    assert "failed HOLD bypass" in src
+    assert "failed stepwise HOLD" in src
+    assert "--bh-assist" in src
     with pytest.raises(SystemExit, match="loadout_v1"):
         mod.main(["--suite", "bare"])
 
