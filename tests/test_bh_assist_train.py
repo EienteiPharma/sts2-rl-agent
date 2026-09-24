@@ -10,6 +10,8 @@ import pytest
 
 from sts2_env.eval.bh_assist import bh_assist
 from sts2_env.eval.bh_assist_train import (
+    ASSIST_EVAL_MIN_BOSS_PP,
+    ASSIST_EVAL_MIN_OVERALL_PP,
     DEFAULT_BH_ASSIST_OUTDIR,
     build_assist_rows_from_buffer,
     dry_run_manifest,
@@ -19,6 +21,16 @@ from sts2_env.eval.bh_assist_train import (
     train_linear_assist_ranker,
 )
 from sts2_env.gym_env.combat_buffer import HUNG_OUTDIR_NAME, synthetic_combat_buffer
+
+
+def test_pretrain_eval_gate_constants_match_contract():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "docs" / "BH_ASSIST_CONTRACT.md").read_text(encoding="utf-8")
+    assert "Pre-train eval gates" in text
+    assert "+3pp" in text and "+2pp" in text
+    assert "--workers 4" in text
+    assert ASSIST_EVAL_MIN_OVERALL_PP == 3
+    assert ASSIST_EVAL_MIN_BOSS_PP == 2
 
 
 def test_refuses_hang_outdir():

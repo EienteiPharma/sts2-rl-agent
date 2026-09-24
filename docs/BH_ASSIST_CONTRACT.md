@@ -1,6 +1,6 @@
 # bh_assist contract (track 2)
 
-**Status:** train entry present (`scripts/train_bh_assist_from_buffer.py`, `sts2_env/eval/bh_assist_train.py`). Default outdir `output/combat_bh_assist_v1`. **No hang runtime swap** — execution stays `bh_v1` / `--combat-policy ppo`. Eval±assist HOLD dual gate is **later**; do not treat assist as primary actor.  
+**Status:** train entry present (`scripts/train_bh_assist_from_buffer.py`, `sts2_env/eval/bh_assist_train.py`). Default outdir `output/combat_bh_assist_v1`. **No hang runtime swap** — execution stays `bh_v1` / `--combat-policy ppo`. **Pre-train eval gates** (assist-on vs assist-off) are locked below; hang dual gate vs `bh_v1` unchanged (`docs/HOLD_PROTOCOL.md`). Do not treat assist as primary actor.  
 **Successor to:** abandoned stepwise `combat_step_choice` / `--combat-policy jev` (see `docs/COMBAT_JEV_HOLD_FAIL.md`).  
 **Related:** turn-plan path A in `sts2_env/eval/combat_turn_plan.py`; hang execution stays **`bh_v1`** until a future **turn-plan HOLD** clears.
 
@@ -51,7 +51,7 @@ It is **not** the combat decision engine:
 
 - Does **not** replace `MaskablePPO.predict` on the hang path.
 - Does **not** own turn execution; at most informs `combat_turn_plan_choice` (plan pick among code-enumerated plans) in a **later** tip after HOLD.
-- Live HTTP belongs in a future adapter; this tip keeps **offline-safe** stub only (`sts2_env/eval/bh_assist.py`).
+- Live HTTP belongs in a future adapter; runtime hints today are heuristic-only (`sts2_env/eval/bh_assist.py`) until eval gates pass and wiring lands.
 
 Suggested call flow (future, not wired on tip④):
 
@@ -73,6 +73,37 @@ plans ← enumerate_candidate_plans(keys)
 - **Hard ban:** no `MaskablePPO.learn` / no `--continue-from` hang zip on this path.
 - Labels target Jev-facing **`ranked_semantic`** (subset/reorder of legal keys) and **`risk_notes`**; buffer v1 uses partial semantic proxy (`end_turn` when expert ends turn) — full semantic labels when collect adds board keys is a later tip.
 - Runtime `bh_assist()` uses heuristic rank + risk notes until checkpoint wiring lands in a later tip.
+
+## Pre-train eval gates (Lab / Jev lock)
+
+Run **before** promoting a trained assist checkpoint into turn-plan Choice wiring. Hang step execution remains **`bh_v1`** (`--combat-policy ppo` on the hang zip); assist is hints only and must **not** replace hang policy or swap the frozen zip.
+
+### Contrast arms (same HOLD protocol)
+
+| Arm | Combat policy | Assist |
+|---|---|---|
+| **A** | `jev-turn` | off |
+| **B** | `jev-turn` | on (`bh_assist` hints in plan Choice state/prompt) |
+
+Both arms use the same hung combat zip for **execution** (plan steps / fail-open catastrophe path still fail-open to `bh_v1`, not assist-as-actor). Do not use stepwise `combat_step_choice` or `--combat-policy jev`.
+
+### Protocol
+
+- **Smoke (diagnostic):** `scripts/eval_combat_suite.py --suite loadout_v1 --workers 1` (`w1` single-worker) on A and B; inspect telemetry (`jev_fulfilled_rate`, catastrophe reasons, `pruned_count`, `turn_plan_heuristic_score`) before formal runs.
+- **Formal:** same script with **`--workers 4`** (Lab EP formal HOLD shape).
+
+### Assist effectiveness bar (A vs B on `jev-turn`)
+
+Assist counts as **effective** only if arm B beats arm A on loadout_v1 HOLD win rates by:
+
+- **overall ≥ +3pp** (percentage points), **and**
+- **Boss ≥ +2pp**
+
+Report Δ as `B − A` on overall / elite / Boss columns from the suite summary JSON. This bar is **assist-on vs assist-off** on the turn-plan arm; it does **not** replace the hang-table dual gate (overall ≥70 / Boss ≥40 vs frozen `bh_v1` ppo baseline).
+
+### Collapse / STOP (still applies)
+
+Any HOLD run that includes hang comparison still uses existing **collapse STOP** thresholds vs hang arm A (`--combat-policy ppo` / `bh_v1`) where Lab protocol requires it (large negative Δ vs 74.2 / 49.4 table — see `docs/HOLD_PROTOCOL.md`, `docs/COMBAT_JEV_HOLD_FAIL.md`). The **+3 / +2** rule above is additional: even without hang collapse, assist-off vs assist-on must clear the effectiveness bar before train promotion.
 
 ## Why not stepwise Jev
 
