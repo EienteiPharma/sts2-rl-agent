@@ -159,6 +159,13 @@ def test_collect_cli_hang_defaults():
         collect_mod.parse_args(["--policy", "off"])
 
 
+def test_jev_off_defaults_combat_model():
+    args = collect_mod.parse_args(["--jev", "off", "--dry-run"])
+    assert args.jev_enabled is False
+    assert args.combat_policy_resolved == "model"
+    assert args.noncombat_policy == "ppo"
+
+
 def test_colab_v1_collect_dry_run_no_typesafe(monkeypatch):
     called = {"jev": 0, "typesafe": 0}
 
@@ -191,7 +198,7 @@ def test_colab_v1_collect_dry_run_no_typesafe(monkeypatch):
                 "--policy-zip",
                 "output/combat_ppo_obs_v1_bh_v1/final_model.zip",
                 "--out",
-                "output/runenv_combat_buffer_colab_v1/transitions.npz",
+                "/workspace/sts2-sim/output/runenv_combat_buffer_colab_v1/transitions.npz",
                 "--n-envs",
                 "8",
                 "--n-steps",

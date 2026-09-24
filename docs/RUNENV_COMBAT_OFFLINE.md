@@ -29,7 +29,7 @@ Process env is **not** assumed to be pre-injected. `collect_runenv_combat.py` / 
 
 On Cloudflare **1010** / HTTP **403** the client rotates to the next key and backs off ~1s. MAP/CARD stay Jev (not random). Round-robin: `keys[worker_id % len(keys)]`. First collect recipe: **`--n-envs 2–4`**.
 
-**Opt-in colab_v1 (no TypeSafe):** `python scripts/collect_runenv_combat.py --jev off --noncombat-policy ppo --combat-policy ppo --policy-zip output/combat_ppo_obs_v1_bh_v1/final_model.zip --out output/runenv_combat_buffer_colab_v1/transitions.npz --n-envs 8 --n-steps 500000` — start receipt must show `Jev=off TypeSafe=off`; never write `runenv_combat_buffer_ep/`.
+**Opt-in colab_v1 (no TypeSafe):** `python scripts/collect_runenv_combat.py --jev off --noncombat-policy ppo --combat-policy ppo --policy-zip /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --out /workspace/sts2-sim/output/runenv_combat_buffer_colab_v1/transitions.npz --n-envs 8 --n-steps 500000` — start receipt line `Jev=off TypeSafe=off`; never write `runenv_combat_buffer_ep/`. Non-combat MAP/REST/CARD: bh_v1 PPO fail-open to legal random (combat obs only).
 
 ```bash
 # Surplus launch — no user re-paste. Pool loads from box-secrets automatically.

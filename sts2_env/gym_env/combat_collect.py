@@ -174,6 +174,7 @@ def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
             "noncombat_policy": cfg.noncombat_policy,
             "jev": "on" if cfg.jev_enabled else "off",
             "typesafe": "on" if cfg.jev_enabled else "off",
+            "assist_v3": "off" if not cfg.jev_enabled else None,
             "n_steps_requested": n_steps,
             "seed": seed,
         }

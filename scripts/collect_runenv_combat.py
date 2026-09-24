@@ -70,6 +70,9 @@ def normalize_collect_args(args: argparse.Namespace) -> argparse.Namespace:
         args.model = args.policy_zip
     if not args.jev_enabled:
         args.noncombat_model = args.noncombat_model or args.model
+        if args.combat_policy is None and args.policy == "random":
+            args.policy = "model"
+        args.combat_policy_resolved = _resolve_combat_policy(args)
     return args
 
 
@@ -256,7 +259,9 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
 
     print("Collecting hang-protocol RunEnv combat segments")
     if not args.jev_enabled:
-        print(f"Jev=off TypeSafe=off policy_zip={args.model}")
+        print("Jev=off TypeSafe=off")
+        print(f"  policy_zip: {args.model}")
+        print("  assist_v3: off (collect path; no jev-turn)")
     print("  out:       ", out)
     print("  n_steps:   ", args.n_steps)
     print("  n_envs:    ", args.n_envs)

@@ -36,7 +36,9 @@ FROZEN_OUTDIR_NAMES = (
     ANTIFORGET_FROZEN_OUTDIR,
 )
 PROTECTED_COLLECT_DIR_NAMES = ("runenv_combat_buffer_ep",)
-COLAB_V1_COLLECT_OUT = "output/runenv_combat_buffer_colab_v1/transitions.npz"
+COLAB_V1_COLLECT_OUT = (
+    "/workspace/sts2-sim/output/runenv_combat_buffer_colab_v1/transitions.npz"
+)
 
 
 def hang_protocol_meta() -> dict[str, Any]:
