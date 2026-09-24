@@ -1,6 +1,6 @@
-# bh_assist contract (track 2, design-only)
+# bh_assist contract (track 2)
 
-**Status:** tip④ design lock on branch `cursor/hierarchical-runenv-eval-987c`. **No train.** **No hang runtime change.**  
+**Status:** train entry present (`scripts/train_bh_assist_from_buffer.py`, `sts2_env/eval/bh_assist_train.py`). Default outdir `output/combat_bh_assist_v1`. **No hang runtime swap** — execution stays `bh_v1` / `--combat-policy ppo`. Eval±assist HOLD dual gate is **later**; do not treat assist as primary actor.  
 **Successor to:** abandoned stepwise `combat_step_choice` / `--combat-policy jev` (see `docs/COMBAT_JEV_HOLD_FAIL.md`).  
 **Related:** turn-plan path A in `sts2_env/eval/combat_turn_plan.py`; hang execution stays **`bh_v1`** until a future **turn-plan HOLD** clears.
 
@@ -11,7 +11,7 @@
 | Jev-callable **advisory** helper on a full combat **board** | Primary combat actor |
 | Ranked **semantic** step hints + **risk notes** | `MaskablePPO.predict` as hang policy |
 | State tidy for prompts (deterministic, code-side) | `combat_step_choice` or opaque `aN` ids |
-| Contract + optional stub only on this tip | Training, collect, zip swap, eval flag changes |
+| Contract + offline train entry (assist ranker, not hang PPO) | Hang zip swap, eval flag changes, wired turn-plan Choice |
 
 Hang combat execution remains **`--combat-policy ppo`** on hung zip `combat_ppo_obs_v1_bh_v1` (`bh_v1`). Noncombat Jev (MAP / REST / CARD) unchanged. Dual gate unchanged: `docs/HOLD_PROTOCOL.md`, `docs/HANG_PROTOCOL_2026-09-22.md`.
 
@@ -65,11 +65,14 @@ plans ← enumerate_candidate_plans(keys)
 # Step execution: still bh_v1 per plan step until turn-plan HOLD clears
 ```
 
-## Train ban (tip④)
+## Train entry (assist-only)
 
-- No `learn`, no new transitions, no change to `continue-from` / frozen outdirs (`bh_v1`, onpolicy_v1, antiforget_v1).
-- No new eval arms that treat assist output as policy.
-- Lab may add tests **only** for pure board/tidy invariants in a later tip; not required here.
+- Script: `scripts/train_bh_assist_from_buffer.py` (buffer → linear assist ranker + manifest).
+- Outdir: `output/combat_bh_assist_v1` (or `--output-dir` with `refuse_bh_assist_output_path` guard).
+- **Hard ban:** never write into `combat_ppo_obs_v1_bh_v1`, `combat_runenv_onpolicy_v1`, `combat_runenv_antiforget_v1`, or overwrite hang `final_model.zip`.
+- **Hard ban:** no `MaskablePPO.learn` / no `--continue-from` hang zip on this path.
+- Labels target Jev-facing **`ranked_semantic`** (subset/reorder of legal keys) and **`risk_notes`**; buffer v1 uses partial semantic proxy (`end_turn` when expert ends turn) — full semantic labels when collect adds board keys is a later tip.
+- Runtime `bh_assist()` uses heuristic rank + risk notes until checkpoint wiring lands in a later tip.
 
 ## Why not stepwise Jev
 
@@ -77,4 +80,4 @@ HOLD smoke collapsed twice with Jev **selecting combat steps** (`combat_step_cho
 
 ## Stub
 
-Reference signature (raises until implemented): `sts2_env/eval/bh_assist.py`.
+Reference API: `sts2_env/eval/bh_assist.py` (heuristic hints); train helpers: `sts2_env/eval/bh_assist_train.py`.
