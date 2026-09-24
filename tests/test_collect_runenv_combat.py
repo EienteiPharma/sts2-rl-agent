@@ -238,18 +238,52 @@ def test_select_noncombat_jev_off_never_calls_jev(monkeypatch):
     class _Env:
         _mgr = None
 
-    action, tag = select_runenv_noncombat_action(
-        _Env(),
-        np.array([0, 1, 0]),
-        np.random.RandomState(0),
-        jev_enabled=False,
-        noncombat_policy="ppo",
-        jev_adapter=None,
-        jev_flags=hang_jev_flags(),
-        ppo_model=None,
+    with pytest.raises(ValueError, match="requires loaded bh_v1"):
+        select_runenv_noncombat_action(
+            _Env(),
+            np.array([0, 1, 0]),
+            np.random.RandomState(0),
+            jev_enabled=False,
+            noncombat_policy="ppo",
+            jev_adapter=None,
+            jev_flags=hang_jev_flags(),
+            ppo_model=None,
+        )
+
+
+def test_bh_v1_noncombat_map_proxy_ppo_tag():
+    from sts2_env.gym_env.run_env import _LAYOUT
+    from sts2_env.gym_env.runenv_onpolicy_combat import (
+        build_bh_v1_noncombat_proxy_mask,
+        select_bh_v1_noncombat_action,
     )
-    assert action in (1,)
-    assert tag == "noncombat_ppo_failopen_random"
+    from sts2_env.run.run_manager import RunManager
+
+    class _Mgr:
+        phase = RunManager.PHASE_MAP_CHOICE
+
+    class _Env:
+        _mgr = _Mgr()
+
+        def _encode_obs(self):
+            return np.zeros(201, dtype=np.float32)
+
+    mask = np.zeros(157, dtype=np.int8)
+    mask[_LAYOUT.map_start] = 1
+    mask[_LAYOUT.map_start + 1] = 1
+
+    _cm, local_to_run, tag = build_bh_v1_noncombat_proxy_mask(_Env(), mask)
+    assert tag == "map_proxy"
+    assert len(local_to_run) == 2
+
+    class _PPO:
+        def predict(self, obs, action_masks=None, deterministic=False):
+            assert obs.shape == (OBS_SIZE,)
+            return 1, None
+
+    action, ptag = select_bh_v1_noncombat_action(_Env(), mask, _PPO())
+    assert ptag == "noncombat_ppo_bh_v1_map_proxy"
+    assert action == _LAYOUT.map_start + 1
 
 
 def test_collect_dry_run_hang_flags():

@@ -337,7 +337,7 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "note": (
             "Jev stays on collect; train_combat_from_buffer.py is the learn half"
             if args.jev_enabled
-            else "colab_v1: non-combat PPO fail-open random; zero TypeSafe calls"
+            else "colab_v1: non-combat bh_v1 MaskablePPO (181-d obs + phase proxy mask); zero TypeSafe"
         ),
     }
 
@@ -356,6 +356,10 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
     combat_policy = args.combat_policy_resolved
     if combat_policy in ("model", "ppo") and not Path(args.model).is_file():
         raise SystemExit(f"collect combat zip not found: {args.model}")
+    if args.noncombat_policy == "ppo":
+        nc_zip = args.noncombat_model or args.model
+        if not nc_zip or not Path(nc_zip).is_file():
+            raise SystemExit(f"collect noncombat bh_v1 zip not found: {nc_zip}")
     flags = hang_jev_flags()
     if args.jev_enabled:
         from sts2_env.eval.jev import load_typesafe_api_keys, typesafe_key_pool_summary, warn_n_envs

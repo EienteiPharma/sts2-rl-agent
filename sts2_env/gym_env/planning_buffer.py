@@ -26,7 +26,7 @@ PLANNING_DEFAULT_OUT = f"{PLANNING_DIR}/planning_transitions.npz"
 PLANNING_DEFAULT_JSONL = f"{PLANNING_DIR}/planning_steps.jsonl"
 PLANNING_SHARDS_SUBDIR = "shards"
 
-# Empirical shard0 (500k combat steps, w=8): planning_v0 n≈44158 — not a crash artifact.
+# Empirical shard0 (500k combat steps, w=8): planning_v0 n≈44158 — fail-open random era; not training-grade alone.
 EMPIRICAL_COMBAT_STEPS_V0 = 500_000
 EMPIRICAL_PLANNING_ROWS_V0 = 44_158
 EMPIRICAL_PLANNING_YIELD_V0 = EMPIRICAL_PLANNING_ROWS_V0 / EMPIRICAL_COMBAT_STEPS_V0

@@ -15,15 +15,21 @@ from sts2_env.gym_env.planning_buffer import (
 )
 from sts2_env.gym_env.run_env import RUN_OBS_SIZE, TOTAL_ACTIONS
 
-# Remaining planning rows after shard0/v0 (~44158 recorded).
+# v0 yield used fail-open random tags; remeasure after bh_v1 noncombat PPO before scaling n_steps.
 _REMAINING = PLANNING_TARGET_ROWS - EMPIRICAL_PLANNING_ROWS_V0
-RESUME_N_STEPS = combat_steps_for_planning_rows(_REMAINING)
+_RESUME_N_STEPS_FAILOPEN_EST = combat_steps_for_planning_rows(_REMAINING)
 
-RESUME_CLI = (
+RESUME_SMOKE_CLI = (
     "python scripts/collect_runenv_combat.py --planning-only --jev off "
     "--noncombat-policy ppo --combat-policy ppo "
     "--policy-zip /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip "
-    f"--planning-shard shard01 --n-envs 8 --n-steps {RESUME_N_STEPS}"
+    "--planning-shard shard01 --n-envs 8 --n-steps 50000"
+)
+
+RESUME_CLI = (
+    RESUME_SMOKE_CLI
+    + "  # then: n_steps ≈ ceil(remaining_planning / measured_yield); "
+    f"failopen-era est was {_RESUME_N_STEPS_FAILOPEN_EST} — do not use until remeasured"
 )
 
 
@@ -34,13 +40,18 @@ def main() -> None:
     print("v0_backup_readonly:", PLANNING_V0_BACKUP_DIR)
     print("merged_shard0:", PLANNING_DEFAULT_OUT, f"(n≈{EMPIRICAL_PLANNING_ROWS_V0}; do not overwrite)")
     print("keys:", ", ".join(PLANNING_REQUIRED_KEYS))
-    print("yield_v0:", EMPIRICAL_PLANNING_YIELD_V0, "planning_rows / combat_step")
     print(
-        "formula: n_steps_total ≈ ceil(target_planning / yield); "
-        f"500k planning ≈ {combat_steps_for_planning_rows(PLANNING_TARGET_ROWS)} combat steps (w=8 splits n_steps)"
+        "yield_v0_failopen_era:",
+        EMPIRICAL_PLANNING_YIELD_V0,
+        "planning_rows/combat_step (noncombat_ppo_failopen_random; not for collect planning)",
+    )
+    print(
+        "formula: n_steps_total ≈ ceil(target_planning / measured_yield); "
+        f"failopen-era 500k planning ≈ {combat_steps_for_planning_rows(PLANNING_TARGET_ROWS)} combat steps — unverified post bh_v1 PPO"
     )
     print("combat_readonly:", COLAB_V1_COLLECT_OUT)
-    print("resume_shard01:", RESUME_CLI)
+    print("resume_smoke_shard01:", RESUME_SMOKE_CLI)
+    print("resume_shard01_note:", RESUME_CLI)
 
 
 if __name__ == "__main__":

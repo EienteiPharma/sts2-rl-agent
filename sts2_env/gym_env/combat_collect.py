@@ -135,9 +135,11 @@ def collect_worker(payload: dict[str, Any]) -> dict[str, Any]:
         load_typesafe_api_keys()
 
     noncombat_ppo = None
-    if cfg.noncombat_policy == "ppo" and cfg.noncombat_model:
-        if Path(cfg.noncombat_model).is_file():
-            noncombat_ppo = _load_maskable_ppo(cfg.noncombat_model)
+    if cfg.noncombat_policy == "ppo":
+        model_path = cfg.noncombat_model
+        if not model_path or not Path(model_path).is_file():
+            raise SystemExit(f"collect noncombat bh_v1 zip not found: {model_path}")
+        noncombat_ppo = _load_maskable_ppo(model_path)
 
     planning_recorder = PlanningStepRecorder() if cfg.planning_out else None
     env = RunEnvOnPolicyCombatEnv(

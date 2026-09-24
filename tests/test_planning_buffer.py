@@ -36,7 +36,7 @@ def test_planning_recorder_stack_and_validate(tmp_path: Path):
         done=False,
         action_mask=mask,
         phase=RunManager.PHASE_MAP_CHOICE,
-        policy_tag="noncombat_ppo_failopen_random",
+        policy_tag="noncombat_ppo_bh_v1_map_proxy",
     )
     arrays = rec.to_arrays()
     assert arrays is not None
@@ -47,7 +47,7 @@ def test_planning_recorder_stack_and_validate(tmp_path: Path):
     save_planning_buffer(out, arrays)
     loaded = dict(np.load(out, allow_pickle=True))
     validate_planning_buffer(loaded)
-    assert loaded["policy_tag"][0] == "noncombat_ppo_failopen_random"
+    assert loaded["policy_tag"][0] == "noncombat_ppo_bh_v1_map_proxy"
 
 
 def test_planning_skips_combat_phase():
@@ -156,4 +156,4 @@ def test_colab_v1_dry_run_includes_planning_out():
     assert report["planning_out"] is None
     report2 = mod.dry_run(mod.parse_args(["--dry-run", "--jev", "off"]))
     assert report2["planning_out"] == PLANNING_DEFAULT_OUT
-    assert "151" in report2["planning_schema"]
+    assert "201" in report2["planning_schema"]

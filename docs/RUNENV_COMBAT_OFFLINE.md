@@ -29,9 +29,9 @@ Process env is **not** assumed to be pre-injected. `collect_runenv_combat.py` / 
 
 On Cloudflare **1010** / HTTP **403** the client rotates to the next key and backs off ~1s. MAP/CARD stay Jev (not random). Round-robin: `keys[worker_id % len(keys)]`. First collect recipe: **`--n-envs 2–4`**.
 
-**Opt-in colab_v1 (no TypeSafe):** `python scripts/collect_runenv_combat.py --jev off --noncombat-policy ppo --combat-policy ppo --policy-zip /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --out /workspace/sts2-sim/output/runenv_combat_buffer_colab_v1/transitions.npz --n-envs 8 --n-steps 500000` — start receipt line `Jev=off TypeSafe=off`; never write `runenv_combat_buffer_ep/`. Non-combat MAP/REST/CARD: bh_v1 PPO fail-open to legal random (combat obs only).
+**Opt-in colab_v1 (no TypeSafe):** `python scripts/collect_runenv_combat.py --jev off --noncombat-policy ppo --combat-policy ppo --policy-zip /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --out /workspace/sts2-sim/output/runenv_combat_buffer_colab_v1/transitions.npz --n-envs 8 --n-steps 500000` — start receipt line `Jev=off TypeSafe=off`; never write `runenv_combat_buffer_ep/`. Non-combat MAP/REST/CARD/…: **bh_v1 MaskablePPO** on combat **obs_v1 181-d** with phase **proxy action mask** (`policy_tag` `noncombat_ppo_bh_v1_*`; no fail-open random).
 
-**Planning (full combat colab_v1 already n=500k — do not overwrite):** `--planning-only --jev off` → `/workspace/sts2-sim/output/runenv_planning_buffer_colab_v1/planning_transitions.npz` (+ optional `planning_steps_wXX.jsonl`); schema `obs/next_obs`(151), `action`/`action_mask`(157), `reward`, `done`, `phase_code`, `policy_tag`. One-liner: `python scripts/export_planning_buffer_schema.py`.
+**Planning (combat colab_v1 + v0 backup read-only):** canonical **obs 201** (181 combat obs_v1 + 20 run tail). Shard0/v0 **44158** rows used pre-fix fail-open tags — backup at `runenv_planning_buffer_colab_v0/` only. Remeasure planning yield after real bh_v1 noncombat PPO before scaling `--n-steps` (do not reuse fail-open **~5.66M** estimate). Resume: `--planning-shard shard01` → new file under `…/shards/` (never overwrite merged/v0). Smoke/resume CLI: `python scripts/export_planning_buffer_schema.py`.
 
 ```bash
 # Surplus launch — no user re-paste. Pool loads from box-secrets automatically.

@@ -33,6 +33,7 @@ from sts2_env.gym_env.run_env import (
     STS2RunEnv,
     _COMBAT_SIZE,
     _COMBAT_START,
+    _LAYOUT,
 )
 from sts2_env.run.run_manager import RunManager
 
@@ -139,6 +140,110 @@ def legal_random_runenv_action(mask, rng: np.random.RandomState) -> int:
     return int(rng.choice(valid))
 
 
+def runenv_obs_v1_for_bh_v1(env: STS2RunEnv) -> np.ndarray:
+    """Combat obs_v1 prefix of RunEnv observation (181-d; canonical for bh_v1 zip)."""
+    run_obs = env._encode_obs()
+    return np.asarray(run_obs[:OBS_SIZE], dtype=np.float32)
+
+
+def build_bh_v1_noncombat_proxy_mask(
+    env: STS2RunEnv,
+    run_mask,
+) -> tuple[np.ndarray, dict[int, int], str]:
+    """Project RunEnv legal actions into bh_v1 combat mask + local→run index map."""
+    rm = np.asarray(run_mask, dtype=np.int8).reshape(-1)
+    layout = _LAYOUT
+    cm = np.zeros(ACTION_SPACE_SIZE, dtype=np.int8)
+    local_to_run: dict[int, int] = {}
+
+    for i in range(min(ACTION_SPACE_SIZE, len(rm))):
+        if rm[i] == 1:
+            cm[i] = 1
+            local_to_run[i] = i
+    if int(cm.sum()) >= 1:
+        return cm, local_to_run, "combat_slice"
+
+    mgr = getattr(env, "_mgr", None)
+    phase = mgr.phase if mgr is not None else None
+    run_indices: list[int] = []
+
+    def _collect(start: int, size: int) -> list[int]:
+        out: list[int] = []
+        for i in range(int(size)):
+            idx = int(start) + i
+            if idx < len(rm) and rm[idx] == 1:
+                out.append(idx)
+        return out
+
+    if phase == RunManager.PHASE_MAP_CHOICE:
+        run_indices = _collect(layout.map_start, layout.map_size)
+        tag = "map_proxy"
+    elif phase == RunManager.PHASE_REST_SITE:
+        run_indices = _collect(layout.rest_start, layout.rest_size)
+        tag = "rest_proxy"
+    elif phase == RunManager.PHASE_CARD_REWARD:
+        run_indices = _collect(layout.card_reward_start, layout.card_reward_size)
+        run_indices.extend(_collect(layout.card_reward_extra_start, layout.card_reward_extra_size))
+        if layout.card_reward_reroll < len(rm) and rm[layout.card_reward_reroll] == 1:
+            run_indices.append(layout.card_reward_reroll)
+        tag = "card_proxy"
+    elif phase == RunManager.PHASE_BOSS_RELIC:
+        run_indices = _collect(layout.boss_relic_start, layout.boss_relic_size)
+        tag = "boss_proxy"
+    elif phase == RunManager.PHASE_SHOP:
+        run_indices = _collect(layout.shop_start, layout.shop_size)
+        tag = "shop_proxy"
+    elif phase == RunManager.PHASE_EVENT:
+        run_indices = _collect(layout.event_start, layout.event_size)
+        tag = "event_proxy"
+    elif phase == RunManager.PHASE_TREASURE:
+        run_indices = _collect(layout.treasure_start, layout.treasure_size)
+        tag = "treasure_proxy"
+    else:
+        run_indices = _collect(layout.player_select_start, layout.player_select_size)
+        tag = "player_select_proxy"
+
+    if not run_indices:
+        raise ValueError(f"noncombat bh_v1 PPO: no legal proxy actions phase={phase}")
+
+    for local, run_a in enumerate(run_indices):
+        if local >= ACTION_SPACE_SIZE:
+            break
+        cm[local] = 1
+        local_to_run[local] = int(run_a)
+    return cm, local_to_run, tag
+
+
+def select_bh_v1_noncombat_action(
+    env: STS2RunEnv,
+    run_mask,
+    ppo_model: Any,
+) -> tuple[int, str]:
+    """MaskablePPO bh_v1 step for MAP/REST/CARD/etc. (no fail-open random)."""
+    if ppo_model is None:
+        raise ValueError("noncombat PPO requires loaded bh_v1 MaskablePPO")
+    combat_mask, local_to_run, tag = build_bh_v1_noncombat_proxy_mask(env, run_mask)
+    obs = runenv_obs_v1_for_bh_v1(env)
+    local, _ = ppo_model.predict(
+        obs,
+        action_masks=combat_mask,
+        deterministic=False,
+    )
+    local = int(local)
+    if local not in local_to_run:
+        legal = np.flatnonzero(combat_mask == 1)
+        if legal.size == 0:
+            raise ValueError("noncombat bh_v1 PPO: empty proxy mask after predict")
+        local = int(legal[0])
+    run_action = int(local_to_run[local])
+    rm = np.asarray(run_mask, dtype=np.int8)
+    if run_action >= len(rm) or rm[run_action] != 1:
+        raise ValueError(
+            f"noncombat bh_v1 PPO: mapped action {run_action} illegal phase={tag}"
+        )
+    return run_action, f"noncombat_ppo_bh_v1_{tag}"
+
+
 def select_runenv_noncombat_action(
     env: STS2RunEnv,
     mask,
@@ -162,24 +267,7 @@ def select_runenv_noncombat_action(
         return int(action), "jev"
 
     if noncombat_policy == NONCOMBAT_POLICY_PPO:
-        # bh_v1 MaskablePPO is combat obs_v1 only; MAP/REST/CARD use fail-open legal random.
-        if ppo_model is not None and is_combat_phase(env):
-            try:
-                combat_obs = combat_observation(env)
-                combat_mask = combat_action_mask(env)
-                if int(combat_mask.sum()) >= 1:
-                    action, _ = ppo_model.predict(
-                        np.asarray(combat_obs),
-                        action_masks=combat_mask,
-                        deterministic=False,
-                    )
-                    return to_runenv_combat_action(int(action)), "noncombat_ppo_combat_slice"
-            except Exception:
-                pass
-        return (
-            legal_random_runenv_action(mask, rng),
-            "noncombat_ppo_failopen_random",
-        )
+        return select_bh_v1_noncombat_action(env, mask, ppo_model)
 
     return legal_random_runenv_action(mask, rng), "legal_random"
 
