@@ -59,6 +59,8 @@ FAILOPEN_LOW_CONF = "low_conf"
 FAILOPEN_EMPTY_LIST = "empty_list"
 FAILOPEN_ILLEGAL_PLAN = "illegal_plan"
 FAILOPEN_REPLAN_CAP = "replan_cap"
+FAILOPEN_MISSING_HUNG_PPO = "missing_hung_ppo"
+TURN_PLAN_ERROR_SAMPLE_MAX = 8
 COMBAT_JEV_FAILOPEN_REASONS = (
     FAILOPEN_TIMEOUT,
     FAILOPEN_ERROR,
@@ -73,6 +75,7 @@ COMBAT_JEV_TURN_CATASTROPHE_REASONS = (
     FAILOPEN_EMPTY_LIST,
     FAILOPEN_ILLEGAL_PLAN,
     FAILOPEN_REPLAN_CAP,
+    FAILOPEN_MISSING_HUNG_PPO,
 )
 
 _KEY_POWERS = (
@@ -316,6 +319,48 @@ def hung_ppo_local(
     return max(0, min(local, ACTION_SPACE_SIZE - 1))
 
 
+def _legal_end_turn_fallback(combat_mask: np.ndarray) -> int:
+    mask = np.asarray(combat_mask)
+    if mask.size > ACTION_END_TURN and int(mask[ACTION_END_TURN]) == 1:
+        return ACTION_END_TURN
+    valid = np.flatnonzero(mask == 1)
+    if valid.size:
+        return int(valid[0])
+    return ACTION_END_TURN
+
+
+def fail_open_bh_v1_required(
+    combat_model: Any,
+    combat_obs: np.ndarray,
+    combat_mask: np.ndarray,
+) -> tuple[int, str | None]:
+    """Turn-plan catastrophe fail-open: hung bh_v1 only (no random legal fallback)."""
+    if combat_model is None:
+        return _legal_end_turn_fallback(combat_mask), FAILOPEN_MISSING_HUNG_PPO
+    try:
+        local = hung_ppo_local(combat_model, combat_obs, combat_mask)
+    except Exception:
+        local = None
+    if local is None:
+        return _legal_end_turn_fallback(combat_mask), FAILOPEN_MISSING_HUNG_PPO
+    return local, None
+
+
+def format_turn_plan_error_sample(exc: BaseException, *, max_len: int = 320) -> str:
+    """Bounded type+message (+ one traceback line) for jev-turn telemetry."""
+    import traceback
+
+    head = f"{type(exc).__name__}: {exc}"
+    tb = traceback.format_exc().strip().splitlines()
+    tail = ""
+    if len(tb) >= 2:
+        tail = f" | {tb[-1].strip()}"
+    text = (head + tail).replace("\n", " ")
+    if len(text) > max_len:
+        return text[: max_len - 3] + "..."
+    return text
+
+
 def fail_open_local(
     combat_model: Any,
     combat_obs: np.ndarray,
@@ -360,6 +405,7 @@ class CombatJevTelemetry:
     catastrophe_failopen_reason: dict[str, int] = field(
         default_factory=lambda: {k: 0 for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS}
     )
+    turn_plan_error_samples: list[str] = field(default_factory=list)
 
     def mark(self) -> tuple[int, int]:
         return (self.calls, self.fail_open)
@@ -375,11 +421,22 @@ class CombatJevTelemetry:
     def mark_turn_plan(self) -> tuple[int, int, int]:
         return (self.turn_plan_turns, self.turn_plan_fulfilled, self.turn_plan_catastrophe)
 
+    def record_turn_plan_error_sample(self, detail: str) -> None:
+        text = " ".join(str(detail).split())
+        if not text:
+            return
+        if text in self.turn_plan_error_samples:
+            return
+        if len(self.turn_plan_error_samples) >= TURN_PLAN_ERROR_SAMPLE_MAX:
+            return
+        self.turn_plan_error_samples.append(text[:320])
+
     def record_turn_plan_turn(
         self,
         *,
         fulfilled: bool,
         catastrophe_reason: str | None = None,
+        error_detail: str | None = None,
     ) -> None:
         """One ``jev-turn`` player turn (``--combat-policy jev-turn``).
 
@@ -398,6 +455,8 @@ class CombatJevTelemetry:
             self.catastrophe_failopen_reason[key] = int(
                 self.catastrophe_failopen_reason.get(key, 0)
             ) + 1
+            if key == FAILOPEN_ERROR and error_detail:
+                self.record_turn_plan_error_sample(error_detail)
         elif fulfilled:
             self.turn_plan_fulfilled += 1
 
@@ -415,6 +474,7 @@ class CombatJevTelemetry:
                 k: int(self.catastrophe_failopen_reason.get(k, 0))
                 for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS
             },
+            "jev_turn_catastrophe_error_samples": list(self.turn_plan_error_samples),
         }
 
     def episode_fields(self, start: tuple[int, int]) -> dict[str, int]:
@@ -447,6 +507,7 @@ class CombatJevTelemetry:
                 k: int(self.catastrophe_failopen_reason.get(k, 0))
                 for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS
             },
+            "turn_plan_error_samples": list(self.turn_plan_error_samples),
         }
 
     @classmethod
@@ -466,6 +527,9 @@ class CombatJevTelemetry:
         cat = data.get("catastrophe_failopen_reason") or {}
         for k in COMBAT_JEV_TURN_CATASTROPHE_REASONS:
             tel.catastrophe_failopen_reason[k] = int(cat.get(k, 0) or 0)
+        tel.turn_plan_error_samples = [
+            str(x) for x in (data.get("turn_plan_error_samples") or [])
+        ][:TURN_PLAN_ERROR_SAMPLE_MAX]
         return tel
 
     def merge(self, other: "CombatJevTelemetry") -> "CombatJevTelemetry":
@@ -483,6 +547,8 @@ class CombatJevTelemetry:
             self.catastrophe_failopen_reason[k] = int(
                 self.catastrophe_failopen_reason.get(k, 0)
             ) + int(other.catastrophe_failopen_reason.get(k, 0))
+        for sample in other.turn_plan_error_samples:
+            self.record_turn_plan_error_sample(sample)
         return self
 
     def as_report(self, *, n_episodes: int = 0) -> dict[str, Any]:
@@ -672,14 +738,18 @@ __all__ = [
     "FAILOPEN_ERROR",
     "FAILOPEN_ILLEGAL_PLAN",
     "FAILOPEN_LOW_CONF",
+    "FAILOPEN_MISSING_HUNG_PPO",
     "FAILOPEN_REPLAN_CAP",
     "FAILOPEN_TIMEOUT",
+    "TURN_PLAN_ERROR_SAMPLE_MAX",
     "choose_combat_step",
     "classify_jev_error",
     "combat_action_id",
     "compress_combat_state",
     "enumerate_legal_combat_actions",
+    "fail_open_bh_v1_required",
     "fail_open_local",
+    "format_turn_plan_error_sample",
     "hung_ppo_local",
     "parse_combat_action_id",
     "summarize_combat_action",

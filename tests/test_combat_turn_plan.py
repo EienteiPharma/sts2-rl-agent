@@ -234,6 +234,54 @@ def test_jev_turn_plan_telemetry_hook_and_report_rates():
     record_jev_turn_plan_turn(None, fulfilled=True)  # no-op
 
 
+def test_turn_plan_missing_hung_ppo_distinct_from_random_failopen():
+    from sts2_env.eval.combat_jev import CombatJevTelemetry, FAILOPEN_MISSING_HUNG_PPO
+
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    tel = CombatJevTelemetry()
+    choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        None,
+        adapter=_PlanAdapter("plan_not_in_list"),
+        combat_obs=obs,
+        env=env,
+        telemetry=tel,
+    )
+    env.close()
+    report = tel.as_report()
+    assert report["jev_turn_catastrophe_reason"][FAILOPEN_MISSING_HUNG_PPO] == 1
+
+
+def test_turn_plan_adapter_error_records_sample_message():
+    from sts2_env.eval.combat_jev import FAILOPEN_ERROR, CombatJevTelemetry
+
+    class _BoomAdapter:
+        def system_one(self, state, questions):
+            raise RuntimeError("adapter boom for sentry")
+
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    tel = CombatJevTelemetry()
+    choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        _Ppo(),
+        adapter=_BoomAdapter(),
+        combat_obs=obs,
+        env=env,
+        telemetry=tel,
+    )
+    env.close()
+    report = tel.as_report()
+    assert report["jev_turn_catastrophe_reason"][FAILOPEN_ERROR] == 1
+    assert report["jev_turn_catastrophe_error_samples"]
+    assert "RuntimeError: adapter boom for sentry" in report["jev_turn_catastrophe_error_samples"][0]
+
+
 def test_runner_illegal_plan_increments_catastrophe_telemetry():
     from sts2_env.eval.combat_jev import CombatJevTelemetry, FAILOPEN_ILLEGAL_PLAN
 

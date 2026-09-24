@@ -42,6 +42,7 @@ CATA_FAILOPEN_ERROR = "error"
 CATA_FAILOPEN_EMPTY = "empty"
 CATA_FAILOPEN_ILLEGAL_PLAN = "illegal_plan"
 CATA_FAILOPEN_CAP = "cap_exceeded"
+CATA_FAILOPEN_MISSING_HUNG_PPO = "missing_hung_ppo"
 
 COMBAT_TURN_PLAN_SYSTEM_RULES = (
     "Survival first: block or prevent telegraphed enemy intent damage before "
@@ -411,10 +412,12 @@ def _fail_open_bh_v1(
     combat_obs: np.ndarray,
     combat_mask: np.ndarray,
     rng: np.random.RandomState,
-) -> int:
-    from sts2_env.eval.combat_jev import fail_open_local
+) -> tuple[int, str | None]:
+    del rng
+    from sts2_env.eval.combat_jev import fail_open_bh_v1_required
 
-    return int(fail_open_local(combat_model, combat_obs, combat_mask, rng))
+    local, miss = fail_open_bh_v1_required(combat_model, combat_obs, combat_mask)
+    return int(local), miss
 
 
 def catastrophe_reason_for_telemetry(reason: str) -> str:
@@ -423,6 +426,7 @@ def catastrophe_reason_for_telemetry(reason: str) -> str:
         FAILOPEN_EMPTY_LIST,
         FAILOPEN_ERROR,
         FAILOPEN_ILLEGAL_PLAN,
+        FAILOPEN_MISSING_HUNG_PPO,
         FAILOPEN_REPLAN_CAP,
         FAILOPEN_TIMEOUT,
     )
@@ -433,6 +437,7 @@ def catastrophe_reason_for_telemetry(reason: str) -> str:
         CATA_FAILOPEN_EMPTY: FAILOPEN_EMPTY_LIST,
         CATA_FAILOPEN_ILLEGAL_PLAN: FAILOPEN_ILLEGAL_PLAN,
         CATA_FAILOPEN_CAP: FAILOPEN_REPLAN_CAP,
+        CATA_FAILOPEN_MISSING_HUNG_PPO: FAILOPEN_MISSING_HUNG_PPO,
     }
     return mapping.get(reason, FAILOPEN_ERROR)
 
@@ -443,6 +448,7 @@ def _log_turn_plan_telemetry(
     *,
     fulfilled: bool,
     catastrophe_reason: str | None = None,
+    error_detail: str | None = None,
 ) -> None:
     if session.telemetry_logged_turn == session.player_turn_id:
         return
@@ -450,6 +456,7 @@ def _log_turn_plan_telemetry(
         telemetry,
         fulfilled=fulfilled,
         catastrophe_reason=catastrophe_reason,
+        error_detail=error_detail,
     )
     session.telemetry_logged_turn = session.player_turn_id
 
@@ -462,18 +469,34 @@ def _catastrophe_fail_open(
     reason: str,
     *,
     plan_id: str | None = None,
-) -> tuple[int, dict[str, Any]]:
-    local = _fail_open_bh_v1(combat_model, combat_obs, combat_mask, rng)
+    error_detail: str | None = None,
+) -> tuple[int, dict[str, Any], str, str | None]:
+    from sts2_env.eval.combat_jev import FAILOPEN_ERROR
+
+    local, bh_miss = _fail_open_bh_v1(combat_model, combat_obs, combat_mask, rng)
+    effective_reason = (
+        CATA_FAILOPEN_MISSING_HUNG_PPO if bh_miss else reason
+    )
+    tel_reason = catastrophe_reason_for_telemetry(effective_reason)
+    tel_detail = None if bh_miss else error_detail
+    if (
+        not bh_miss
+        and tel_reason == FAILOPEN_ERROR
+        and error_detail
+    ):
+        tel_detail = error_detail
     shadow = {
         "shadow_decision": CHOICE_COMBAT_TURN_PLAN,
         "turn_plan_catastrophe": True,
-        "turn_plan_failopen_reason": reason,
+        "turn_plan_failopen_reason": effective_reason,
         "turn_plan_failopen": True,
         "executed_id": semantic_key_for_gym_action_from_obs(local, combat_mask),
     }
+    if error_detail and not bh_miss:
+        shadow["turn_plan_error_sample"] = error_detail[:320]
     if plan_id is not None:
         shadow["turn_plan_id"] = plan_id
-    return local, shadow
+    return local, shadow, tel_reason, tel_detail
 
 
 def semantic_key_for_gym_action_from_obs(action: int, mask: np.ndarray) -> str:
@@ -487,9 +510,11 @@ def _pick_plan_via_jev(
     plans: Sequence[TurnPlanCandidate],
     *,
     prompt_config: TurnPlanPromptConfig | None = None,
-) -> tuple[TurnPlanCandidate | None, str | None]:
+) -> tuple[TurnPlanCandidate | None, str | None, str | None]:
+    from sts2_env.eval.combat_jev import format_turn_plan_error_sample
+
     if not plans:
-        return None, CATA_FAILOPEN_EMPTY
+        return None, CATA_FAILOPEN_EMPTY, None
     by_id = {p.plan_id: p for p in plans}
     cfg = prompt_config or TurnPlanPromptConfig()
     state = build_turn_plan_jev_state(board, prompt_config=cfg)
@@ -497,18 +522,26 @@ def _pick_plan_via_jev(
     try:
         answers = adapter.system_one(state, questions)
     except JevError as e:
-        return None, _classify_adapter_error(e)
+        err = _classify_adapter_error(e)
+        detail = format_turn_plan_error_sample(e) if err == CATA_FAILOPEN_ERROR else None
+        return None, err, detail
     except Exception as e:
-        return None, _classify_adapter_error(e)
+        err = _classify_adapter_error(e)
+        detail = format_turn_plan_error_sample(e) if err == CATA_FAILOPEN_ERROR else None
+        return None, err, detail
     raw = answers.get(CHOICE_COMBAT_TURN_PLAN) if isinstance(answers, dict) else None
     if raw is None:
-        return None, CATA_FAILOPEN_ERROR
+        return (
+            None,
+            CATA_FAILOPEN_ERROR,
+            f"missing {CHOICE_COMBAT_TURN_PLAN} in system_one answers",
+        )
     if not isinstance(raw, JevAnswer):
         raw = JevAnswer(status="ok", choice=str(getattr(raw, "choice", raw)))
     plan_id = str(raw.choice or "").strip()
     if plan_id not in by_id:
-        return None, CATA_FAILOPEN_ILLEGAL_PLAN
-    return by_id[plan_id], None
+        return None, CATA_FAILOPEN_ILLEGAL_PLAN, None
+    return by_id[plan_id], None, None
 
 
 def choose_combat_turn_plan_action(
@@ -547,7 +580,7 @@ def choose_combat_turn_plan_action(
 
     if combat.pending_choice is not None:
         session.clear_plan()
-        local = _fail_open_bh_v1(combat_model, combat_obs, mask, rng)
+        local, _bh_miss = _fail_open_bh_v1(combat_model, combat_obs, mask, rng)
         shadow = {
             "shadow_decision": CHOICE_COMBAT_TURN_PLAN,
             "turn_plan_aborted": "pending_choice",
@@ -563,14 +596,15 @@ def choose_combat_turn_plan_action(
         loops += 1
         if session.replans > MAX_REPLANS_PER_PLAYER_TURN:
             session.clear_plan()
-            local, shadow = _catastrophe_fail_open(
+            local, shadow, tel_reason, tel_detail = _catastrophe_fail_open(
                 combat_model, combat_obs, mask, rng, CATA_FAILOPEN_CAP
             )
             _log_turn_plan_telemetry(
                 session,
                 telemetry,
                 fulfilled=False,
-                catastrophe_reason=catastrophe_reason_for_telemetry(CATA_FAILOPEN_CAP),
+                catastrophe_reason=tel_reason,
+                error_detail=tel_detail,
             )
             session.last_shadow = shadow
             return local, shadow
@@ -613,17 +647,25 @@ def choose_combat_turn_plan_action(
         legal_keys = legal_semantic_keys(combat, mask, owner=owner_creature)
         plans = enumerate_candidate_plans(legal_keys)
         board = serialize_combat_board_full(combat, mask, owner=owner_creature)
-        picked, err = _pick_plan_via_jev(adapter, board, plans, prompt_config=cfg)
+        picked, err, err_detail = _pick_plan_via_jev(
+            adapter, board, plans, prompt_config=cfg
+        )
         if err is not None:
             session.clear_plan()
-            local, shadow = _catastrophe_fail_open(
-                combat_model, combat_obs, mask, rng, err
+            local, shadow, tel_reason, tel_detail = _catastrophe_fail_open(
+                combat_model,
+                combat_obs,
+                mask,
+                rng,
+                err,
+                error_detail=err_detail,
             )
             _log_turn_plan_telemetry(
                 session,
                 telemetry,
                 fulfilled=False,
-                catastrophe_reason=catastrophe_reason_for_telemetry(err),
+                catastrophe_reason=tel_reason,
+                error_detail=tel_detail,
             )
             session.last_shadow = shadow
             return local, shadow
@@ -633,14 +675,20 @@ def choose_combat_turn_plan_action(
         session.step_index = 0
 
     session.clear_plan()
-    local, shadow = _catastrophe_fail_open(
-        combat_model, combat_obs, mask, rng, CATA_FAILOPEN_ERROR
+    local, shadow, tel_reason, tel_detail = _catastrophe_fail_open(
+        combat_model,
+        combat_obs,
+        mask,
+        rng,
+        CATA_FAILOPEN_ERROR,
+        error_detail="turn-plan loop cap exceeded without plan pick",
     )
     _log_turn_plan_telemetry(
         session,
         telemetry,
         fulfilled=False,
-        catastrophe_reason=catastrophe_reason_for_telemetry(CATA_FAILOPEN_ERROR),
+        catastrophe_reason=tel_reason,
+        error_detail=tel_detail,
     )
     session.last_shadow = shadow
     return local, shadow
@@ -651,6 +699,7 @@ def record_jev_turn_plan_turn(
     *,
     fulfilled: bool,
     catastrophe_reason: str | None = None,
+    error_detail: str | None = None,
 ) -> None:
     """Telemetry hook for ``--combat-policy jev-turn`` (tip② loop calls each turn).
 
@@ -662,13 +711,18 @@ def record_jev_turn_plan_turn(
         return
     record = getattr(telemetry, "record_turn_plan_turn", None)
     if callable(record):
-        record(fulfilled=fulfilled, catastrophe_reason=catastrophe_reason)
+        record(
+            fulfilled=fulfilled,
+            catastrophe_reason=catastrophe_reason,
+            error_detail=error_detail,
+        )
 
 
 __all__ = [
     "CATA_FAILOPEN_CAP",
     "CATA_FAILOPEN_EMPTY",
     "CATA_FAILOPEN_ERROR",
+    "CATA_FAILOPEN_MISSING_HUNG_PPO",
     "CATA_FAILOPEN_ILLEGAL_PLAN",
     "CATA_FAILOPEN_TIMEOUT",
     "CHOICE_COMBAT_TURN_PLAN",
