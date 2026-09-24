@@ -5,7 +5,7 @@ Usage:
     python scripts/train_bh_assist_from_buffer.py --dry-run
     python scripts/train_bh_assist_from_buffer.py \\
         --buffer output/runenv_combat_buffer/transitions.npz \\
-        --output-dir output/combat_bh_assist_v1 \\
+        --output-dir output/combat_bh_assist_v3 \\
         --train-steps 128
 
 Never writes ``combat_ppo_obs_v1_bh_v1`` / frozen hang outdirs. No MaskablePPO learn.

@@ -12,7 +12,7 @@ A reinforcement learning agent for **Slay the Spire 2**, built on a high-perform
 |  | Core Engine    |  | Game Content   |  | Gym Environments          ||
 |  | combat.py      |  | 577 cards      |  | combat_env.py  (single)  ||
 |  | creature.py    |  | 260 powers     |  | run_env.py     (full run)||
-|  | hooks.py       |  | 121 monsters   |  | observation.py (131-dim) ||
+|  | hooks.py       |  | 121 monsters   |  | observation.py (181-dim) ||
 |  | damage.py      |  | 290 relics     |  | action_space.py(61/100)  ||
 |  | rng.py         |  | 63 potions     |  | reward.py                ||
 |  +-------+--------+  +-------+--------+  +-----------+--------------+|
@@ -291,7 +291,7 @@ sts2-rl-agent/
 |   |-- gym_env/                   # Gymnasium environments
 |   |   |-- combat_env.py          # Single-combat env (Discrete(61))
 |   |   |-- run_env.py             # Full-run env (Discrete(100))
-|   |   |-- observation.py         # State -> 131-dim float32 vector
+|   |   |-- observation.py         # State -> 181-dim float32 vector (obs_v1)
 |   |   |-- action_space.py        # Action encoding + masking
 |   |   +-- reward.py              # Reward shaping
 |   |
@@ -353,7 +353,7 @@ Following lessons from the STS1 RL community, this project uses a two-phase stra
 
 - **MaskablePPO** from sb3-contrib (Stable Baselines 3)
 - **Invalid action masking**: Each step, the environment provides a boolean mask indicating which actions are legal (playable cards, valid targets). Illegal actions are zeroed out before policy sampling.
-- **Observation**: 131-dimensional float32 vector encoding player state, hand cards, pile summaries, and enemy state
+- **Observation**: 181-dimensional float32 vector (`obs_v1`, full `IntentType` one-hot) encoding player state, hand cards, pile summaries, and enemy state. RunEnv adds 20 extras (201).
 - **Action space**: Discrete(61) for combat (end turn + 10 self-target + 50 targeted), Discrete(100) for full run
 
 ### Reward Design
@@ -380,6 +380,8 @@ Following lessons from the STS1 RL community, this project uses a two-phase stra
 | [docs/TRAINING_GUIDE.md](docs/TRAINING_GUIDE.md) | Comprehensive RL training guide |
 | [docs/HANG_PROTOCOL_2026-09-22.md](docs/HANG_PROTOCOL_2026-09-22.md) | Hang Act1 RunEnv flags/bars |
 | [docs/HOLD_PROTOCOL.md](docs/HOLD_PROTOCOL.md) | Locked loadout_v1 HOLD (relics/potions, hang table) |
+| [docs/BH_ASSIST_CONTRACT.md](docs/BH_ASSIST_CONTRACT.md) | Track 2 assist + jev-turn (Lab nail v3 + `d9d9fff`) |
+| [docs/COMBAT_JEV_HOLD_FAIL.md](docs/COMBAT_JEV_HOLD_FAIL.md) | Archived stepwise Combat-Jev HOLD collapses |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | TCP bridge communication protocol |
 | [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) | Current known issues and limitations |
 | [docs/MOD_BUILD_GUIDE.md](docs/MOD_BUILD_GUIDE.md) | How to build and install the bridge mod |

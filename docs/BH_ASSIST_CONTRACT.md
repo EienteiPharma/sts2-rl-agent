@@ -1,6 +1,6 @@
 # bh_assist contract (track 2)
 
-**Status:** train entry + turn-plan eval wiring (`--bh-assist`, `73fc1ed`). Default outdir `output/combat_bh_assist_v1`; in-service assist **v1** only (v2 not promoted). **No hang runtime swap** — execution stays `bh_v1` / `--combat-policy ppo`. **Pre-train eval gates** and **eval stability (`lock_eval_then_v3`)** below; hang dual gate vs `bh_v1` unchanged (`docs/HOLD_PROTOCOL.md`). Do not treat assist as primary actor.  
+**Status:** train entry + turn-plan eval wiring (`--bh-assist`, `73fc1ed`). Default train/eval checkpoint tree is **`output/combat_bh_assist_v3`**. Lab in-service nail: **`d9d9fff` + `combat_bh_assist_v3`** (ranker apply no longer ties `end_turn` at gym action 0). v1/v2 outdirs are **write-protected** (do not overwrite). Later HEAD tips after `d9d9fff` (remap default off `7bbe40d`, short context `4ec6b26`, colab_v1 collect `3794cb8`/`064ff81`) are on the branch but **not** re-nailed as 现役 until Lab re-HOLDs. **No hang runtime swap** — execution stays `bh_v1` / `--combat-policy ppo`. Assist +3/+2 vs jev-turn **not yet passed**. **Pre-train eval gates** and **eval stability (`lock_eval_then_v3`)** below; hang dual gate vs `bh_v1` unchanged (`docs/HOLD_PROTOCOL.md`). Do not treat assist as primary actor.  
 **Successor to:** abandoned stepwise `combat_step_choice` / `--combat-policy jev` (see `docs/COMBAT_JEV_HOLD_FAIL.md`).  
 **Related:** turn-plan path A in `sts2_env/eval/combat_turn_plan.py`; hang execution stays **`bh_v1`** until a future **turn-plan HOLD** clears.
 
@@ -68,11 +68,11 @@ plans ← enumerate_candidate_plans(keys)
 ## Train entry (assist-only)
 
 - Script: `scripts/train_bh_assist_from_buffer.py` (buffer → linear assist ranker + manifest).
-- Outdir: `output/combat_bh_assist_v1` (or `--output-dir` with `refuse_bh_assist_output_path` guard).
+- Outdir: **`output/combat_bh_assist_v3`** (CLI default). v1/v2 paths refused by `refuse_bh_assist_output_path`.
 - **Hard ban:** never write into `combat_ppo_obs_v1_bh_v1`, `combat_runenv_onpolicy_v1`, `combat_runenv_antiforget_v1`, or overwrite hang `final_model.zip`.
 - **Hard ban:** no `MaskablePPO.learn` / no `--continue-from` hang zip on this path.
 - Labels target Jev-facing **`ranked_semantic`** (subset/reorder of legal keys) and **`risk_notes`**; buffer v1 uses partial semantic proxy (`end_turn` when expert ends turn) — full semantic labels when collect adds board keys is a later tip.
-- Runtime `bh_assist()` uses heuristic rank + risk notes until checkpoint wiring lands in a later tip.
+- Runtime `bh_assist()` uses heuristic rank, then the loaded v3 ranker when `--bh-assist on` finds a checkpoint (missing ckpt fail-opens to assist-off / heuristic). Eval default ckpt: `/workspace/sts2-sim/output/combat_bh_assist_v3/bh_assist_ranker.npz`.
 
 ## Pre-train eval gates (Lab / Jev lock)
 

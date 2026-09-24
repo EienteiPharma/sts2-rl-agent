@@ -102,8 +102,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="PATH",
         help=(
             "Assist ranker npz (default "
-            "/workspace/sts2-sim/output/combat_bh_assist_v1/bh_assist_ranker.npz "
-            "or STS2_BH_ASSIST_CKPT)."
+            "/workspace/sts2-sim/output/combat_bh_assist_v3/bh_assist_ranker.npz "
+            "or STS2_BH_ASSIST_CKPT). v1/v2 are write-protected; Lab nail is v3."
         ),
     )
     parser.add_argument(

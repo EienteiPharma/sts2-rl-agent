@@ -16,13 +16,15 @@ import numpy as np
 from sts2_env.eval.bh_assist_train import (
     BH_ASSIST_CKPT_NAME,
     DEFAULT_BH_ASSIST_OUTDIR,
+    DEFAULT_BH_ASSIST_V3_OUTDIR,
     refuse_bh_assist_output_path,
 )
 from sts2_env.gym_env.observation import OBS_SIZE
 
 BH_ASSIST_CKPT_ENV = "STS2_BH_ASSIST_CKPT"
+# Lab in-service nail is v3 + d9d9fff. v1/v2 trees are write-protected.
 DEFAULT_BH_ASSIST_CKPT = (
-    "/workspace/sts2-sim/output/combat_bh_assist_v1/bh_assist_ranker.npz"
+    f"/workspace/sts2-sim/{DEFAULT_BH_ASSIST_V3_OUTDIR}/{BH_ASSIST_CKPT_NAME}"
 )
 
 _RANKER_CACHE: dict[str, dict[str, np.ndarray] | None] = {}
@@ -69,7 +71,6 @@ def load_bh_assist_ranker(path: str | Path) -> dict[str, np.ndarray] | None:
         if not ckpt_path.is_file():
             _RANKER_CACHE[key] = None
             return None
-        refuse_bh_assist_output_path(ckpt_path, what="bh_assist checkpoint read")
         with np.load(ckpt_path) as data:
             w = np.asarray(data["w"], dtype=np.float32).reshape(-1)
             obs_size = int(np.asarray(data["obs_size"]).reshape(-1)[0])

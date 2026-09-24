@@ -36,6 +36,8 @@ def test_pretrain_eval_gate_constants_match_contract():
     assert "--n-eps 20" in text
     assert "n_eps=5" in text and "diagnostic" in text.lower()
     assert "HOLD_SEED_BASE=40000" in text
+    assert "combat_bh_assist_v3" in text
+    assert "d9d9fff" in text
     assert ASSIST_EVAL_MIN_OVERALL_PP == 3
     assert ASSIST_EVAL_MIN_BOSS_PP == 2
     assert ASSIST_EVAL_FORMAL_N_EPS == 20

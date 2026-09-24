@@ -62,6 +62,6 @@ PYTHONPATH=. python scripts/train_bh_assist_from_buffer.py \
   --train-steps 128
 ```
 
-`refuse_bh_assist_output_path` blocks writes into `combat_bh_assist_v1` / `combat_bh_assist_v2` and frozen hang trees. In-service assist remains **v1** until Lab promotes v3.
+`refuse_bh_assist_output_path` blocks writes into `combat_bh_assist_v1` / `combat_bh_assist_v2` and frozen hang trees. Lab in-service assist is **v3 + `d9d9fff`**. Later HEAD tips are not 现役 until Lab re-HOLDs.
 
-Related: `docs/BH_ASSIST_CONTRACT.md` (assist v1 in-service; v3 data path).
+Related: `docs/BH_ASSIST_CONTRACT.md` (Lab nail v3; v1/v2 write-protected).
