@@ -5,6 +5,8 @@ correctness per phase, multi-episode stress testing, and
 observation invariants.
 """
 
+from types import SimpleNamespace
+
 import pytest
 import numpy as np
 
@@ -158,6 +160,47 @@ class TestResetReturnsValidObs:
     def test_reset_starts_at_map_choice(self, env):
         env.reset(seed=42)
         assert _get_phase(env) == RunManager.PHASE_MAP_CHOICE
+
+    def test_reset_start_with_neow_opens_neow_event(self, env):
+        _, info = env.reset(seed=42, options={"start_with_neow": True})
+        assert _get_phase(env) == RunManager.PHASE_EVENT
+        assert info.get("phase") == RunManager.PHASE_EVENT
+        event = env._mgr._event_model
+        assert event is not None
+        assert event.event_id == "Neow"
+        actions = env._mgr.get_available_actions()
+        event_choices = [a for a in actions if a.get("action") == "event_choice"]
+        non_leave = [
+            a
+            for a in event_choices
+            if str(a.get("option_id", "")).lower() != "leave"
+            and str(a.get("label", "")).lower() != "leave"
+        ]
+        assert len(event_choices) >= 3
+        assert len(non_leave) >= 2
+        env.reset(seed=42)
+        assert _get_phase(env) == RunManager.PHASE_MAP_CHOICE
+
+    def test_neow_from_tmp_cwd_still_has_boons(self, env, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from sts2_env.cards.factory import _reference_cards
+        from sts2_env.run.events import get_event
+
+        _reference_cards.cache_clear()
+        refs = _reference_cards()
+        assert "STRIKE_IRONCLAD" in refs
+        _, info = env.reset(seed=42, options={"start_with_neow": True})
+        assert info.get("phase") == RunManager.PHASE_EVENT
+        assert get_event("Neow") is not None
+        actions = env._mgr.get_available_actions()
+        event_choices = [a for a in actions if a.get("action") == "event_choice"]
+        non_leave = [
+            a
+            for a in event_choices
+            if str(a.get("option_id", "")).lower() != "leave"
+        ]
+        assert len(event_choices) == 3
+        assert len(non_leave) == 3
 
     def test_reset_deterministic_same_seed(self, env):
         obs1, _ = env.reset(seed=123)
@@ -473,6 +516,28 @@ class TestActionMasksPerPhase:
                     return
         pytest.skip("No rest site encountered in tested seeds")
 
+    def test_rest_smith_pending_maps_choose_to_combat_slots(self, env):
+        env.reset(seed=200008)
+        env._mgr._enter_rest_site()
+        smith = next(
+            a
+            for a in env._mgr.get_available_actions()
+            if a.get("option_id") == "SMITH"
+        )
+        env._mgr.take_action(smith)
+        assert _get_phase(env) == RunManager.PHASE_REST_SITE
+        actions = env._mgr.get_available_actions()
+        choose_actions = [a for a in actions if a.get("action") == "choose"]
+        confirm = [a for a in actions if a.get("action") == "confirm_choice"]
+        assert not any(a.get("action") == "rest_option" for a in actions)
+        assert len(choose_actions) >= 10
+        mask = env.action_masks()
+        expected = len(choose_actions) + len(confirm)
+        assert int(np.sum(mask[_COMBAT_START: _COMBAT_START + _COMBAT_SIZE])) == expected
+        assert int(np.sum(mask[_REST_START: _REST_START + _REST_SIZE])) == 0
+        for i in range(len(choose_actions)):
+            assert mask[_COMBAT_START + 1 + i] == 1
+
     def test_shop_mask(self, env):
         """Force into SHOP phase and verify leave is always valid."""
         for seed in range(50):
@@ -734,3 +799,24 @@ class TestMultiCharacter:
         env = STS2RunEnv(character_id=char_id, ascension_level=0, max_steps=DEFAULT_MAX_STEPS)
         done, steps, reward, info = _run_random_episode(env, seed=42)
         assert done, f"{char_id} episode did not complete"
+
+
+class TestActionsEventEmptyOptions:
+    def test_leave_only_when_event_model_is_none(self):
+        mgr = RunManager(seed=1)
+        mgr._phase = RunManager.PHASE_EVENT
+        mgr._event_model = None
+        mgr._event_options = []
+        actions = mgr._actions_event()
+        assert actions == [
+            {"action": "event_choice", "option_id": "leave", "label": "Leave"}
+        ]
+        assert mgr.get_available_actions() == actions
+
+    def test_no_invented_leave_when_model_set_and_options_empty(self):
+        mgr = RunManager(seed=1)
+        mgr._phase = RunManager.PHASE_EVENT
+        mgr._event_model = SimpleNamespace(pending_choice=None)
+        mgr._event_options = []
+        assert mgr._actions_event() == []
+        assert mgr.get_available_actions() == []

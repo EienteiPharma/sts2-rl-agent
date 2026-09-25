@@ -1,0 +1,43 @@
+{
+  "id": "loadout_v1_01",
+  "character": "Ironclad",
+  "act": 1,
+  "stage": "mid_multihit",
+  "status": "LOCKED",
+  "hp": 58,
+  "max_hp": 80,
+  "deck": [
+    "STRIKE_IRONCLAD",
+    "STRIKE_IRONCLAD",
+    "DEFEND_IRONCLAD",
+    "DEFEND_IRONCLAD",
+    "DEFEND_IRONCLAD",
+    "BASH",
+    "SWORD_BOOMERANG",
+    "SWORD_BOOMERANG",
+    {
+      "id": "SWORD_BOOMERANG",
+      "upgraded": true
+    },
+    "TWIN_STRIKE",
+    "TWIN_STRIKE",
+    "THRASH",
+    "POMMEL_STRIKE",
+    "ANGER"
+  ],
+  "relics": [
+    "BURNING_BLOOD",
+    "SHURIKEN"
+  ],
+  "potions": [
+    "FirePotion",
+    "AttackPotion",
+    null
+  ],
+  "notes": "Anti-Vantom Slippery: multi-hit density (Sword Boomerang 3/3/4 + Twin×2 + Thrash×2). Wiki: Boomerang 3→4 hits on upgrade. Thrash Rare = smith/event path not Act1 reward roll.",
+  "wiki_refs": [
+    "https://slaythespire.wiki.gg/wiki/Slay_the_Spire_2:Cards_List",
+    "local docs/CARDS_REFERENCE.md SwordBoomerang/Thrash/Twin Strike",
+    "docs/act1_boss_mechanics_vs_loadout.md §Vantom"
+  ]
+}

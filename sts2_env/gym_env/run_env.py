@@ -28,9 +28,9 @@ for the current game phase are unmasked:
 
 Observation space
 -----------------
-Flat ``float32`` vector of size ``RUN_OBS_SIZE`` (151).
+Flat ``float32`` vector of size ``RUN_OBS_SIZE`` (201 = combat obs_v1 181 + run tail 20).
 
-* Combat observation (131) -- reuses :func:`encode_observation`.
+* Combat observation (181) -- reuses :func:`encode_observation`.
 * Run-level state (20):
   - current_act, total_floor, and act_floor normalized by run scales (3)
   - player HP ratio and normalized gold                             (2)
@@ -73,7 +73,7 @@ from sts2_env.gym_env.action_space import (
 )
 from sts2_env.gym_env.observation import OBS_SIZE as COMBAT_OBS_SIZE, encode_observation
 from sts2_env.core.rng import INT_MAX_EXCLUSIVE
-from sts2_env.run.run_manager import RunManager
+from sts2_env.run.run_manager import RunManager, ensure_event_models_registered
 
 @dataclass(frozen=True)
 class _ActionLayout:
@@ -203,7 +203,7 @@ NUM_PHASES = len(_PHASE_INDEX)
 # ---------------------------------------------------------------------------
 
 _RUN_STATE_SIZE = 20   # see module docstring
-RUN_OBS_SIZE = COMBAT_OBS_SIZE + _RUN_STATE_SIZE  # 131 + 20 = 151
+RUN_OBS_SIZE = COMBAT_OBS_SIZE + _RUN_STATE_SIZE  # obs_v1 181 + 20 run tail
 
 DEFAULT_MAX_STEPS = 10_000
 DEFAULT_MAX_COMBAT_TURNS = 200
@@ -291,11 +291,17 @@ class STS2RunEnv(gymnasium.Env):
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
 
+        options = options or {}
+        start_with_neow = bool(options.get("start_with_neow", False))
+        if start_with_neow:
+            ensure_event_models_registered()
+
         run_seed = int(self.np_random.integers(0, INT_MAX_EXCLUSIVE))
         self._mgr = RunManager(
             seed=run_seed,
             character_id=self._character_id,
             ascension_level=self._ascension_level,
+            start_with_neow=start_with_neow,
         )
         self._step_count = 0
 

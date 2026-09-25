@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any, Callable
 import logging
 
 import gymnasium
@@ -26,6 +27,37 @@ from sts2_env.gym_env.reward import compute_reward
 logger = logging.getLogger(__name__)
 
 
+def _coerce_reset_potions(raw: Any):
+    """Accept PotionInstance, potion id strings, or fixture dicts. None = omitted."""
+    if raw is None:
+        return None
+    import sts2_env.potions  # noqa: F401
+    from sts2_env.potions.base import PotionInstance, create_potion, get_potion_model
+
+    potions: list[Any] = []
+    for i, entry in enumerate(raw):
+        if entry is None:
+            potions.append(None)
+            continue
+        if isinstance(entry, PotionInstance):
+            potions.append(entry)
+            continue
+        if isinstance(entry, dict):
+            name = entry.get("potion_id") or entry.get("id") or entry.get("name")
+        else:
+            name = entry
+        if name is None:
+            raise ValueError(f"unknown potion in reset options: {entry!r}")
+        pid = str(name)
+        if get_potion_model(pid) is None:
+            camel = "".join(part.capitalize() for part in pid.replace("-", "_").split("_") if part)
+            if get_potion_model(camel) is None:
+                raise ValueError(f"unknown potion_id in reset options: {pid}")
+            pid = camel
+        potions.append(create_potion(pid, slot=i))
+    return potions
+
+
 class STS2CombatEnv(gymnasium.Env):
     """Gymnasium environment for a single STS2 combat encounter.
 
@@ -42,6 +74,7 @@ class STS2CombatEnv(gymnasium.Env):
         player_max_hp: int = IRONCLAD_STARTING_HP,
         max_turns: int = 200,
         render_mode: str | None = None,
+        loadout_provider: Callable[[], dict[str, Any]] | None = None,
     ):
         super().__init__()
         self.observation_space = spaces.Box(
@@ -53,6 +86,7 @@ class STS2CombatEnv(gymnasium.Env):
         self.player_max_hp = player_max_hp
         self.max_turns = max_turns
         self.render_mode = render_mode
+        self.loadout_provider = loadout_provider
 
         self.combat: CombatState | None = None
 
@@ -63,16 +97,35 @@ class STS2CombatEnv(gymnasium.Env):
         rng_seed = int(self.np_random.integers(0, INT_MAX_EXCLUSIVE))
         rng = Rng(rng_seed)
 
-        # Create deck
-        deck = create_ironclad_starter_deck()
+        spec: dict[str, Any] = {}
+        if self.loadout_provider is not None:
+            spec = dict(self.loadout_provider() or {})
+        if options:
+            for key in ("deck", "hp", "max_hp", "relics", "potions"):
+                if key in options:
+                    spec[key] = options[key]
+
+        if spec.get("deck") is not None:
+            deck = list(spec["deck"])
+            player_hp = int(spec.get("hp", self.player_hp))
+            player_max_hp = int(spec.get("max_hp", self.player_max_hp))
+        else:
+            deck = create_ironclad_starter_deck()
+            player_hp = self.player_hp
+            player_max_hp = self.player_max_hp
+
+        relics = spec.get("relics") or ()
+        potions = _coerce_reset_potions(spec.get("potions"))
 
         # Create combat
         self.combat = CombatState(
-            player_hp=self.player_hp,
-            player_max_hp=self.player_max_hp,
+            player_hp=player_hp,
+            player_max_hp=player_max_hp,
             deck=deck,
             rng_seed=rng_seed,
             character_id="Ironclad",
+            relics=list(relics) if relics else None,
+            potions=potions,
         )
 
         # Setup encounter

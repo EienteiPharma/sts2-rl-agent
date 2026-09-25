@@ -1,0 +1,550 @@
+"""Combat turn-plan path A tip①: semantic keys, board, enumerated plans (offline)."""
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+import sts2_env.eval.combat_turn_plan as turn_plan
+from sts2_env.core.constants import ACTION_END_TURN
+from sts2_env.eval.combat_turn_plan import (
+    CATA_FAILOPEN_ILLEGAL_PLAN,
+    CHOICE_COMBAT_TURN_PLAN,
+    MAX_PLAN_STEPS,
+    SEMANTIC_END_TURN,
+    TurnPlanCandidate,
+    TurnPlanPromptConfig,
+    DEFAULT_TURN_PLAN_CHOICE_CANDIDATES,
+    MAX_TURN_PLAN_CHOICE_CANDIDATES,
+    TURN_PLAN_CHOICE_CAP_ENV,
+    TYPESAFE_CHOICE_PLATFORM_MAX,
+    build_combat_turn_plan_choice_question,
+    build_turn_plan_jev_state,
+    cap_plans_for_turn_plan_choice,
+    resolve_turn_plan_choice_cap,
+    choose_combat_turn_plan_action,
+    enumerate_candidate_plans,
+    gym_action_for_semantic_key,
+    jev_turn_plan_questions,
+    legal_semantic_keys,
+    semantic_key_for_gym_action,
+    serialize_combat_board_full,
+)
+from sts2_env.eval.jev_types import JevAnswer
+from sts2_env.gym_env.combat_env import STS2CombatEnv
+from sts2_env.gym_env.observation import encode_observation
+
+
+class _PlanAdapter:
+    def __init__(self, plan_id: str, *, conf: float | None = 0.9):
+        self.plan_id = plan_id
+        self.conf = conf
+
+    def system_one(self, state, questions):
+        return {
+            CHOICE_COMBAT_TURN_PLAN: JevAnswer(
+                status="ok", choice=self.plan_id, confidence=self.conf
+            )
+        }
+
+
+class _Ppo:
+    def predict(self, obs, action_masks=None, deterministic=True):
+        valid = np.flatnonzero(np.asarray(action_masks) == 1)
+        return int(valid[0]), None
+
+
+def test_api_is_turn_plan_not_stepwise_combat_step():
+    assert CHOICE_COMBAT_TURN_PLAN == "combat_turn_plan_choice"
+    assert not hasattr(turn_plan, "choose_combat_step")
+    assert not hasattr(turn_plan, "combat_action_id")
+    assert "combat_step_choice" not in turn_plan.COMBAT_TURN_PLAN_INSTRUCTIONS
+
+
+def test_toy_enumerator_respects_max_len_end_turn_and_legal_keys():
+    keys = ("end_turn", "play:A:h0@self", "play:B:h1@self")
+    plans = enumerate_candidate_plans(keys, max_steps=8, max_plans=200)
+    assert plans
+    assert all(1 <= len(p.steps) <= 8 for p in plans)
+    assert all(all(s in keys for s in p.steps) for p in plans)
+    for p in plans:
+        if SEMANTIC_END_TURN in p.steps:
+            assert p.steps[-1] == SEMANTIC_END_TURN
+    ids = [p.plan_id for p in plans]
+    assert ids == sorted(ids)
+    assert len(set(ids)) == len(ids)
+
+
+def test_turn_plan_choice_hard_cap_32_and_pruned_count():
+    keys = tuple(f"k{i}" for i in range(12))
+    plans = enumerate_candidate_plans(keys, max_steps=3, max_plans=512)
+    assert len(plans) > DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
+    capped, pruned, _summary, _comps = cap_plans_for_turn_plan_choice(plans)
+    assert len(capped) == DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
+    assert pruned == len(plans) - DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
+    q = build_combat_turn_plan_choice_question(capped)
+    assert len(q["criteria"]) <= DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
+
+
+def test_resolve_turn_plan_choice_cap_default_env_cli_and_platform_max():
+    assert resolve_turn_plan_choice_cap(None) == DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
+    assert MAX_TURN_PLAN_CHOICE_CANDIDATES == DEFAULT_TURN_PLAN_CHOICE_CANDIDATES
+    assert resolve_turn_plan_choice_cap(48) == 48
+    assert resolve_turn_plan_choice_cap(999) == TYPESAFE_CHOICE_PLATFORM_MAX
+    assert (
+        resolve_turn_plan_choice_cap(
+            None, environ={TURN_PLAN_CHOICE_CAP_ENV: "64"}
+        )
+        == 64
+    )
+    capped, pruned, _summary, _comps = cap_plans_for_turn_plan_choice(
+        enumerate_candidate_plans(
+            tuple(f"k{i}" for i in range(12)), max_steps=3, max_plans=512
+        ),
+        max_choices=40,
+    )
+    assert len(capped) == 40
+    assert pruned > 0
+
+
+def _board_lethal_attack(*, hp: int = 10, block: int = 0, energy: int = 3) -> dict:
+    return {
+        "self": {
+            "hp": hp,
+            "max_hp": 80,
+            "block": block,
+            "energy": energy,
+            "hand": [
+                {"name": "Strike", "cost": "1", "hand_index": 0},
+                {"name": "Defend", "cost": "1", "hand_index": 1},
+            ],
+        },
+        "enemies": [{"intent": "attack 20", "hp": 30, "max_hp": 30, "block": 0}],
+        "turn": {"end_turn_legal": True},
+    }
+
+
+def test_heuristic_prefers_block_over_lower_plan_id():
+    board = _board_lethal_attack()
+    low_id = TurnPlanCandidate(
+        "plan_0000", ("play:Strike:h0@e0", SEMANTIC_END_TURN)
+    )
+    high_id = TurnPlanCandidate(
+        "plan_9999", ("play:Defend:h1@self", SEMANTIC_END_TURN)
+    )
+    top, pruned, summary, _comps = cap_plans_for_turn_plan_choice(
+        (low_id, high_id), board, max_choices=1
+    )
+    assert pruned == 1
+    assert top[0].plan_id == "plan_9999"
+    assert summary["n"] == 2
+
+
+def test_heuristic_tie_break_uses_steps_not_plan_id():
+    board = {
+        "self": {
+            "hp": 70,
+            "max_hp": 80,
+            "block": 5,
+            "energy": 3,
+            "hand": [
+                {"name": "Strike", "cost": "1", "hand_index": 0},
+                {"name": "Strike", "cost": "1", "hand_index": 1},
+            ],
+        },
+        "enemies": [],
+        "turn": {"end_turn_legal": True},
+    }
+    plan_a = TurnPlanCandidate(
+        "plan_0000", ("play:Strike:h1@e0", SEMANTIC_END_TURN)
+    )
+    plan_b = TurnPlanCandidate(
+        "plan_9999", ("play:Strike:h0@e0", SEMANTIC_END_TURN)
+    )
+    top, _pruned, _summary, _comps = cap_plans_for_turn_plan_choice(
+        (plan_a, plan_b), board, max_choices=1
+    )
+    assert top[0].steps == ("play:Strike:h0@e0", SEMANTIC_END_TURN)
+    assert top[0].plan_id == "plan_9999"
+
+
+def test_enumerator_deterministic_and_bounded():
+    keys = tuple(f"k{i}" for i in range(5))
+    a = enumerate_candidate_plans(keys, max_steps=3, max_plans=10)
+    b = enumerate_candidate_plans(keys, max_steps=3, max_plans=10)
+    assert a == b
+    assert len(a) == 10
+
+
+def test_choice_question_uses_plan_ids_only():
+    plans = (
+        TurnPlanCandidate("plan_0000", ("play:X:h0@self",)),
+        TurnPlanCandidate("plan_0001", (SEMANTIC_END_TURN,)),
+    )
+    board = {"self": {"hp": 50}}
+    q = build_combat_turn_plan_choice_question(plans)
+    assert q["type"] == "choice"
+    assert set(q["criteria"]) == {"plan_0000", "plan_0001"}
+    assert "plan_id" in q["instructions"]
+    wrapped = jev_turn_plan_questions(board, plans)
+    assert CHOICE_COMBAT_TURN_PLAN in wrapped
+
+
+def _reset(seed: int = 3):
+    env = STS2CombatEnv()
+    obs, info = env.reset(seed=seed)
+    combat = env.combat
+    assert combat is not None
+    mask = np.asarray(info["action_mask"])
+    return env, combat, mask
+
+
+def test_semantic_mapping_round_trip_on_legal_mask():
+    env, combat, mask = _reset()
+    keys = legal_semantic_keys(combat, mask)
+    assert SEMANTIC_END_TURN in keys
+    for key in keys:
+        idx = gym_action_for_semantic_key(combat, mask, key)
+        assert idx is not None
+        assert int(mask[idx]) == 1
+        assert semantic_key_for_gym_action(combat, idx) == key
+    bad = gym_action_for_semantic_key(combat, mask, "play:NOT_A_REAL_CARD:h99@e0")
+    assert bad is None
+    env.close()
+
+
+def test_serializer_includes_full_hand_piles_intents_no_truncation_keys():
+    env, combat, mask = _reset()
+    board = serialize_combat_board_full(combat, mask)
+    env.close()
+    assert "truncated" not in board
+    assert "hand" in board["self"]
+    assert len(board["self"]["hand"]) == len(combat.hand)
+    assert "piles" in board
+    for pile in ("draw", "discard", "exhaust"):
+        assert pile in board["piles"]
+        assert f"{pile}_n" in board["piles"]
+    assert board["turn"]["end_turn_legal"] is True
+    if board["enemies"]:
+        assert "intent" in board["enemies"][0]
+        assert "vuln" in board["enemies"][0]
+
+
+def test_plans_from_live_legal_keys_max_steps():
+    env, combat, mask = _reset()
+    keys = legal_semantic_keys(combat, mask)
+    plans = enumerate_candidate_plans(keys, max_steps=MAX_PLAN_STEPS, max_plans=64)
+    env.close()
+    assert plans
+    assert plans[0].plan_id == "plan_0000"
+    assert len(plans[0].steps) >= 1
+
+
+def test_prompt_layers_default_short_context():
+    from sts2_env.eval.combat_turn_plan import (
+        DEFAULT_TURN_PLAN_PROMPT_CONFIG,
+        RICH_TURN_PLAN_PROMPT_CONFIG,
+    )
+
+    cfg = DEFAULT_TURN_PLAN_PROMPT_CONFIG
+    assert cfg.short_context is True
+    assert cfg.board_json is False
+    board = _board_lethal_attack()
+    state = build_turn_plan_jev_state(board, prompt_config=cfg)
+    assert state["mode"] == "combat_turn_plan"
+    assert "decision" in state
+    assert state["decision"]["incoming"] == 20
+    assert "board" not in state
+    assert "combat_snapshot" not in state
+    plans = (
+        TurnPlanCandidate("plan_0000", ("play:Defend:h1@self", SEMANTIC_END_TURN)),
+    )
+    wrapped = jev_turn_plan_questions(board, plans)
+    instr = wrapped[CHOICE_COMBAT_TURN_PLAN]["instructions"]
+    assert "inc=20" in instr or "inc 20" in instr.replace("=", " ")
+    crit = wrapped[CHOICE_COMBAT_TURN_PLAN]["criteria"]["plan_0000"]
+    assert "ET" in crit or "end" in crit.lower()
+
+    rich = RICH_TURN_PLAN_PROMPT_CONFIG
+    state_rich = build_turn_plan_jev_state(board, prompt_config=rich)
+    assert "combat_snapshot" in state_rich
+    assert "board" in state_rich
+    q = build_combat_turn_plan_choice_question(plans, board=board)
+    assert "Defend" in q["criteria"]["plan_0000"]
+    wrapped_rich = jev_turn_plan_questions(board, plans, prompt_config=rich)
+    instr_rich = wrapped_rich[CHOICE_COMBAT_TURN_PLAN]["instructions"]
+    assert "Hand:" in instr_rich
+
+
+def test_runner_executes_heuristic_top_plan_low_conf_ok():
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    keys = legal_semantic_keys(combat, mask)
+    board = serialize_combat_board_full(combat, mask)
+    raw = enumerate_candidate_plans(keys)
+    top, _pr, _sm, _co = cap_plans_for_turn_plan_choice(raw, board, max_choices=32)
+    assert top
+    pick_id = top[0].plan_id
+    local, shadow = choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        _Ppo(),
+        adapter=_PlanAdapter(pick_id, conf=0.05),
+        combat_obs=obs,
+        env=env,
+    )
+    env.close()
+    assert int(mask[local]) == 1
+    assert shadow["turn_plan_failopen"] is False
+
+
+def test_runner_illegal_plan_catastrophe_fail_open():
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    ppo = _Ppo()
+    local, shadow = choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        ppo,
+        adapter=_PlanAdapter("plan_not_in_list"),
+        combat_obs=obs,
+        env=env,
+    )
+    env.close()
+    assert int(mask[local]) == 1
+    assert shadow["turn_plan_catastrophe"] is True
+    assert shadow["turn_plan_failopen_reason"] == CATA_FAILOPEN_ILLEGAL_PLAN
+
+
+def test_turn_plan_bh_assist_off_no_state_key():
+    class _CaptureAdapter(_PlanAdapter):
+        last_state = None
+
+        def system_one(self, state, questions):
+            type(self).last_state = state
+            return super().system_one(state, questions)
+
+    from sts2_env.eval.bh_assist import TurnPlanBhAssistConfig
+
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    keys = legal_semantic_keys(combat, mask)
+    board = serialize_combat_board_full(combat, mask)
+    raw = enumerate_candidate_plans(keys)
+    top, _pr, _sm, _co = cap_plans_for_turn_plan_choice(raw, board, max_choices=32)
+    _CaptureAdapter.last_state = None
+    choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        _Ppo(),
+        adapter=_CaptureAdapter(top[0].plan_id),
+        combat_obs=obs,
+        env=env,
+        bh_assist_config=TurnPlanBhAssistConfig(enabled=False),
+    )
+    env.close()
+    assert _CaptureAdapter.last_state is not None
+    assert "bh_assist" not in _CaptureAdapter.last_state
+
+
+def test_turn_plan_bh_assist_on_missing_ckpt_fail_open():
+    class _CaptureAdapter(_PlanAdapter):
+        last_state = None
+
+        def system_one(self, state, questions):
+            type(self).last_state = state
+            return super().system_one(state, questions)
+
+    import sts2_env.eval.bh_assist as bh_mod
+    from sts2_env.eval.bh_assist import TurnPlanBhAssistConfig
+
+    bh_mod._RANKER_CACHE.clear()
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    keys = legal_semantic_keys(combat, mask)
+    board = serialize_combat_board_full(combat, mask)
+    raw = enumerate_candidate_plans(keys)
+    top, _pr, _sm, _co = cap_plans_for_turn_plan_choice(raw, board, max_choices=32)
+    _CaptureAdapter.last_state = None
+    choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        _Ppo(),
+        adapter=_CaptureAdapter(top[0].plan_id),
+        combat_obs=obs,
+        env=env,
+        bh_assist_config=TurnPlanBhAssistConfig(
+            enabled=True, ckpt_path="/nonexistent/bh_assist_ranker.npz"
+        ),
+    )
+    env.close()
+    assert "bh_assist" not in (_CaptureAdapter.last_state or {})
+
+
+def test_turn_plan_bh_assist_on_fixture_injects_choice_payload(tmp_path):
+    class _CaptureAdapter(_PlanAdapter):
+        last_state = None
+        last_questions = None
+
+        def system_one(self, state, questions):
+            type(self).last_state = state
+            type(self).last_questions = questions
+            return super().system_one(state, questions)
+
+    import sts2_env.eval.bh_assist as bh_mod
+    from sts2_env.eval.bh_assist import TurnPlanBhAssistConfig
+    from sts2_env.eval.bh_assist_train import save_assist_checkpoint
+    from sts2_env.gym_env.observation import OBS_SIZE
+
+    bh_mod._RANKER_CACHE.clear()
+    ckpt = save_assist_checkpoint(
+        tmp_path,
+        {
+            "w": np.zeros(OBS_SIZE, dtype=np.float32),
+            "obs_size": np.array([OBS_SIZE], dtype=np.int64),
+        },
+        {"test": True},
+    )
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    keys = legal_semantic_keys(combat, mask)
+    board = serialize_combat_board_full(combat, mask)
+    raw = enumerate_candidate_plans(keys)
+    top, _pr, _sm, _co = cap_plans_for_turn_plan_choice(raw, board, max_choices=32)
+    _CaptureAdapter.last_state = None
+    choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        _Ppo(),
+        adapter=_CaptureAdapter(top[0].plan_id),
+        combat_obs=obs,
+        env=env,
+        bh_assist_config=TurnPlanBhAssistConfig(enabled=True, ckpt_path=str(ckpt)),
+    )
+    env.close()
+    assert "bh_assist" in _CaptureAdapter.last_state
+    assist_state = _CaptureAdapter.last_state["bh_assist"]
+    assert assist_state.get("ranked") or assist_state.get("ranked_semantic")
+    instr = _CaptureAdapter.last_questions[CHOICE_COMBAT_TURN_PLAN]["instructions"]
+    assert "rank" in instr.lower()
+
+
+def test_eval_combat_suite_accepts_jev_turn_and_bh_assist():
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "eval_combat_suite.py"
+    spec = importlib.util.spec_from_file_location("eval_combat_suite", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    args = mod.parse_args(["--combat-policy", "jev-turn"])
+    assert args.combat_policy == "jev-turn"
+    assert mod.parse_args([]).combat_policy == "ppo"
+    on = mod.parse_args(["--combat-policy", "jev-turn", "--bh-assist", "on"])
+    assert on.bh_assist == "on"
+
+
+def test_jev_turn_plan_telemetry_hook_and_report_rates():
+    from sts2_env.eval.combat_jev import (
+        COMBAT_JEV_TURN_CATASTROPHE_REASONS,
+        CombatJevTelemetry,
+        FAILOPEN_ILLEGAL_PLAN,
+        FAILOPEN_TIMEOUT,
+    )
+    from sts2_env.eval.combat_turn_plan import record_jev_turn_plan_turn
+
+    tel = CombatJevTelemetry()
+    record_jev_turn_plan_turn(tel, fulfilled=True)
+    record_jev_turn_plan_turn(tel, fulfilled=False, catastrophe_reason=FAILOPEN_TIMEOUT)
+    record_jev_turn_plan_turn(tel, fulfilled=False, catastrophe_reason=FAILOPEN_ILLEGAL_PLAN)
+    record_jev_turn_plan_turn(tel, fulfilled=False)  # low_conf guardrail shape
+
+    report = tel.as_report(n_episodes=1)
+    assert report["turn_plan_turns"] == 4
+    assert report["turn_plan_fulfilled"] == 1
+    assert report["turn_plan_catastrophe_failopen"] == 2
+    assert report["jev_fulfilled_rate"] == 0.25
+    assert report["catastrophe_failopen_rate"] == 0.5
+    assert set(report["jev_turn_catastrophe_reason"]) == set(COMBAT_JEV_TURN_CATASTROPHE_REASONS)
+    assert report["jev_turn_catastrophe_reason"][FAILOPEN_TIMEOUT] == 1
+    assert report["jev_turn_catastrophe_reason"][FAILOPEN_ILLEGAL_PLAN] == 1
+
+    record_jev_turn_plan_turn(None, fulfilled=True)  # no-op
+
+
+def test_turn_plan_missing_hung_ppo_distinct_from_random_failopen():
+    from sts2_env.eval.combat_jev import CombatJevTelemetry, FAILOPEN_MISSING_HUNG_PPO
+
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    tel = CombatJevTelemetry()
+    choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        None,
+        adapter=_PlanAdapter("plan_not_in_list"),
+        combat_obs=obs,
+        env=env,
+        telemetry=tel,
+    )
+    env.close()
+    report = tel.as_report()
+    assert report["jev_turn_catastrophe_reason"][FAILOPEN_MISSING_HUNG_PPO] == 1
+
+
+def test_turn_plan_adapter_error_records_sample_message():
+    from sts2_env.eval.combat_jev import FAILOPEN_ERROR, CombatJevTelemetry
+
+    class _BoomAdapter:
+        def system_one(self, state, questions):
+            raise RuntimeError("adapter boom for sentry")
+
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    tel = CombatJevTelemetry()
+    choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        _Ppo(),
+        adapter=_BoomAdapter(),
+        combat_obs=obs,
+        env=env,
+        telemetry=tel,
+    )
+    env.close()
+    report = tel.as_report()
+    assert report["jev_turn_catastrophe_reason"][FAILOPEN_ERROR] == 1
+    assert report["jev_turn_catastrophe_error_samples"]
+    assert "RuntimeError: adapter boom for sentry" in report["jev_turn_catastrophe_error_samples"][0]
+
+
+def test_runner_illegal_plan_increments_catastrophe_telemetry():
+    from sts2_env.eval.combat_jev import CombatJevTelemetry, FAILOPEN_ILLEGAL_PLAN
+
+    env, combat, mask = _reset()
+    obs = encode_observation(combat)
+    tel = CombatJevTelemetry()
+    choose_combat_turn_plan_action(
+        combat,
+        mask,
+        np.random.RandomState(0),
+        _Ppo(),
+        adapter=_PlanAdapter("plan_not_in_list"),
+        combat_obs=obs,
+        env=env,
+        telemetry=tel,
+    )
+    env.close()
+    report = tel.as_report()
+    assert report["turn_plan_turns"] == 1
+    assert report["catastrophe_failopen_rate"] == 1.0
+    assert report["jev_turn_catastrophe_reason"][FAILOPEN_ILLEGAL_PLAN] == 1
