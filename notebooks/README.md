@@ -37,4 +37,4 @@ Export tip #2 `.pt` → **`combat_critic_smoke.onnx`** on Drive (`MyDrive/sts2/c
 
 ## `colab_combat_critic_colab_v1.ipynb` (tip #4)
 
-Formal critic on **full** colab_v1 `transitions.npz` (~500k); warm-start `combat_critic_smoke.pt` → `combat_critic_colab_v1.pt` + `.onnx` (ORT ≤ **1e-5**). CLI: `scripts/colab_train_critic_colab_v1.py`.
+Formal critic on **full** colab_v1 `transitions.npz` (~500k); warm-start `combat_critic_smoke.pt` → `combat_critic_colab_v1.pt` + `.onnx` (ORT colab_v1 combined gate: max(1e-5, 1e-5·max(1,|y|_max)); smoke export stays absolute 1e-4). CLI: `scripts/colab_train_critic_colab_v1.py`.

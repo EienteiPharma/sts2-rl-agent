@@ -40,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         args.out_ckpt,
         onnx_out,
         max_abs_err=DEFAULT_ONNX_VERIFY_COLAB_V1,
+        gate="colab_v1",
     )
     print("CRITIC_COLAB_V1_PASS", meta["ckpt_path"], verify["max_abs_err"])
     print(json.dumps({"train": meta, "onnx": verify}, indent=2))

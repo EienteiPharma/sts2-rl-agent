@@ -275,6 +275,22 @@ def train_critic_smoke(
 
 DEFAULT_ONNX_VERIFY_MAX_ABS_ERR = 1e-4
 DEFAULT_ONNX_VERIFY_COLAB_V1 = 1e-5
+
+OnnxVerifyGate = Literal["absolute", "colab_v1"]
+
+
+def critic_onnx_verify_tolerance(
+    y_ref: np.ndarray,
+    *,
+    gate: OnnxVerifyGate = "absolute",
+    max_abs_err: float = DEFAULT_ONNX_VERIFY_MAX_ABS_ERR,
+) -> float:
+    """ORT parity tolerance. ``colab_v1``: max(ε, ε·max(1, |y|_max)) for large critic outputs."""
+    eps = float(max_abs_err)
+    if gate == "absolute":
+        return eps
+    y_max = float(np.max(np.abs(np.asarray(y_ref, dtype=np.float64))))
+    return max(eps, eps * max(1.0, y_max))
 COLAB_V1_MIN_EPOCHS = 3
 COLAB_V1_MIN_SAMPLE_UPDATES = 1_500_000
 COLAB_V1_VAL_SMOKE_MAX_RATIO = 3.0
@@ -528,8 +544,13 @@ def verify_critic_onnx(
     batch_size: int = 32,
     seed: int = 0,
     max_abs_err: float = DEFAULT_ONNX_VERIFY_MAX_ABS_ERR,
+    gate: OnnxVerifyGate = "absolute",
 ) -> dict[str, Any]:
-    """Compare PyTorch ``.net`` forward vs ONNX Runtime on one random batch (fp32 gate)."""
+    """Compare PyTorch ``.net`` forward vs ONNX Runtime on one random batch (fp32 gate).
+
+    ``gate='absolute'`` (smoke / export script default): ``max_abs_err <= max_abs_err``.
+    ``gate='colab_v1'``: ``max_abs_err <= max(ε, ε·max(1, |y|_max))`` with ε=``max_abs_err``.
+    """
     t = _require_torch()
     try:
         import onnxruntime as ort
@@ -557,16 +578,23 @@ def verify_critic_onnx(
     err = float(np.max(np.abs(torch_out - ort_out)))
     if not np.isfinite(err):
         raise ValueError("non-finite ONNX verify error")
-    if err > float(max_abs_err):
+    y_abs_max = float(np.max(np.abs(torch_out)))
+    gate_tol = critic_onnx_verify_tolerance(
+        torch_out, gate=gate, max_abs_err=max_abs_err
+    )
+    if err > gate_tol:
         raise ValueError(
-            f"ONNX max_abs_err {err} > gate {max_abs_err} (fp32 export vs ORT CPU)"
+            f"ONNX max_abs_err {err} > gate {gate_tol} "
+            f"(mode={gate}, y_abs_max={y_abs_max}; fp32 export vs ORT CPU)"
         )
     return {
         "max_abs_err": err,
         "onnx_path": str(onnx_p.resolve()),
         "pt_path": str(Path(pt_path).expanduser().resolve()),
         "batch_size": int(batch_size),
-        "gate_max_abs_err": float(max_abs_err),
+        "gate": gate,
+        "gate_max_abs_err": float(gate_tol),
+        "y_abs_max": y_abs_max,
     }
 
 
@@ -581,6 +609,8 @@ __all__ = [
     "DEFAULT_MIN_ROWS",
     "DEFAULT_ONNX_VERIFY_COLAB_V1",
     "DEFAULT_ONNX_VERIFY_MAX_ABS_ERR",
+    "OnnxVerifyGate",
+    "critic_onnx_verify_tolerance",
     "LABEL_MC_RETURN",
     "LABEL_WIN_PROXY",
     "build_targets",
