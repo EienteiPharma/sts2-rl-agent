@@ -37,6 +37,7 @@ from pathlib import Path
 
 import numpy as np
 
+from sts2_env.eval.death_census import summarize_traces, trace_from_dict, write_census
 from sts2_env.eval.act1_metrics import (
     _summarize,
     build_report,
@@ -202,6 +203,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="/workspace/sts2-sim/evals/act1_runenv_latest.json",
     )
     ap.add_argument("--max-steps", type=int, default=2000)
+    ap.add_argument(
+        "--death-census",
+        action="store_true",
+        default=False,
+        help="Attach per-run death attribution traces and write <out-stem>.census.json",
+    )
     return ap.parse_args(argv)
 
 
@@ -234,6 +241,7 @@ def main(argv: list[str] | None = None) -> None:
     t0 = datetime.now(timezone.utc)
     n = max(1, int(getattr(args, "n", SEED_COUNT)))
     seeds = list(range(SEED_START, SEED_START + n))
+    death_census = bool(getattr(args, "death_census", False))
     for seed in seeds:
         rows.append(
             _run_episode(
@@ -250,6 +258,7 @@ def main(argv: list[str] | None = None) -> None:
                 combat_policy=combat_policy,
                 combat_jev_adapter=combat_jev_adapter,
                 combat_jev_telemetry=combat_jev_telemetry,
+                death_census=death_census,
             )
         )
     env.close()
@@ -275,6 +284,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     out = Path(args.out)
     write_report(report, out)
+    if death_census:
+        traces = [trace_from_dict(r["death_census"]) for r in rows]
+        census_summary = summarize_traces(traces)
+        census_path = out.parent / f"{out.stem}.census.json"
+        write_census(census_path, traces, census_summary)
+        print(json.dumps(census_summary, ensure_ascii=False, indent=2))
     slim = {k: v for k, v in report.items() if k != "rows"}
     print(json.dumps(slim, ensure_ascii=False, indent=2))
 
