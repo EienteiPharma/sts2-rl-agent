@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "sts2-rl-agent"
 version = "0.1.0"
@@ -13,10 +17,18 @@ train = [
     "stable-baselines3>=2.3.0",
     "sb3-contrib>=2.3.0",
     "torch>=2.0",
+    "tensorboard>=2.21.0",
+    "tqdm>=4.70.1",
+    "rich>=15.0.0",
 ]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
+]
+colab = [
+    "onnx>=1.23.0",
+    "onnxruntime>=1.30.0",
+    "pyarrow>=25.0.1",
 ]
 
 [tool.setuptools.packages.find]

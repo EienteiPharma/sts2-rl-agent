@@ -1,0 +1,5 @@
+{
+  "name": "STS2 RL Agent",
+  "user": "ubuntu",
+  "install": "curl -LsSf https://astral.sh/uv/install.sh | sh && \"$HOME/.local/bin/uv\" sync --all-extras"
+}

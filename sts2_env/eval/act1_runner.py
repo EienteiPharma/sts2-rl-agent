@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -49,6 +49,18 @@ from sts2_env.gym_env.run_env import (
     _COMBAT_SIZE,
     _COMBAT_START,
 )
+from dataclasses import asdict
+
+from sts2_env.core.enums import RoomType
+from sts2_env.eval.death_census import (
+    CombatEvent,
+    DeathKind,
+    Outcome,
+    RoomKind,
+    RunTrace,
+    ShopVisit,
+)
+from sts2_env.run.rooms import CombatRoom
 from sts2_env.run.run_manager import RunManager
 
 
@@ -116,6 +128,79 @@ def jev_shadow_fields(phase: str, *, jev_enabled: bool = False) -> dict[str, Any
     if jev_enabled:
         return JevAnswer(status=JEV_SHADOW_STUB, fallback_reason="non_decision").as_log()
     return JevAnswer(status=JEV_SHADOW_STUB, fallback_reason="jev_off").as_log()
+
+
+def _combat_room_kind(mgr: RunManager) -> Literal["monster", "elite", "boss"]:
+    room = mgr.current_room
+    if isinstance(room, CombatRoom):
+        if room.is_boss or room.room_type == RoomType.BOSS:
+            return "boss"
+        if room.is_elite or room.room_type == RoomType.ELITE:
+            return "elite"
+        return "monster"
+    rt = mgr._current_room_type
+    if rt == RoomType.BOSS:
+        return "boss"
+    if rt == RoomType.ELITE:
+        return "elite"
+    return "monster"
+
+
+def _room_type_to_room_kind(rt: RoomType | None) -> RoomKind:
+    if rt is None:
+        return "other"
+    mapping: dict[RoomType, RoomKind] = {
+        RoomType.MONSTER: "monster",
+        RoomType.ELITE: "elite",
+        RoomType.BOSS: "boss",
+        RoomType.SHOP: "shop",
+        RoomType.REST_SITE: "rest",
+        RoomType.EVENT: "event",
+        RoomType.TREASURE: "treasure",
+    }
+    return mapping.get(rt, "other")
+
+
+def _phase_to_room_kind(phase: str) -> RoomKind:
+    if phase == RunManager.PHASE_MAP_CHOICE:
+        return "map"
+    if phase == RunManager.PHASE_SHOP:
+        return "shop"
+    if phase == RunManager.PHASE_REST_SITE:
+        return "rest"
+    if phase == RunManager.PHASE_EVENT:
+        return "event"
+    if phase == RunManager.PHASE_TREASURE:
+        return "treasure"
+    if phase == RunManager.PHASE_COMBAT:
+        return "monster"
+    return "other"
+
+
+def _combat_enemy_ids(mgr: RunManager) -> list[str]:
+    combat = mgr.get_combat_state()
+    if combat is None:
+        return []
+    ids: list[str] = []
+    for enemy in combat.enemies:
+        mid = getattr(enemy, "monster_id", None)
+        ids.append(str(mid) if mid is not None else "")
+    return ids
+
+
+def _combat_encounter_id(mgr: RunManager) -> str:
+    room = mgr.current_room
+    if isinstance(room, CombatRoom):
+        return str(room.encounter_id or "")
+    return ""
+
+
+def _count_upgraded_cards(deck: list[Any]) -> int:
+    n = 0
+    for card in deck:
+        if getattr(card, "upgraded", False):
+            n += 1
+    return n
 
 
 def _legal_random(mask: np.ndarray, rng: np.random.RandomState) -> int:
@@ -278,6 +363,7 @@ def _run_episode(
     combat_policy: str = "ppo",
     combat_jev_adapter: Any = None,
     combat_jev_telemetry: CombatJevTelemetry | None = None,
+    death_census: bool = False,
 ) -> dict:
     obs, info = env.reset(seed=seed, options={"start_with_neow": start_with_neow})
     done = False
@@ -300,7 +386,123 @@ def _run_episode(
     potion_or_relic_safe_n = 0
     potion_or_relic_random_n = 0
     tel_mark = combat_jev_telemetry.mark() if combat_jev_telemetry is not None else (0, 0)
+    census_combats: list[CombatEvent] = []
+    census_shop_visits: list[ShopVisit] = []
+    census_rest_visits = 0
+    census_event_visits = 0
+    census_card_picks = 0
+    census_card_skips = 0
+    census_open_combat: dict[str, Any] | None = None
+    census_shop_open: dict[str, int] | None = None
+    census_card_deck_len: int | None = None
+    census_last_lost_combat: CombatEvent | None = None
+    census_last_noncombat_phase: str | None = None
+
+    def _census_floor_act() -> tuple[int, int]:
+        return int(info.get("floor", 0)), int(info.get("act", 0))
+
+    def _census_start_combat(mgr: RunManager) -> None:
+        nonlocal census_open_combat
+        player = mgr.run_state.player
+        floor, act = _census_floor_act()
+        census_open_combat = {
+            "floor": floor,
+            "act": act,
+            "room_kind": _combat_room_kind(mgr),
+            "encounter_id": _combat_encounter_id(mgr),
+            "enemy_ids": _combat_enemy_ids(mgr),
+            "hp_in": int(player.current_hp),
+            "gold_in": int(player.gold),
+            "max_hp": int(player.max_hp),
+            "steps": 0,
+        }
+
+    def _census_end_combat(mgr: RunManager) -> None:
+        nonlocal census_open_combat, census_last_lost_combat
+        if census_open_combat is None:
+            return
+        player = mgr.run_state.player
+        hp_out = int(player.current_hp)
+        gold_out = int(player.gold)
+        still_combat = mgr.phase == RunManager.PHASE_COMBAT
+        outcome: Outcome = "left"
+        if hp_out <= 0:
+            outcome = "lost"
+        elif not still_combat:
+            outcome = "won"
+        evt = CombatEvent(
+            floor=int(census_open_combat["floor"]),
+            act=int(census_open_combat["act"]),
+            room_kind=census_open_combat["room_kind"],
+            encounter_id=str(census_open_combat["encounter_id"]),
+            enemy_ids=list(census_open_combat["enemy_ids"]),
+            hp_in=int(census_open_combat["hp_in"]),
+            hp_out=hp_out,
+            max_hp=int(census_open_combat["max_hp"]),
+            gold_in=int(census_open_combat["gold_in"]),
+            gold_out=gold_out,
+            outcome=outcome,
+            steps=int(census_open_combat["steps"]),
+        )
+        census_combats.append(evt)
+        if outcome == "lost":
+            census_last_lost_combat = evt
+        census_open_combat = None
+
+    def _census_on_phase_enter(phase: str, mgr: RunManager) -> None:
+        nonlocal census_rest_visits, census_event_visits, census_shop_open, census_card_deck_len
+        if phase == RunManager.PHASE_REST_SITE:
+            census_rest_visits += 1
+        elif phase == RunManager.PHASE_EVENT:
+            census_event_visits += 1
+        elif phase == RunManager.PHASE_SHOP:
+            census_shop_open = {
+                "floor": int(info.get("floor", 0)),
+                "gold_in": int(mgr.run_state.player.gold),
+            }
+        elif phase == RunManager.PHASE_CARD_REWARD:
+            census_card_deck_len = len(mgr.run_state.player.deck)
+
+    def _census_on_phase_leave(phase: str, mgr: RunManager) -> None:
+        nonlocal census_shop_open, census_card_picks, census_card_skips, census_card_deck_len
+        if phase == RunManager.PHASE_SHOP and census_shop_open is not None:
+            gold_out = int(mgr.run_state.player.gold)
+            gold_in = int(census_shop_open["gold_in"])
+            census_shop_visits.append(
+                ShopVisit(
+                    floor=int(census_shop_open["floor"]),
+                    gold_in=gold_in,
+                    gold_out=gold_out,
+                    spent=max(0, gold_in - gold_out),
+                )
+            )
+            census_shop_open = None
+        elif phase == RunManager.PHASE_CARD_REWARD and census_card_deck_len is not None:
+            deck_len = len(mgr.run_state.player.deck)
+            if deck_len > census_card_deck_len:
+                census_card_picks += 1
+            else:
+                census_card_skips += 1
+            census_card_deck_len = None
+
+    if death_census:
+        mgr0 = _run_manager(env)
+        phase0 = str(info.get("phase", mgr0.phase))
+        if phase0 == RunManager.PHASE_COMBAT:
+            _census_start_combat(mgr0)
+        else:
+            _census_on_phase_enter(phase0, mgr0)
+            census_last_noncombat_phase = phase0
+
     while not done:
+        phase_before = str(info.get("phase", _run_manager(env).phase))
+        if death_census:
+            mgr_before = _run_manager(env)
+            if phase_before == RunManager.PHASE_COMBAT and census_open_combat is None:
+                _census_start_combat(mgr_before)
+            if phase_before == RunManager.PHASE_COMBAT and census_open_combat is not None:
+                census_open_combat["steps"] = int(census_open_combat["steps"]) + 1
+
         mask = info.get("action_mask")
         if mask is None:
             mask = env.action_masks()
@@ -373,9 +575,22 @@ def _run_episode(
         steps += 1
         max_act = max(max_act, int(info.get("act", 0)))
         done = terminated or truncated
-    return {
+        if death_census:
+            mgr_after = _run_manager(env)
+            phase_after = str(info.get("phase", mgr_after.phase))
+            if phase_before == RunManager.PHASE_COMBAT and (
+                phase_after != RunManager.PHASE_COMBAT or done
+            ):
+                _census_end_combat(mgr_after)
+            if phase_before != phase_after:
+                _census_on_phase_leave(phase_before, mgr_after)
+                _census_on_phase_enter(phase_after, mgr_after)
+                if phase_after != RunManager.PHASE_COMBAT:
+                    census_last_noncombat_phase = phase_after
+    act1_clear = bool(max_act >= 1)
+    row: dict[str, Any] = {
         "seed": seed,
-        "act1_clear": bool(max_act >= 1),
+        "act1_clear": act1_clear,
         "full_run_win": bool(terminated and reward > 0),
         "truncated": bool(truncated),
         "max_act": max_act,
@@ -408,6 +623,65 @@ def _run_episode(
             else {"combat_jev_calls": 0, "combat_jev_fail_open": 0}
         ),
     }
+    if death_census:
+        mgr_end = _run_manager(env)
+        if census_open_combat is not None:
+            _census_end_combat(mgr_end)
+        if census_shop_open is not None:
+            _census_on_phase_leave(RunManager.PHASE_SHOP, mgr_end)
+        if census_card_deck_len is not None:
+            _census_on_phase_leave(RunManager.PHASE_CARD_REWARD, mgr_end)
+        player = mgr_end.run_state.player
+        trunc_flag = bool(truncated)
+        death_kind: DeathKind
+        if act1_clear:
+            death_kind = "cleared"
+        elif trunc_flag:
+            death_kind = "truncation"
+        elif census_last_lost_combat is not None:
+            rk = census_last_lost_combat.room_kind
+            death_kind = f"combat_{rk}"  # type: ignore[assignment]
+        else:
+            death_kind = "noncombat"
+        death_room_kind: RoomKind = "other"
+        death_encounter_id = ""
+        death_enemy_ids: list[str] = []
+        if census_last_lost_combat is not None:
+            death_room_kind = census_last_lost_combat.room_kind
+            death_encounter_id = census_last_lost_combat.encounter_id
+            death_enemy_ids = list(census_last_lost_combat.enemy_ids)
+        elif census_last_noncombat_phase is not None:
+            if census_last_noncombat_phase == RunManager.PHASE_MAP_CHOICE:
+                death_room_kind = "map"
+            else:
+                death_room_kind = _phase_to_room_kind(census_last_noncombat_phase)
+                rt = mgr_end._current_room_type
+                if rt is not None and death_room_kind == "other":
+                    death_room_kind = _room_type_to_room_kind(rt)
+        trace = RunTrace(
+            seed=seed,
+            act1_clear=act1_clear,
+            truncated=trunc_flag,
+            death_kind=death_kind,
+            death_floor=int(info.get("floor", 0)),
+            death_hp=int(info.get("hp", 0)),
+            death_gold=int(info.get("gold", 0)),
+            death_room_kind=death_room_kind,
+            death_encounter_id=death_encounter_id,
+            death_enemy_ids=death_enemy_ids,
+            combats=census_combats,
+            shop_visits=census_shop_visits,
+            rest_visits=census_rest_visits,
+            event_visits=census_event_visits,
+            card_picks=census_card_picks,
+            card_skips=census_card_skips,
+            deck_size=len(player.deck),
+            upgraded_cards=_count_upgraded_cards(player.deck),
+            relic_count=len(player.relics),
+            potion_count=len(player.held_potions()),
+        )
+        row["death_census"] = asdict(trace)
+    return row
 
 
 def validate_policy_args(args: argparse.Namespace) -> None:
