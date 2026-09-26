@@ -25,6 +25,11 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
 ]
+colab = [
+    "onnx>=1.23.0",
+    "onnxruntime>=1.30.0",
+    "pyarrow>=25.0.1",
+]
 
 [tool.setuptools.packages.find]
 include = ["sts2_env*"]
