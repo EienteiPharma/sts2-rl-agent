@@ -3,7 +3,9 @@
 
 Modes: force_random | shadow_only | suggest_live
 Base Jev phases: MAP_CHOICE / REST_SITE / CARD_REWARD.
-EVENT (+ Neow) is gated by jev_event (CLI --jev-event, default off).
+EVENT is gated by jev_event (CLI --jev-event, default off).
+Neow opening boon is random by default (--jev-neow off → neow_jev_off_random).
+--jev-neow on still uses neow_boon @ global 0.65 even when jev_event is off.
 Other noncombat = masked random. Fail-open to legal random on missing key /
 API / parse / timeout. Never prints or logs the API key.
 """
@@ -11,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -21,6 +24,22 @@ from typing import Any
 
 import numpy as np
 
+from sts2_env.eval.jev_fallback import (
+    local_hp_pressure,
+)
+from sts2_env.eval.map_lowhp import (
+    MAP_LOWHP_HARD_ON,
+    MAP_LOWHP_HARD_REASON,
+    MAP_LOWHP_ON,
+    MAP_LOWHP_RANDOM_REASON,
+    MAP_LOWHP_SAFE_REASON,
+    MAP_LOWHP_SOFT_B_ON,
+    MAP_LOWHP_SOFT_B_REASON,
+    apply_map_lowhp_hard_policy,
+    apply_map_lowhp_random_policy,
+    map_lowhp_safe_items,
+)
+
 TYPESAFE_SYSTEM_ONE_URL = "https://api.typesafe.ai/v1/systemone"
 DEFAULT_MODEL = "jev-1.13.0"
 CHOICE_MIN_CONFIDENCE = 0.65
@@ -30,6 +49,7 @@ REST_SMITH_ASSIST_CONF = 0.40
 UNKNOWN_DEFER_CONFIDENCE = 0.80  # MAP Unknown defer when hp_pressure high; threshold 0.65 unchanged
 CARD_FIT_ASSIST_MIN = 2.0  # Score assist; Choice threshold unchanged
 DEFAULT_TIMEOUT_S = 8.0
+TYPESAFE_HTTP_USER_AGENT = "sts2-rl-agent-jev/1.0"
 # Base phases always eligible; EVENT is added at runtime when jev_event=True.
 BASE_JEV_PHASES = frozenset({"MAP_CHOICE", "REST_SITE", "CARD_REWARD"})
 JEV_PHASES = BASE_JEV_PHASES  # backward-compat alias (EVENT gated separately)
@@ -64,22 +84,15 @@ def ensure_typesafe_api_key(
     *,
     secrets_path: Path | str = BOX_SECRETS_PATH,
 ) -> bool:
-    """Ensure os.environ['TYPESAFE_API_KEY'] is set. Prefer existing env; else box-secrets.
+    """Ensure a TypeSafe key (or pool) is in the environment.
 
-    Never prints/logs the key value. Returns True if a non-empty key is available.
+    Loads ``card.TYPESAFE_API_KEY`` plus ``card.TYPESAFE_API_KEY_1``..``_4``
+    from box-secrets; also accepts already-exported env names. Never prints
+    key values. Returns True if at least one non-empty key is available.
     """
-    existing = os.environ.get("TYPESAFE_API_KEY")
-    if existing:
-        return True
-    try:
-        data = json.loads(Path(secrets_path).read_text(encoding="utf-8"))
-        key = (data.get("card") or {}).get("TYPESAFE_API_KEY")
-    except Exception:
-        return False
-    if not isinstance(key, str) or not key.strip():
-        return False
-    os.environ["TYPESAFE_API_KEY"] = key
-    return True
+    from sts2_env.eval.jev import load_typesafe_api_keys
+
+    return bool(load_typesafe_api_keys(secrets_path=secrets_path))
 
 
 def _read_api_key() -> str | None:
@@ -650,7 +663,7 @@ def _post_system_one(body: dict[str, Any], timeout: float, api_key: str) -> dict
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "sts2-jev-noncombat/1",
+            "User-Agent": TYPESAFE_HTTP_USER_AGENT,
         },
         method="POST",
     )
@@ -795,14 +808,15 @@ def _build_questions(
         questions["hp_pressure"] = {
             "type": "score",
             "instructions": (
-                "How urgently does the player need safer pathing (rest/safer over elite) given HP? "
-                "Unknown is a variance node — do not treat it as free healing."
+                "How urgently does the player need safer pathing (rest/shop over monster/elite) given HP? "
+                "Unknown is a variance node — do not treat it as free healing. "
+                "If HP pressure is high and a shop or rest node is legal, prefer that."
             ),
             "criteria": [
                 "Healthy; elites/monsters fine.",
                 "Mild caution.",
-                "Prefer rest/safer nodes over elite; Unknown only if needed.",
-                "Must avoid elite; seek rest if present; defer Unknown when safer exists.",
+                "Prefer rest/shop over monster/elite; Unknown only if needed.",
+                "Must avoid elite/monster; seek rest or shop if present; defer Unknown when safer exists.",
             ],
         }
     return questions
@@ -823,6 +837,134 @@ def _rest_is_smith(oid: str, opt: NoncombatOption | None = None) -> bool:
     if raw.startswith("REST_CHOOSE") or raw.startswith("REST_CONFIRM"):
         return False
     return raw.startswith("SMITH") or raw.startswith("REST_SMITH")
+
+
+def _opt_point_type(opt: NoncombatOption) -> str:
+    return str((opt.meta or {}).get("point_type") or "")
+
+
+def _local_hp_pressure_from(env: Any, info: dict[str, Any]) -> float | None:
+    hp = info.get("hp")
+    max_hp = info.get("max_hp")
+    if hp is None or max_hp is None:
+        mgr = getattr(env, "_mgr", None)
+        if mgr is not None:
+            try:
+                player = mgr.run_state.player
+                hp = player.current_hp
+                max_hp = player.max_hp
+            except Exception:
+                return None
+    if hp is None or max_hp is None:
+        return None
+    return local_hp_pressure(int(hp), int(max_hp))
+
+
+def _resolve_map_hp_pressure(
+    jev_pressure: float | None,
+    env: Any,
+    info: dict[str, Any],
+) -> float | None:
+    if jev_pressure is not None:
+        return float(jev_pressure)
+    return _local_hp_pressure_from(env, info)
+
+
+def _legal_opts(
+    options: list[NoncombatOption],
+    mask: np.ndarray,
+) -> list[NoncombatOption]:
+    m = np.asarray(mask)
+    return [
+        o
+        for o in options
+        if 0 <= o.action_index < len(m) and m[o.action_index] == 1
+    ]
+
+
+def _sample_map_lowhp(
+    options: list[NoncombatOption],
+    mask: np.ndarray,
+    rng: np.random.RandomState,
+    hp_pressure: float | None,
+    *,
+    map_lowhp: bool,
+    map_lowhp_hard: bool = False,
+    map_lowhp_soft_b: bool = MAP_LOWHP_SOFT_B_ON,
+    act_map: Any = None,
+) -> tuple[int, str | None, str | None]:
+    """Hard-select only when opt-in; else soft-B / v1 uncertain shop/rest filter."""
+    legal = _legal_opts(options, mask)
+    dummy_pick = type("DummyPick", (), {"status": "ok", "fallback_reason": None})()
+    if map_lowhp_hard:
+        hard_res = apply_map_lowhp_hard_policy(
+            legal, dummy_pick, hp_pressure, map_lowhp_hard=True
+        )
+        if hard_res is not None:
+            action, ans = hard_res
+            eid = next((o.option_id for o in legal if o.action_index == action), None)
+            return action, eid, MAP_LOWHP_HARD_REASON
+
+    def _sample_legal(pool, r):
+        return pool[int(r.randint(0, len(pool)))] if pool else None
+
+    if not legal:
+        return _legal_random(mask, rng), None, None
+
+    action_obj, ans = apply_map_lowhp_random_policy(
+        legal,
+        hp_pressure,
+        rng,
+        map_lowhp=map_lowhp,
+        map_lowhp_soft_b=map_lowhp_soft_b,
+        act_map=act_map,
+        pick=dummy_pick,
+        select_fn=_sample_legal,
+    )
+    if action_obj is not None:
+        return action_obj.action_index, action_obj.option_id, ans.fallback_reason
+    return _legal_random(mask, rng), None, None
+
+
+def _maybe_map_lowhp_hard(
+    options: list[NoncombatOption],
+    hp_pressure: float | None,
+    *,
+    map_lowhp_hard: bool,
+) -> NoncombatOption | None:
+    """Opt-in rest-then-shop when HP is thin and those nodes are legal."""
+    dummy_pick = type("DummyPick", (), {"status": "ok", "fallback_reason": None})()
+    res = apply_map_lowhp_hard_policy(
+        options, dummy_pick, hp_pressure, map_lowhp_hard=map_lowhp_hard
+    )
+    if res is not None:
+        action, ans = res
+        return next((o for o in options if o.action_index == action), None)
+    return None
+
+
+def _event_safe_option(options: list[NoncombatOption]) -> NoncombatOption | None:
+    """When Jev is uncertain on an EVENT choice, prefer safe legal options over random."""
+    if not options:
+        return None
+    leaves = [
+        o for o in options
+        if str(o.option_id).lower() in {"leave", "event_leave"}
+        or str(o.option_id).lower().endswith("_leave")
+        or "leave" == str((o.meta or {}).get("choice_key", "")).lower()
+    ]
+    if leaves:
+        return leaves[0]
+
+    def _is_harmful(o: NoncombatOption) -> bool:
+        text = (o.label + " " + str(o.option_id) + " " + str((o.meta or {}).get("criteria", ""))).lower()
+        harmful_keywords = ["curse", "lose hp", "damage", "wound", "decay", "doubt", "regret", "writhe"]
+        return any(kw in text for kw in harmful_keywords)
+
+    safe = [o for o in options if not _is_harmful(o)]
+    if safe:
+        return safe[0]
+    return options[0]
 
 
 def _apply_hp_pressure_bias(
@@ -949,8 +1091,20 @@ def decide_noncombat(
     model: str = DEFAULT_MODEL,
     timeout: float = DEFAULT_TIMEOUT_S,
     jev_event: bool = False,
+    jev_neow: bool = False,
+    map_lowhp: bool = MAP_LOWHP_ON,
+    map_lowhp_hard: bool = MAP_LOWHP_HARD_ON,
+    map_lowhp_soft_b: bool = MAP_LOWHP_SOFT_B_ON,
 ) -> int:
-    """Decide a RunEnv action for non-combat phases under the Jev switch contract."""
+    """Decide a RunEnv action for non-combat phases under the Jev switch contract.
+
+    ``map_lowhp`` (hang default on): MAP_CHOICE uncertain/error with
+    ``hp_pressure >= 2.0`` and a legal shop/rest node resamples among those
+    (``map_lowhp_random``). ``map_lowhp_hard`` (hang default **off**) is the
+    v2 rest-then-shop override regardless of Jev confidence.
+    ``map_lowhp_soft_b`` (hang default **off**, opt-in): soft bias against danger nodes (elite/boss)
+    when low-HP.
+    """
     if mode not in MODES:
         mode = "force_random"
 
@@ -985,18 +1139,30 @@ def decide_noncombat(
         defaults.update(kwargs)
         return DecisionRecord(**defaults)
 
-    # EVENT with switch off: masked random, do not call API.
-    if phase == "EVENT" and not jev_event:
+    # Detect Neow early: with --jev-event off, ordinary EVENT stays random;
+    # Neow opening boon goes through Jev only when jev_neow=True (global 0.65).
+    mgr = getattr(env, "_mgr", None)
+    acts_for_neow = mgr.get_available_actions() if mgr is not None else []
+    is_neow = phase == "EVENT" and _is_neow_screen(env, acts_for_neow)
+    log_phase = "NEOW" if is_neow else phase
+    neow_jev = bool(is_neow and jev_neow)
+
+    # EVENT with switch off: masked random — Neow also random if jev_neow=False.
+    if phase == "EVENT" and not jev_event and not neow_jev:
         action = _legal_random(mask, rng)
+        reason = "neow_jev_off_random" if is_neow else "jev_event_off_random"
         rec = _base_rec(
             executed_action_index=action,
-            reason="jev_event_off_random",
+            reason=reason,
+            phase=log_phase,
+            is_neow=is_neow if is_neow else None,
         )
         append_shadow_log(shadow_log, rec)
         return action
 
     # Non-Jev phases: masked random (caller should not invoke for COMBAT).
-    if phase not in phases:
+    # Neow is EVENT-phase but eligible when jev_neow=True even if jev_event=False.
+    if phase not in phases and not neow_jev:
         action = _legal_random(mask, rng)
         rec = _base_rec(executed_action_index=action, reason="non_jev_phase_random")
         append_shadow_log(shadow_log, rec)
@@ -1007,18 +1173,21 @@ def decide_noncombat(
         mgr = getattr(env, "_mgr", None)
         acts = mgr.get_available_actions() if mgr is not None else []
         if any(a.get("action") in {"pick_potion", "pick_relic_reward"} for a in acts):
-            action = _legal_random(mask, rng)
+            from sts2_env.gym_env.run_env import _CARD_RWD_START
+
+            take_idx = _CARD_RWD_START
+            if 0 <= take_idx < len(mask) and int(mask[take_idx]) == 1:
+                action = int(take_idx)
+                reason = "potion_or_relic_safe_fallback"
+            else:
+                action = _legal_random(mask, rng)
+                reason = "potion_or_relic_reward_random"
             rec = _base_rec(
                 executed_action_index=action,
-                reason="potion_or_relic_reward_random",
+                reason=reason,
             )
             append_shadow_log(shadow_log, rec)
             return action
-
-    mgr = getattr(env, "_mgr", None)
-    acts_for_neow = mgr.get_available_actions() if mgr is not None else []
-    is_neow = phase == "EVENT" and _is_neow_screen(env, acts_for_neow)
-    log_phase = "NEOW" if is_neow else phase
 
     options = [o for o in build_options(env, mask, phase) if o.visible]
     # Contract: event_choice / neow_boon only with ≥2 non-Leave options.
@@ -1145,20 +1314,82 @@ def decide_noncombat(
         is_neow=is_neow,
     )
 
+    map_pressure = (
+        _resolve_map_hp_pressure(hp_pressure, env, info)
+        if phase == "MAP_CHOICE"
+        else hp_pressure
+    )
+
+    if phase == "MAP_CHOICE" and mode == "suggest_live" and map_lowhp_hard:
+        hard_pick = _maybe_map_lowhp_hard(
+            _legal_opts(options, mask), map_pressure, map_lowhp_hard=True
+        )
+        if hard_pick is not None:
+            print(
+                f"map_lowhp_hard pressure={map_pressure} "
+                f"jev_choice={choice_id} executed={hard_pick.option_id}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return _finish(
+                executed=hard_pick.action_index,
+                executed_id=hard_pick.option_id,
+                used=True,
+                reason=MAP_LOWHP_HARD_REASON,
+                jev_choice_id=choice_id,
+                jev_confidence=conf,
+                jev_action_index=hard_pick.action_index,
+                jev_hp_pressure=map_pressure,
+                latency_ms=latency_ms,
+                model_name=model_name,
+                error_type=error_type,
+                jev_card_fit=card_fit,
+            )
+
     if error_type or choice_id is None or conf is None:
-        action = _legal_random(mask, rng)
-        eligible = [i for i in legal_indices if i < len(mask) and mask[i] == 1]
-        if eligible:
-            action = int(rng.choice(eligible))
-        eid = next((o.option_id for o in options if o.action_index == action), None)
+        if phase == "MAP_CHOICE":
+            act_map = getattr(env, "_mgr", None)
+            act_map = getattr(act_map, "_run_state", None) if act_map else None
+            act_map = getattr(act_map, "map", None) if act_map else None
+            action, eid, extra = _sample_map_lowhp(
+                options,
+                mask,
+                rng,
+                map_pressure,
+                map_lowhp=map_lowhp,
+                map_lowhp_hard=map_lowhp_hard,
+                map_lowhp_soft_b=map_lowhp_soft_b,
+                act_map=act_map,
+            )
+            reason = extra or (
+                "api_error" if error_type == "api_error" else (error_type or "jev_failed")
+            )
+        elif phase == "EVENT" and not is_neow:
+            safe_opt = _event_safe_option(options)
+            if safe_opt and safe_opt.action_index < len(mask) and mask[safe_opt.action_index] == 1:
+                action = safe_opt.action_index
+                eid = safe_opt.option_id
+                reason = "event_safe_fallback"
+            else:
+                action = _legal_random(mask, rng)
+                eid = next((o.option_id for o in options if o.action_index == action), None)
+                reason = "api_error" if error_type == "api_error" else (error_type or "jev_failed")
+        else:
+            action = _legal_random(mask, rng)
+            eligible = [i for i in legal_indices if i < len(mask) and mask[i] == 1]
+            if eligible:
+                action = int(rng.choice(eligible))
+            eid = next((o.option_id for o in options if o.action_index == action), None)
+            reason = "api_error" if error_type == "api_error" else (error_type or "jev_failed")
         return _finish(
             executed=action,
             executed_id=eid,
             used=False,
-            reason="api_error" if error_type == "api_error" else (error_type or "jev_failed"),
+            reason=reason,
             latency_ms=latency_ms,
             model_name=model_name,
             error_type=error_type or "api_error",
+            jev_hp_pressure=map_pressure if phase == "MAP_CHOICE" else hp_pressure,
         )
 
     # REST-only Score override; EVENT has none. MAP keeps Score for Unknown defer.
@@ -1166,16 +1397,33 @@ def decide_noncombat(
     by_id = {o.option_id: o for o in options}
     chosen = by_id.get(choice_id)
     if chosen is None:
-        action = int(rng.choice(legal_indices)) if legal_indices else _legal_random(mask, rng)
-        eid = next((o.option_id for o in options if o.action_index == action), None)
+        if phase == "MAP_CHOICE":
+            act_map = getattr(env, "_mgr", None)
+            act_map = getattr(act_map, "_run_state", None) if act_map else None
+            act_map = getattr(act_map, "map", None) if act_map else None
+            action, eid, extra = _sample_map_lowhp(
+                options,
+                mask,
+                rng,
+                map_pressure,
+                map_lowhp=map_lowhp,
+                map_lowhp_hard=map_lowhp_hard,
+                map_lowhp_soft_b=map_lowhp_soft_b,
+                act_map=act_map,
+            )
+            reason = extra or "choice_not_in_legal"
+        else:
+            action = int(rng.choice(legal_indices)) if legal_indices else _legal_random(mask, rng)
+            eid = next((o.option_id for o in options if o.action_index == action), None)
+            reason = "choice_not_in_legal"
         return _finish(
             executed=action,
             executed_id=eid,
             used=False,
-            reason="choice_not_in_legal",
+            reason=reason,
             jev_choice_id=choice_id,
             jev_confidence=conf,
-            jev_hp_pressure=hp_pressure,
+            jev_hp_pressure=map_pressure if phase == "MAP_CHOICE" else hp_pressure,
             latency_ms=latency_ms,
             model_name=model_name,
             error_type="parse_error",
@@ -1230,7 +1478,7 @@ def decide_noncombat(
         """Contract A: defer Unknown when hp_pressure high and conf soft."""
         if phase != "MAP_CHOICE":
             return None
-        if hp_pressure is None or hp_pressure < 2.0:
+        if map_pressure is None or map_pressure < 2.0:
             return None
         if conf is None or conf >= UNKNOWN_DEFER_CONFIDENCE:
             return None
@@ -1243,8 +1491,9 @@ def decide_noncombat(
             and o.action_index < len(mask)
             and mask[o.action_index] == 1
         ]
-        # Prefer non-Unknown; else legal random among all (still tag unknown_deferred).
-        pool = non_unknown or [
+        # Prefer shop/rest when the low-HP filter applies; else non-Unknown.
+        safe = map_lowhp_safe_items(non_unknown, _opt_point_type)
+        pool = safe or non_unknown or [
             o
             for o in options
             if o.action_index < len(mask) and mask[o.action_index] == 1
@@ -1274,17 +1523,44 @@ def decide_noncombat(
 
     # suggest_live
     if not confident:
-        action = int(rng.choice(legal_indices)) if legal_indices else _legal_random(mask, rng)
-        eid = next((o.option_id for o in options if o.action_index == action), None)
+        if phase == "MAP_CHOICE":
+            act_map = getattr(env, "_mgr", None)
+            act_map = getattr(act_map, "_run_state", None) if act_map else None
+            act_map = getattr(act_map, "map", None) if act_map else None
+            action, eid, extra = _sample_map_lowhp(
+                options,
+                mask,
+                rng,
+                map_pressure,
+                map_lowhp=map_lowhp,
+                map_lowhp_hard=map_lowhp_hard,
+                map_lowhp_soft_b=map_lowhp_soft_b,
+                act_map=act_map,
+            )
+            reason = extra or "low_confidence_random"
+        elif phase == "EVENT" and not is_neow:
+            safe_opt = _event_safe_option(options)
+            if safe_opt and safe_opt.action_index < len(mask) and mask[safe_opt.action_index] == 1:
+                action = safe_opt.action_index
+                eid = safe_opt.option_id
+                reason = "event_safe_fallback"
+            else:
+                action = int(rng.choice(legal_indices)) if legal_indices else _legal_random(mask, rng)
+                eid = next((o.option_id for o in options if o.action_index == action), None)
+                reason = "low_confidence_random"
+        else:
+            action = int(rng.choice(legal_indices)) if legal_indices else _legal_random(mask, rng)
+            eid = next((o.option_id for o in options if o.action_index == action), None)
+            reason = "low_confidence_random"
         return _finish(
             executed=action,
             executed_id=eid,
             used=False,
-            reason="low_confidence_random",
+            reason=reason,
             jev_choice_id=choice_id,
             jev_confidence=conf,
             jev_action_index=jev_aid,
-            jev_hp_pressure=hp_pressure,
+            jev_hp_pressure=map_pressure if phase == "MAP_CHOICE" else hp_pressure,
             latency_ms=latency_ms,
             model_name=model_name,
             jev_card_fit=card_fit,
@@ -1328,6 +1604,8 @@ POTION_OR_RELIC_REASON = "potion_or_relic_reward_random"
 CARD_FIT_ASSIST_REASON = "jev_card_fit_assist"
 HP_PRESSURE_ASSIST_REASON = "jev_hp_pressure_assist"
 SMITH_ASSIST_REASON = "jev_smith_assist"
+NEOW_JEV_OFF_REASON = "neow_jev_off_random"
+# MAP_LOWHP_* already imported from sts2_env.eval.jev (hang default on).
 NEOW_EARLY_CARD_INSTRUCTIONS = (
     "Neow+early natural Act1 (not mid-act fixtures). "
     "Choose a card reward or skip."

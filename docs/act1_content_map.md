@@ -31,6 +31,16 @@ Unknown with confidence **< 0.80** → defer, legal random among non-Unknown,
 reason `unknown_deferred`. 0.80 is **defer-only**; Choice land threshold
 stays **0.65**.
 
+**Low-HP MAP (`map_lowhp`, hang default on):** when `hp_pressure >= 2.0`
+and `SHOP` or `REST_SITE` is legal, low-confidence/error Jev resamples
+among safe nodes (reason `map_lowhp_random`). Soft-B (`--map-lowhp-soft-b on`, default off, opt-in)
+soft-prefers safe nodes specifically when an elite/Boss is ahead (reason `map_lowhp_soft_b`;
+hang tip stops at `58db7d0`/`dcc44b3` lineage, expand `4c85dbd` abandoned).
+Confident Choice is not overridden. Hard-select rest-then-shop (`--map-lowhp-hard on`, reason
+`map_lowhp_hard`) is **opt-in only** (hang default off; froze after n100 clear 0%).
+If only fight nodes remain, keep full-pool random. Disable with `--map-lowhp off`.
+PHASE_SHOP (inside the shop screen) stays legal random.
+
 Strip `UNASSIGNED` and any action whose RunEnv `action_mask` bit is 0
 before Choice. Do not invent nodes that are not on the current fork.
 
@@ -64,8 +74,9 @@ Typical options: `HEAL` (rest), `SMITH` (upgrade). Extra options (dig /
 lift / …) only if the corresponding relic enabled them.
 
 ## Events (`event_choice`, optional `--jev-event on`)
-Default eval keeps EVENT **off** (legal random, `jev_event_off_random`) so
-MAP/REST/CARD tables stay comparable. When on: Choice name `event_choice`;
+Default eval keeps ordinary EVENT **off** (legal random, `jev_event_off_random`) so
+MAP/REST/CARD tables stay comparable. Detected Neow is random by default
+(`neow_jev_off_random`). When EVENT is on: Choice name `event_choice`;
 `event_choice` index i → `_EVENT_START+i`; pending `confirm_choice` →
 `_COMBAT_START`; pending `choose` i → `_COMBAT_START+1+i`. Criteria follow
 option label/description (HP, gold, cards, relics). Events marked **待核**:
@@ -75,9 +86,10 @@ option label/description (HP, gold, cards, relics). Events marked **待核**:
 event model is still live and options are empty.
 
 Neow/boon screens (`event_id=Neow` or id/meta contains boon) use Choice
-`neow_boon` (opening tolerance, not a mid-act fixture). If Neow is not
-detected, skip `neow_boon` silently. `--jev-neow off` skips Jev on a
-detected Neow screen.
+`neow_boon` only with `--jev-neow on` (opening tolerance, not a mid-act
+fixture; works even when `--jev-event off`). Default `--jev-neow off` is
+legal random (`neow_jev_off_random`). Hang: `--start-with-neow` + random
+boon. REST 0.50 / heal/smith assists do not apply to Neow.
 
 Shop stays legal random.
 

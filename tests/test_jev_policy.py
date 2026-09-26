@@ -1,6 +1,7 @@
 """Jev non-combat policy: confidence, hp_pressure, error fallback, plus-card."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,9 +17,19 @@ from sts2_env.eval.jev import (
     CONTENT_MAP_REF,
     DEFAULT_JEV_PHASES,
     EVENT_OPTIONS_EMPTY_REASON,
+    EVENT_SAFE_FALLBACK_REASON,
+    POTION_OR_RELIC_SAFE_REASON,
     HP_PRESSURE_ASSIST_REASON,
     JEV_EVENT_OFF_REASON,
     JEV_NEOW_OFF_REASON,
+    MAP_LOWHP_HARD_ON,
+    MAP_LOWHP_HARD_REASON,
+    MAP_LOWHP_ON,
+    MAP_LOWHP_PRESSURE,
+    MAP_LOWHP_RANDOM_REASON,
+    MAP_LOWHP_SAFE_REASON,
+    MAP_LOWHP_SOFT_B_ON,
+    MAP_LOWHP_SOFT_B_REASON,
     NEOW_EARLY_CARD_INSTRUCTIONS,
     NEOW_OPTIONS_EMPTY_REASON,
     PLUS_CARD_CRITERION,
@@ -28,6 +39,7 @@ from sts2_env.eval.jev import (
     REST_SMITH_ASSIST_CONF,
     SHOP_RANDOM_REASON,
     SMITH_ASSIST_REASON,
+    TYPESAFE_HTTP_USER_AGENT,
     UNKNOWN_DEFER_CONF,
     UNKNOWN_DEFERRED_REASON,
     JevAnswer,
@@ -35,11 +47,22 @@ from sts2_env.eval.jev import (
     LiveJevClient,
     apply_choice_confidence,
     build_jev_adapter,
+    is_cloudflare_1010,
+    is_map_fight_point,
+    is_map_safe_point,
     local_hp_pressure,
+    map_lowhp_filter,
+    map_lowhp_hard_item,
+    map_lowhp_prefer,
     rest_or_continue_override,
+    typesafe_http_headers,
+)
+from sts2_env.eval.jev_config import (
+    DEFAULT_JEV_FLAGS,
+    JevPolicyFlags,
+    resolve_jev_flags,
 )
 from sts2_env.eval.jev_policy import (
-    JevPolicyFlags,
     build_event_options,
     build_options,
     build_rest_options,
@@ -47,7 +70,6 @@ from sts2_env.eval.jev_policy import (
     choose_jev_noncombat,
     collect_candidates,
     is_potion_or_relic_reward,
-    resolve_jev_flags,
     strip_illegal_invisible,
 )
 from sts2_env.gym_env.run_env import (
@@ -99,6 +121,7 @@ def _env(phase, actions, hp=80, max_hp=80):
         current_act_index=0,
         total_floor=3,
         relics=[],
+        ascension_level=0,
     )
     mgr = SimpleNamespace(
         phase=phase,
@@ -183,7 +206,7 @@ def test_map_fork_respects_confident_choice():
     criteria = adapter.calls[0]["questions"]["pick"]["criteria"]
     assert "map_0" in criteria and "map_1" in criteria
     assert CONTENT_MAP_REF in adapter.calls[0]["questions"]["pick"]["instructions"]
-    assert "hp_pressure" not in adapter.calls[0]["questions"]
+    assert "hp_pressure" in adapter.calls[0]["questions"]
 
 
 def test_low_confidence_falls_back_to_legal_random():
@@ -229,9 +252,11 @@ def test_rest_or_continue_hp_pressure_prefers_rest():
     action, log = choose_jev_noncombat(env, mask, rng, adapter)
     assert log["shadow_decision"] == "rest_or_continue"
     assert action == _MAP_START  # rest
+    assert log["executed_id"] == "map_0"
     assert log["shadow_suggestion"] == "map_0"
     assert log["shadow_hp_pressure"] == pytest.approx(2.4)
     assert "prefer rest" in (log["shadow_fallback_reason"] or "")
+    assert not log.get("map_lowhp_hard")
 
 
 def test_rest_or_continue_hp_pressure_prefers_continue():
@@ -353,7 +378,7 @@ def test_potion_or_relic_reward_does_not_call_card_jev():
         action, log = choose_jev_noncombat(env, mask, rng, adapter)
         assert adapter.calls == []
         assert log["shadow_decision"] == "potion_or_relic_reward"
-        assert log["shadow_fallback_reason"] == POTION_OR_RELIC_REASON
+        assert log["shadow_fallback_reason"] in (POTION_OR_RELIC_REASON, POTION_OR_RELIC_SAFE_REASON)
         assert log["shadow_status"] != "ok"
         assert mask[action] == 1
 
@@ -450,6 +475,210 @@ def test_build_adapter_stub_vs_live():
     assert isinstance(live, LiveJevClient)
 
 
+def test_typesafe_http_headers_include_jev_user_agent():
+    headers = typesafe_http_headers("secret")
+    assert headers["User-Agent"] == "sts2-rl-agent-jev/1.0"
+    assert headers["User-Agent"] == TYPESAFE_HTTP_USER_AGENT
+    assert "Python-urllib" not in headers["User-Agent"]
+    assert headers["Content-Type"] == "application/json"
+    assert headers["Authorization"] == "Bearer secret"
+
+
+def test_live_jev_http_request_sets_user_agent(monkeypatch):
+    import urllib.request
+
+    captured: dict = {}
+
+    class FakeResp:
+        def read(self):
+            return b'{"answers": {}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        captured["timeout"] = timeout
+        return FakeResp()
+
+    client = LiveJevClient(api_key="k")
+    monkeypatch.setattr(client, "_try_sdk", lambda *a, **k: None)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    payload = client._call({}, {"pick": {"type": "choice"}})
+    assert payload == {"answers": {}}
+    req = captured["req"]
+    ua = req.get_header("User-agent")
+    assert ua == TYPESAFE_HTTP_USER_AGENT
+    assert ua == "sts2-rl-agent-jev/1.0"
+
+
+def test_cloudflare_1010_retries_once(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+    from email.message import Message
+
+    calls = {"n": 0}
+
+    class FakeResp:
+        def read(self):
+            return b'{"answers": {"pick": {"choice": "a"}}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError(
+                req.full_url,
+                403,
+                "Forbidden",
+                Message(),
+                io.BytesIO(b'error code: 1010'),
+            )
+        return FakeResp()
+
+    client = LiveJevClient(api_key="k")
+    monkeypatch.setattr(client, "_try_sdk", lambda *a, **k: None)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("sts2_env.eval.jev.time.sleep", lambda s: None)
+    payload = client._call({}, {"pick": {"type": "choice"}})
+    assert calls["n"] == 2
+    assert payload["answers"]["pick"]["choice"] == "a"
+    assert is_cloudflare_1010(403, "error code: 1010")
+    assert not is_cloudflare_1010(403, "nope")
+    assert not is_cloudflare_1010(500, "1010")
+
+
+def test_typesafe_key_pool_from_env_and_json():
+    from sts2_env.eval.jev import (
+        box_secret_key_names,
+        key_for_worker,
+        load_typesafe_api_keys,
+        parse_typesafe_keys_blob,
+        warn_n_envs,
+    )
+
+    assert parse_typesafe_keys_blob("a, b, a") == ["a", "b"]
+    assert parse_typesafe_keys_blob('["x", "y", "x"]') == ["x", "y"]
+    assert box_secret_key_names() == (
+        "TYPESAFE_API_KEY",
+        "TYPESAFE_API_KEY_1",
+        "TYPESAFE_API_KEY_2",
+        "TYPESAFE_API_KEY_3",
+        "TYPESAFE_API_KEY_4",
+    )
+    env = {
+        "TYPESAFE_API_KEYS": "p1,p2",
+        "TYPESAFE_API_KEY": "p1",
+        "TYPESAFE_API_KEY_1": "p4",
+        "TYPESAFE_API_KEY_2": "p3",
+    }
+    keys = load_typesafe_api_keys(env, hydrate_box_secrets=False)
+    assert keys == ["p1", "p2", "p4", "p3"]
+    assert key_for_worker(keys, 0) == "p1"
+    assert key_for_worker(keys, 1) == "p2"
+    assert key_for_worker(keys, 4) == "p1"
+    assert warn_n_envs(4) is None
+    assert warn_n_envs(2) is None
+    assert "2-4" in (warn_n_envs(16) or "")
+    assert load_typesafe_api_keys({}, hydrate_box_secrets=False) == []
+
+
+def test_typesafe_box_secrets_hydrate(tmp_path):
+    from sts2_env.eval.jev import load_typesafe_api_keys
+
+    secrets = tmp_path / "box-secrets.json"
+    secrets.write_text(
+        '{"card": {"TYPESAFE_API_KEY": "box1", "TYPESAFE_API_KEY_2": "box2"}}\n'
+    )
+    env: dict[str, str] = {}
+    keys = load_typesafe_api_keys(env, secrets_path=secrets, hydrate_box_secrets=True)
+    assert keys == ["box1", "box2"]
+    assert env["TYPESAFE_API_KEY"] == "box1"
+    assert env["TYPESAFE_API_KEY_2"] == "box2"
+
+
+def test_box_secrets_key_1_to_4_with_empty_process_env(tmp_path):
+    from sts2_env.eval.jev import load_typesafe_api_keys
+
+    secrets = tmp_path / "box-secrets.json"
+    card = {
+        "TYPESAFE_API_KEY": "card0",
+        "TYPESAFE_API_KEY_1": "card1",
+        "TYPESAFE_API_KEY_2": "card2",
+        "TYPESAFE_API_KEY_3": "card3",
+        "TYPESAFE_API_KEY_4": "card4",
+    }
+    secrets.write_text(json.dumps({"card": card}) + "\n")
+    env: dict[str, str] = {}
+    keys = load_typesafe_api_keys(env, secrets_path=secrets)
+    assert keys == ["card0", "card1", "card2", "card3", "card4"]
+    for name, val in card.items():
+        assert env[name] == val
+    # already-exported primary wins; still pick up _1..4 from the file
+    env2 = {"TYPESAFE_API_KEY": "exported"}
+    keys2 = load_typesafe_api_keys(env2, secrets_path=secrets)
+    assert keys2[0] == "exported"
+    assert "card0" not in keys2
+    assert keys2[1:] == ["card1", "card2", "card3", "card4"]
+    assert env2["TYPESAFE_API_KEY"] == "exported"
+
+
+def test_pool_rotates_on_http_403(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+    from email.message import Message
+
+    auths: list[str] = []
+    calls = {"n": 0}
+
+    class FakeResp:
+        def read(self):
+            return b'{"answers": {"pick": {"choice": "a"}}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        calls["n"] += 1
+        auths.append(req.get_header("Authorization") or "")
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError(
+                req.full_url,
+                403,
+                "Forbidden",
+                Message(),
+                io.BytesIO(b"error code: 1010"),
+            )
+        return FakeResp()
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.delenv("TYPESAFE_API_KEYS", raising=False)
+    client = LiveJevClient(api_keys=["pool-k1", "pool-k2"])
+    monkeypatch.setattr(client, "_try_sdk", lambda *a, **k: None)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("sts2_env.eval.jev.time.sleep", lambda s: None)
+    payload = client._call({}, {"pick": {"type": "choice"}})
+    assert calls["n"] == 2
+    assert client.api_key == "pool-k2"
+    assert "pool-k1" in auths[0]
+    assert "pool-k2" in auths[1]
+    assert payload["answers"]["pick"]["choice"] == "a"
+    assert "Bearer pool-k1" not in str(payload)
+
+
 def test_content_map_ref_is_the_stub_doc():
     root = Path(__file__).resolve().parents[1]
     assert CONTENT_MAP_REF == "docs/act1_content_map.md"
@@ -491,6 +720,10 @@ def _event_mask(n_event=2, pending=False, n_choose=0):
 
 
 EVENT_ON = JevPolicyFlags(phases=frozenset({"map", "rest", "card", "event"}), event=True)
+NEOW_ON = JevPolicyFlags(phases=frozenset({"map", "rest", "card"}), event=False, neow=True)
+EVENT_NEOW_ON = JevPolicyFlags(
+    phases=frozenset({"map", "rest", "card", "event"}), event=True, neow=True
+)
 
 
 def test_unknown_deferred_when_pressure_high_and_conf_shy():
@@ -665,6 +898,111 @@ def test_jev_event_off_does_not_call_adapter():
     assert log["phase"] == "EVENT"
 
 
+def test_neow_default_off_is_random():
+    """Hang default: --jev-neow off → neow_jev_off_random even with ≥2 boons."""
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "MAX_HP",
+            "label": "Max HP",
+            "description": "+8 max HP",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "GOLD",
+            "label": "Gold",
+            "description": "+100 gold",
+            "enabled": True,
+        },
+    ]
+    env = _event_env(actions, event_id="Neow")
+    mask = _event_mask(2)
+    adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "GOLD", "confidence": 0.99}}])
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert adapter.calls == []
+    assert log["shadow_fallback_reason"] == JEV_NEOW_OFF_REASON
+    assert JEV_NEOW_OFF_REASON == "neow_jev_off_random"
+    assert log["is_neow"] is True
+    assert mask[action] == 1
+
+
+def test_neow_still_calls_jev_when_event_off():
+    """Optional A/B: --jev-neow on still runs neow_boon at 0.65 when event is off."""
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "MAX_HP",
+            "label": "Max HP",
+            "description": "+8 max HP",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "GOLD",
+            "label": "Gold",
+            "description": "+100 gold",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "CARD",
+            "label": "Card",
+            "description": "obtain a card",
+            "enabled": True,
+        },
+    ]
+    env = _event_env(actions, event_id="Neow")
+    mask = _event_mask(3)
+    adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "GOLD", "confidence": 0.65}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=NEOW_ON
+    )
+    assert adapter.calls, "Neow must call Jev when --jev-neow on even if --jev-event off"
+    assert CHOICE_NEOW_BOON in adapter.calls[0]["questions"]
+    assert CHOICE_EVENT not in adapter.calls[0]["questions"]
+    assert action == _EVENT_START + 1
+    assert log["jev_choice_id"] == CHOICE_NEOW_BOON
+    assert log["is_neow"] is True
+    assert log["phase"] == "NEOW"
+    assert log["shadow_status"] == "ok"
+    assert CHOICE_CONFIDENCE_MIN == 0.65
+
+
+def test_neow_does_not_use_rest_soft_threshold():
+    """REST 0.50 / assists are REST_SITE-only; Neow stays global 0.65."""
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "MAX_HP",
+            "label": "Max HP",
+            "description": "+8 max HP",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "GOLD",
+            "label": "Gold",
+            "description": "+100 gold",
+            "enabled": True,
+        },
+    ]
+    env = _event_env(actions, event_id="Neow")
+    mask = _event_mask(2)
+    adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "GOLD", "confidence": 0.55}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=NEOW_ON
+    )
+    assert adapter.calls
+    assert log["shadow_status"] == "uncertain"
+    assert log["shadow_suggestion"] == "GOLD"
+    assert log["shadow_confidence"] == 0.55
+    assert "0.65" in (log["shadow_fallback_reason"] or "")
+    assert mask[action] == 1
+    assert REST_CHOICE_MIN_CONFIDENCE == 0.50
+    assert CHOICE_CONFIDENCE_MIN == 0.65
+
+
 def test_jev_event_on_uses_event_choice_name():
     actions = [
         {
@@ -700,6 +1038,58 @@ def test_jev_event_on_uses_event_choice_name():
     assert CHOICE_CONFIDENCE_MIN == 0.65
 
 
+def test_jev_event_on_low_conf_uses_safe_fallback():
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "SACRIFICE",
+            "label": "Take curse",
+            "description": "Gain 100 gold, take a Curse (Decay)",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "STUDY",
+            "label": "Study",
+            "description": "Study peacefully",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "LEAVE",
+            "label": "Leave",
+            "description": "Leave safely",
+            "enabled": True,
+        },
+    ]
+    env = _event_env(actions, event_id="DarkAltar")
+    mask = _event_mask(3)
+    adapter = ScriptedJev([{CHOICE_EVENT: {"choice": "SACRIFICE", "confidence": 0.40}}])
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+    )
+    # Uncertain Jev picks Leave instead of taking the curse
+    assert action == _EVENT_START + 2
+    assert log["shadow_fallback_reason"] == EVENT_SAFE_FALLBACK_REASON
+    assert log.get("event_safe_fallback") is True
+
+
+def test_potion_or_relic_screen_safe_fallback_takes():
+    actions = [
+        {"action": "pick_relic_reward", "relic_id": "VAJRA"},
+        {"action": "skip_relic"},
+    ]
+    env = _env(RunManager.PHASE_CARD_REWARD, actions)
+    mask = np.zeros(TOTAL_ACTIONS, dtype=np.int8)
+    mask[_CARD_RWD_START] = 1
+    mask[_CARD_RWD_START + 3] = 1
+    adapter = ScriptedJev([])
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action == _CARD_RWD_START
+    assert log["shadow_fallback_reason"] == POTION_OR_RELIC_SAFE_REASON
+    assert log.get("potion_or_relic_safe_fallback") is True
+
+
 def test_neow_boon_choice_name_when_detected():
     actions = [
         {
@@ -721,7 +1111,7 @@ def test_neow_boon_choice_name_when_detected():
     mask = _event_mask(2)
     adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "GOLD", "confidence": 0.91}}])
     action, log = choose_jev_noncombat(
-        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_NEOW_ON
     )
     assert CHOICE_NEOW_BOON in adapter.calls[0]["questions"]
     assert CHOICE_EVENT not in adapter.calls[0]["questions"]
@@ -753,6 +1143,37 @@ def test_neow_off_skips_jev_silently():
     action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter, flags=flags)
     assert adapter.calls == []
     assert log["shadow_fallback_reason"] == JEV_NEOW_OFF_REASON
+    assert JEV_NEOW_OFF_REASON == "neow_jev_off_random"
+    assert log["is_neow"] is True
+    assert mask[action] == 1
+
+
+def test_neow_off_skips_even_when_event_also_off():
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "MAX_HP",
+            "label": "Max HP",
+            "description": "+8",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "GOLD",
+            "label": "Gold",
+            "description": "+100",
+            "enabled": True,
+        },
+    ]
+    env = _event_env(actions, event_id="Neow")
+    mask = _event_mask(2)
+    adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "GOLD", "confidence": 0.99}}])
+    flags = resolve_jev_flags(jev_event="off", jev_neow="off")
+    action, log = choose_jev_noncombat(
+        env, mask, np.random.RandomState(0), adapter, flags=flags
+    )
+    assert adapter.calls == []
+    assert log["shadow_fallback_reason"] == JEV_NEOW_OFF_REASON
     assert log["is_neow"] is True
     assert mask[action] == 1
 
@@ -771,7 +1192,7 @@ def test_neow_leave_only_does_not_call_jev():
     mask = _event_mask(1)
     adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "leave", "confidence": 0.99}}])
     action, log = choose_jev_noncombat(
-        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_NEOW_ON
     )
     assert adapter.calls == []
     assert log["shadow_fallback_reason"] == NEOW_OPTIONS_EMPTY_REASON
@@ -800,7 +1221,7 @@ def test_neow_one_boon_does_not_call_jev():
     mask = _event_mask(2)
     adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "MAX_HP", "confidence": 0.99}}])
     action, log = choose_jev_noncombat(
-        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_NEOW_ON
     )
     assert adapter.calls == []
     assert log["shadow_fallback_reason"] == NEOW_OPTIONS_EMPTY_REASON
@@ -813,7 +1234,7 @@ def test_neow_empty_options_does_not_call_jev():
     mask = _event_mask(1)
     adapter = ScriptedJev([{CHOICE_NEOW_BOON: {"choice": "leave", "confidence": 0.99}}])
     action, log = choose_jev_noncombat(
-        env, mask, np.random.RandomState(0), adapter, flags=EVENT_ON
+        env, mask, np.random.RandomState(0), adapter, flags=EVENT_NEOW_ON
     )
     assert adapter.calls == []
     assert log["shadow_fallback_reason"] == NEOW_OPTIONS_EMPTY_REASON
@@ -923,12 +1344,16 @@ def test_resolve_jev_flags_default_event_off():
     assert "event" not in flags.resolved_phases()
     on = resolve_jev_flags(jev_event="on")
     assert on.allows_event() is True
-    assert on.allows_neow() is True
+    assert on.allows_neow() is False
     via_phases = resolve_jev_flags(jev_phases="map,rest,card,event")
     assert via_phases.allows_event() is True
+    assert via_phases.allows_neow() is False
     neow_off = resolve_jev_flags(jev_event="on", jev_neow="off")
     assert neow_off.allows_event() is True
     assert neow_off.allows_neow() is False
+    neow_on_event_off = resolve_jev_flags(jev_event="off", jev_neow="on")
+    assert neow_on_event_off.allows_event() is False
+    assert neow_on_event_off.allows_neow() is True
 
 
 def _rest_pending_mask(n_choose, *, confirm=False):
@@ -1103,3 +1528,550 @@ def test_map_choice_threshold_stays_065():
     assert log["shadow_status"] == "uncertain"
     assert CHOICE_CONFIDENCE_MIN == 0.65
     assert mask[action] == 1
+
+
+def test_map_lowhp_filter_and_prefer():
+    assert MAP_LOWHP_ON is True
+    assert MAP_LOWHP_HARD_ON is False
+    assert MAP_LOWHP_PRESSURE == 2.0
+    assert MAP_LOWHP_HARD_REASON == "map_lowhp_hard"
+    assert MAP_LOWHP_RANDOM_REASON == "map_lowhp_random"
+    assert is_map_safe_point("SHOP")
+    assert is_map_safe_point("REST_SITE")
+    assert is_map_safe_point("merchant")
+    assert is_map_fight_point("MONSTER")
+    assert is_map_fight_point("ELITE")
+    nodes = ["SHOP", "MONSTER", "ELITE"]
+    assert map_lowhp_filter(nodes, lambda x: x, 2.0) == ["SHOP"]
+    assert map_lowhp_filter(nodes, lambda x: x, 1.9) is None
+    assert map_lowhp_filter(["MONSTER", "ELITE"], lambda x: x, 3.0) is None
+    assert map_lowhp_filter(nodes, lambda x: x, 2.0, enabled=False) is None
+    mixed = ["SHOP", "REST_SITE", "MONSTER"]
+    assert map_lowhp_prefer(mixed, lambda x: x) == "REST_SITE"
+    assert map_lowhp_prefer(["SHOP"], lambda x: x) == "SHOP"
+    assert map_lowhp_hard_item(nodes, lambda x: x, 2.0, enabled=True) == "SHOP"
+    assert map_lowhp_hard_item(mixed, lambda x: x, 2.5, enabled=True) == "REST_SITE"
+    assert map_lowhp_hard_item(["MONSTER", "ELITE"], lambda x: x, 3.0, enabled=True) is None
+    assert map_lowhp_hard_item(nodes, lambda x: x, 2.0, enabled=False) is None
+    assert map_lowhp_hard_item(nodes, lambda x: x, 2.0) is None  # default off
+
+
+def test_map_lowhp_default_uncertain_resamples_shop_not_monster():
+    env, mask = _map_env(
+        [("SHOP", (0, 1)), ("MONSTER", (1, 1))],
+        hp=20,
+        max_hp=80,
+    )
+    seen = set()
+    for seed in range(24):
+        adapter = ScriptedJev(
+            [
+                {
+                    "hp_pressure": {"score": 2.5},
+                    "pick": {"choice": "map_1", "confidence": 0.20},
+                }
+            ]
+        )
+        action, log = choose_jev_noncombat(
+            env, mask, np.random.RandomState(seed), adapter
+        )
+        seen.add(action)
+        assert action == _MAP_START
+        assert log["shadow_fallback_reason"] == MAP_LOWHP_RANDOM_REASON
+        assert log["executed_id"] == "map_0"
+        assert not log.get("map_lowhp_hard")
+        assert log["shadow_decision"] == "map_fork"
+    assert seen == {_MAP_START}
+
+
+def test_map_lowhp_default_does_not_override_confident_monster():
+    env, mask = _map_env(
+        [("SHOP", (0, 1)), ("MONSTER", (1, 1))],
+        hp=80,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 2.4},
+                "pick": {"choice": "map_1", "confidence": 0.95},
+            }
+        ]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action == _MAP_START + 1
+    assert log["executed_id"] == "map_1"
+    assert log["shadow_fallback_reason"] is None
+    assert log["shadow_suggestion"] == "map_1"
+    assert not log.get("map_lowhp_hard")
+    assert log["shadow_status"] == "ok"
+    assert log["shadow_hp_pressure"] == pytest.approx(2.4)
+
+
+def test_map_lowhp_hard_optin_overrides_confident_monster_to_shop():
+    env, mask = _map_env(
+        [("SHOP", (0, 1)), ("MONSTER", (1, 1))],
+        hp=80,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 2.4},
+                "pick": {"choice": "map_1", "confidence": 0.95},
+            }
+        ]
+    )
+    flags = JevPolicyFlags(map_lowhp_hard=True)
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter, flags=flags)
+    assert action == _MAP_START
+    assert log["executed_id"] == "map_0"
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_HARD_REASON
+    assert log["shadow_suggestion"] == "map_1"
+    assert log.get("map_lowhp_hard") is True
+    assert log["shadow_status"] == "ok"
+    assert log["shadow_hp_pressure"] == pytest.approx(2.4)
+
+
+def test_map_lowhp_hard_tags_even_when_choice_already_shop():
+    env, mask = _map_env(
+        [("SHOP", (0, 1)), ("MONSTER", (1, 1))],
+        hp=20,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 2.1},
+                "pick": {"choice": "map_0", "confidence": 0.99},
+            }
+        ]
+    )
+    flags = JevPolicyFlags(map_lowhp_hard=True)
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter, flags=flags)
+    assert action == _MAP_START
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_HARD_REASON
+    assert log.get("map_lowhp_hard") is True
+
+
+def test_map_lowhp_healthy_can_still_pick_monster():
+    env, mask = _map_env(
+        [("SHOP", (0, 1)), ("MONSTER", (1, 1))],
+        hp=80,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 1.0},
+                "pick": {"choice": "map_1", "confidence": 0.95},
+            }
+        ]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action == _MAP_START + 1
+    assert log["shadow_status"] == "ok"
+    assert log["shadow_fallback_reason"] is None
+    assert not log.get("map_lowhp_hard")
+
+
+def test_map_lowhp_fight_only_keeps_full_pool_random():
+    env, mask = _map_env(
+        [("MONSTER", (0, 1)), ("ELITE", (1, 1))],
+        hp=10,
+        max_hp=80,
+    )
+    actions = set()
+    for seed in range(32):
+        adapter = ScriptedJev(
+            [
+                {
+                    "hp_pressure": {"score": 3.0},
+                    "pick": {"choice": "map_0", "confidence": 0.10},
+                }
+            ]
+        )
+        action, log = choose_jev_noncombat(
+            env, mask, np.random.RandomState(seed), adapter
+        )
+        actions.add(action)
+        assert action in {_MAP_START, _MAP_START + 1}
+        assert log["shadow_fallback_reason"] != MAP_LOWHP_HARD_REASON
+        assert log["shadow_fallback_reason"] != MAP_LOWHP_RANDOM_REASON
+    assert actions == {_MAP_START, _MAP_START + 1}
+
+
+def test_map_lowhp_off_allows_monster_random():
+    env, mask = _map_env(
+        [("SHOP", (0, 1)), ("MONSTER", (1, 1))],
+        hp=10,
+        max_hp=80,
+    )
+    flags = JevPolicyFlags(map_lowhp=False)
+    actions = set()
+    for seed in range(40):
+        adapter = ScriptedJev(
+            [
+                {
+                    "hp_pressure": {"score": 2.8},
+                    "pick": {"choice": "map_1", "confidence": 0.10},
+                }
+            ]
+        )
+        action, log = choose_jev_noncombat(
+            env, mask, np.random.RandomState(seed), adapter, flags=flags
+        )
+        actions.add(action)
+        assert log["shadow_fallback_reason"] != MAP_LOWHP_HARD_REASON
+        assert log["shadow_fallback_reason"] != MAP_LOWHP_RANDOM_REASON
+        assert log["shadow_fallback_reason"] != MAP_LOWHP_SAFE_REASON
+    assert _MAP_START + 1 in actions
+
+
+def test_map_lowhp_rest_or_continue_prefer_rest_is_hang_default():
+    env, mask = _map_env(
+        [("SHOP", (0, 1)), ("REST_SITE", (1, 1)), ("MONSTER", (2, 1))],
+        hp=20,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 2.2},
+                "pick": {"choice": "map_2", "confidence": 0.99},
+            }
+        ]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action == _MAP_START + 1
+    assert log["shadow_decision"] == "rest_or_continue"
+    assert log["executed_id"] == "map_1"
+    assert "prefer rest" in (log["shadow_fallback_reason"] or "")
+    assert not log.get("map_lowhp_hard")
+
+
+def test_map_lowhp_shop_plus_rest_hard_picks_rest():
+    env, mask = _map_env(
+        [("SHOP", (0, 1)), ("REST_SITE", (1, 1))],
+        hp=20,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 2.2},
+                "pick": {"choice": "map_0", "confidence": 0.99},
+            }
+        ]
+    )
+    flags = JevPolicyFlags(map_lowhp_hard=True)
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter, flags=flags)
+    assert action == _MAP_START + 1
+    assert log["shadow_decision"] == "rest_or_continue"
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_HARD_REASON
+    assert log.get("map_lowhp_hard") is True
+
+
+def test_map_lowhp_hard_overrides_treasure_to_shop():
+    env, mask = _map_env(
+        [("SHOP", (0, 1)), ("TREASURE", (1, 1))],
+        hp=20,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 2.5},
+                "pick": {"choice": "map_1", "confidence": 0.90},
+            }
+        ]
+    )
+    flags = JevPolicyFlags(map_lowhp_hard=True)
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter, flags=flags)
+    assert action == _MAP_START
+    assert log["executed_id"] == "map_0"
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_HARD_REASON
+    assert log.get("map_lowhp_hard") is True
+
+
+def test_map_lowhp_uses_local_pressure_when_score_missing():
+    env, mask = _map_env(
+        [("SHOP", (0, 1)), ("MONSTER", (1, 1))],
+        hp=40,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [{"pick": {"choice": "map_1", "confidence": 0.20}}]
+    )
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(3), adapter)
+    assert action == _MAP_START
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_RANDOM_REASON
+    assert log["shadow_hp_pressure"] == pytest.approx(2.0)
+    assert not log.get("map_lowhp_hard")
+
+
+def test_map_lowhp_api_error_default_soft_selects_shop():
+    env, mask = _map_env(
+        [("SHOP", (0, 1)), ("MONSTER", (1, 1))],
+        hp=20,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(error="typesafe HTTP 500: boom")
+    for seed in range(12):
+        action, log = choose_jev_noncombat(
+            env, mask, np.random.RandomState(seed), adapter
+        )
+        assert action == _MAP_START
+        assert log["shadow_fallback_reason"] == MAP_LOWHP_RANDOM_REASON
+        assert not log.get("map_lowhp_hard")
+
+
+def test_resolve_map_lowhp_flag_default_on():
+    assert resolve_jev_flags().map_lowhp is True
+    assert resolve_jev_flags().map_lowhp_hard is False
+    assert resolve_jev_flags().map_lowhp_soft_b is False
+    assert resolve_jev_flags(map_lowhp="on").map_lowhp is True
+    assert resolve_jev_flags(map_lowhp="off").map_lowhp is False
+    assert resolve_jev_flags(map_lowhp_hard="on").map_lowhp_hard is True
+    assert resolve_jev_flags(map_lowhp_hard="off").map_lowhp_hard is False
+    assert resolve_jev_flags(map_lowhp_soft_b="on").map_lowhp_soft_b is True
+    assert resolve_jev_flags(map_lowhp_soft_b="off").map_lowhp_soft_b is False
+    assert DEFAULT_JEV_FLAGS.map_lowhp is True
+    assert DEFAULT_JEV_FLAGS.map_lowhp_hard is False
+    assert DEFAULT_JEV_FLAGS.map_lowhp_soft_b is False
+
+
+def test_box_decide_noncombat_map_lowhp_low_conf(monkeypatch):
+    import importlib.util
+    import sys
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "jev_noncombat.py"
+    spec = importlib.util.spec_from_file_location("jev_noncombat_map_lowhp", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+
+    env, mask = _map_env(
+        [("SHOP", (0, 1)), ("MONSTER", (1, 1))],
+        hp=20,
+        max_hp=80,
+    )
+    info = {"phase": "MAP_CHOICE", "hp": 20, "max_hp": 80, "floor": 3}
+
+    def fake_call_jev(**_kwargs):
+        return "map_1_MONSTER", 0.20, 2.5, 1, "jev-1.13.0", None, None
+
+    monkeypatch.setattr(mod, "call_jev", fake_call_jev)
+    actions = set()
+    for seed in range(12):
+        action = mod.decide_noncombat(
+            env,
+            mask,
+            info,
+            mode="suggest_live",
+            rng=np.random.RandomState(seed),
+            seed=seed,
+        )
+        actions.add(action)
+        assert action == _MAP_START
+    assert actions == {_MAP_START}
+
+    def fake_confident_monster(**_kwargs):
+        return "map_1_MONSTER", 0.95, 2.5, 1, "jev-1.13.0", None, None
+
+    monkeypatch.setattr(mod, "call_jev", fake_confident_monster)
+    # Default path: does NOT hard-override confident monster
+    action = mod.decide_noncombat(
+        env,
+        mask,
+        info,
+        mode="suggest_live",
+        rng=np.random.RandomState(0),
+        seed=0,
+    )
+    assert action == _MAP_START + 1
+
+    # Opt-in hard: overrides confident monster to shop
+    action_hard = mod.decide_noncombat(
+        env,
+        mask,
+        info,
+        mode="suggest_live",
+        rng=np.random.RandomState(0),
+        seed=0,
+        map_lowhp_hard=True,
+    )
+    assert action_hard == _MAP_START
+
+
+def test_map_lowhp_soft_b_avoids_elite_ahead():
+    # Fork with ELITE and SHOP (map_fork, not rest_or_continue)
+    env, mask = _map_env(
+        [("ELITE", (0, 6)), ("SHOP", (1, 6))],
+        hp=20,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 2.5},
+                "pick": {"choice": "map_0", "confidence": 0.40},  # uncertain
+            }
+        ]
+    )
+    # Default is soft-B off: falls back to v1 map_lowhp_random (which picks SHOP since it's the safe node)
+    action_def, log_def = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter)
+    assert action_def == _MAP_START + 1
+    assert log_def["shadow_fallback_reason"] == MAP_LOWHP_RANDOM_REASON
+
+    # With opt-in soft_b=True, reason is map_lowhp_soft_b
+    flags_on = JevPolicyFlags(map_lowhp_soft_b=True)
+    action, log = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter, flags=flags_on)
+    # Uncertain on danger fork soft-prefers safe non-elite (SHOP)
+    assert action == _MAP_START + 1
+    assert log["shadow_fallback_reason"] == MAP_LOWHP_SOFT_B_REASON
+    assert log.get("map_lowhp_soft_b") is True
+
+
+def test_map_lowhp_soft_b_killable():
+    env, mask = _map_env(
+        [("ELITE", (0, 6)), ("SHOP", (1, 6))],
+        hp=20,
+        max_hp=80,
+    )
+    adapter = ScriptedJev(
+        [
+            {
+                "hp_pressure": {"score": 2.5},
+                "pick": {"choice": "map_0", "confidence": 0.40},
+            }
+        ]
+    )
+    # With soft_b opt-in, low HP avoids elite, picks shop with reason map_lowhp_soft_b
+    flags_optin = JevPolicyFlags(map_lowhp_soft_b=True)
+    action_b, log_b = choose_jev_noncombat(env, mask, np.random.RandomState(0), adapter, flags=flags_optin)
+    assert action_b == _MAP_START + 1
+    assert log_b["shadow_fallback_reason"] == MAP_LOWHP_SOFT_B_REASON
+
+    # With soft_b killed and map_lowhp killed, falls back to full-pool random
+    flags_killed = JevPolicyFlags(map_lowhp=False, map_lowhp_soft_b=False)
+    actions = set()
+    for s in range(30):
+        act, _ = choose_jev_noncombat(env, mask, np.random.RandomState(s), adapter, flags=flags_killed)
+        actions.add(act)
+    assert actions == {_MAP_START, _MAP_START + 1}
+
+
+def test_box_decide_noncombat_event_safe_fallback(monkeypatch):
+    import importlib.util
+    import sys
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "jev_noncombat.py"
+    spec = importlib.util.spec_from_file_location("jev_noncombat_event_fallback", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+
+    actions = [
+        {
+            "action": "event_choice",
+            "option_id": "SACRIFICE",
+            "label": "Take curse",
+            "description": "Gain 100 gold, take a Curse (Decay)",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "STUDY",
+            "label": "Study",
+            "description": "Study peacefully",
+            "enabled": True,
+        },
+        {
+            "action": "event_choice",
+            "option_id": "LEAVE",
+            "label": "Leave",
+            "description": "Leave safely",
+            "enabled": True,
+        },
+    ]
+    env = _event_env(actions, event_id="DarkAltar")
+    mask = _event_mask(3)
+    info = {"phase": "EVENT", "hp": 40, "max_hp": 80, "floor": 6}
+
+    # Low-confidence Jev result on event
+    def fake_low_conf_jev(**_kwargs):
+        return "DarkAltar_SACRIFICE", 0.40, None, 1, "jev-1.13.0", None, None
+
+    monkeypatch.setattr(mod, "call_jev", fake_low_conf_jev)
+    action = mod.decide_noncombat(
+        env,
+        mask,
+        info,
+        mode="suggest_live",
+        rng=np.random.RandomState(0),
+        seed=0,
+        jev_event=True,
+    )
+    # Safe option picked is Leave (index 2)
+    assert action == _EVENT_START + 2
+
+
+def test_map_lowhp_reexport_parity():
+    """Verify that importing from sts2_env.eval.map_lowhp and re-exported from jev.py match."""
+    import sts2_env.eval.jev as jev_mod
+    import sts2_env.eval.map_lowhp as lowhp_mod
+    import sts2_env.eval as eval_pkg
+
+    for name in lowhp_mod.__all__:
+        assert hasattr(jev_mod, name), f"jev.py missing re-export of {name}"
+        assert getattr(jev_mod, name) is getattr(lowhp_mod, name), f"jev.py mismatch on {name}"
+        assert hasattr(eval_pkg, name), f"eval pkg missing re-export of {name}"
+        assert getattr(eval_pkg, name) is getattr(lowhp_mod, name), f"eval pkg mismatch on {name}"
+
+
+def test_client_surface_split_reexport_parity():
+    """Verify that all split modules re-export identically through jev.py and sts2_env.eval."""
+    import sts2_env.eval.jev as jev_mod
+    import sts2_env.eval as eval_pkg
+    import sts2_env.eval.jev_types as types_mod
+    import sts2_env.eval.jev_telemetry as telemetry_mod
+    import sts2_env.eval.jev_keys as keys_mod
+    import sts2_env.eval.jev_client as client_mod
+    import sts2_env.eval.jev_fallback as fallback_mod
+    import sts2_env.eval.jev_config as config_mod
+
+    for mod, mod_name in [
+        (types_mod, "jev_types"),
+        (telemetry_mod, "jev_telemetry"),
+        (keys_mod, "jev_keys"),
+        (client_mod, "jev_client"),
+        (fallback_mod, "jev_fallback"),
+        (config_mod, "jev_config"),
+    ]:
+        for name in mod.__all__:
+            assert hasattr(jev_mod, name), f"jev.py missing re-export of {name} from {mod_name}"
+            assert getattr(jev_mod, name) is getattr(mod, name), f"jev.py mismatch on {name} from {mod_name}"
+            assert hasattr(eval_pkg, name), f"eval pkg missing re-export of {name} from {mod_name}"
+            assert getattr(eval_pkg, name) is getattr(mod, name), f"eval pkg mismatch on {name} from {mod_name}"
+
+
+def test_policy_config_split_parity():
+    """Verify JevPolicyFlags and helpers can be imported from jev_config, jev_policy, jev, and eval pkg."""
+    import sts2_env.eval.jev_config as config_mod
+    import sts2_env.eval.jev_policy as policy_mod
+    import sts2_env.eval.jev as jev_mod
+    import sts2_env.eval as eval_pkg
+
+    for name in config_mod.__all__:
+        val = getattr(config_mod, name)
+        assert getattr(policy_mod, name) is val, f"policy_mod mismatch {name}"
+        assert getattr(jev_mod, name) is val, f"jev_mod mismatch {name}"
+        assert getattr(eval_pkg, name) is val, f"eval_pkg mismatch {name}"
+
+
+
+
+

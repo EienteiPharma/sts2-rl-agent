@@ -4,6 +4,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 from sts2_env.core.constants import IRONCLAD_STARTING_HP
 from sts2_env.core.enums import CardId
 from sts2_env.gym_env.combat_env import STS2CombatEnv
@@ -102,8 +104,9 @@ def test_mix_neow_v1_interleaves_fifty_fifty():
     assert suites[1::2] == ["loadout_v1"] * 10
     v1 = train_mod.load_loadout_v1_fixtures()
     assert len(v1) == 50
-    assert all("loadout_v1" in str(fx["label"]) for fx in v1)
-    assert all(not str(fx["label"]).startswith("Neow+early") for fx in v1)
+    tags = [str(fx.get("label") or fx.get("id") or "") for fx in v1]
+    assert all("loadout_v1" in tag for tag in tags)
+    assert all(not tag.startswith("Neow+early") for tag in tags)
 
 
 def test_loadout_v1_materializes():
@@ -117,6 +120,205 @@ def test_loadout_v1_materializes():
     assert env.combat is not None
     assert env.combat.player.current_hp > 0
     env.close()
+
+
+def test_materialize_hold_fixtures_and_id_key_upgraded():
+    from sts2_env.core.enums import CardId
+
+    root = Path(__file__).resolve().parents[1] / "scripts" / "fixtures" / "loadout_v1"
+    for stem in ("loadout_v1_01", "loadout_v1_02", "loadout_v1_03"):
+        fx = train_mod.load_json_fixtures([root / f"{stem}.json"])[0]
+        spec = train_mod.materialize_fixture(fx, suite="loadout_v1")
+        assert spec["suite"] == "loadout_v1"
+        assert spec["deck"]
+        assert spec["hp"] > 0
+        assert all(c.card_id in CardId for c in spec["deck"])
+        assert spec["relics"]
+        assert spec["potions"]
+    spec = train_mod.materialize_fixture(
+        {
+            "hp": 50,
+            "max_hp": 80,
+            "deck": [
+                {"id": "BASH", "upgraded": True},
+                {"card_id": "STRIKE_IRONCLAD", "upgraded": False},
+                "DEFEND_IRONCLAD",
+            ],
+        },
+        suite="loadout_v1",
+    )
+    assert spec["deck"][0].card_id == CardId.BASH
+    assert spec["deck"][0].upgraded is True
+    assert spec["deck"][1].card_id == CardId.STRIKE_IRONCLAD
+    assert spec["deck"][1].upgraded is False
+    assert spec["deck"][2].card_id == CardId.DEFEND_IRONCLAD
+    assert "relics" not in spec
+    with pytest.raises(SystemExit, match="null entry"):
+        train_mod.materialize_fixture({"hp": 50, "max_hp": 80, "deck": [None]})
+    with pytest.raises(SystemExit, match="unknown card_id"):
+        train_mod.materialize_fixture(
+            {"hp": 50, "max_hp": 80, "deck": [{"upgraded": True}]}
+        )
+
+
+def test_hang_hold_fixtures_keep_distinct_relics_and_potions():
+    """Hang-era 01/02/03 must not be homogenized to Shuriken-only."""
+    from sts2_env.eval.combat_hold import apply_hold_relics, options_from_hold_fixture
+    from sts2_env.relics.base import RelicId
+
+    root = Path(__file__).resolve().parents[1] / "scripts" / "fixtures" / "loadout_v1"
+    fx01, fx02, fx03 = [
+        train_mod.load_json_fixtures([root / f"{stem}.json"])[0]
+        for stem in ("loadout_v1_01", "loadout_v1_02", "loadout_v1_03")
+    ]
+    assert fx01["hp"] == 58
+    assert fx01["relics"] == ["BURNING_BLOOD", "SHURIKEN"]
+    assert fx01["potions"] == ["FirePotion", "AttackPotion", None]
+    assert fx02["relics"] == ["BURNING_BLOOD", "BAG_OF_MARBLES"]
+    assert fx02["potions"] == ["ExplosiveAmpoule", "BlockPotion", None]
+    assert fx03["relics"] == ["BURNING_BLOOD", "VAJRA"]
+    assert fx03["potions"] == ["StrengthPotion", "FlexPotion", None]
+
+    spec02 = train_mod.materialize_fixture(fx02, suite="loadout_v1")
+    assert spec02["relics"] == ["BURNING_BLOOD", "BAG_OF_MARBLES"]
+    assert apply_hold_relics(dict(spec02), fixture=fx02)["relics"] == [
+        "BURNING_BLOOD",
+        "BAG_OF_MARBLES",
+    ]
+    spec01 = train_mod.materialize_fixture(fx01, suite="loadout_v1")
+    assert [p.potion_id if p else None for p in spec01["potions"]] == [
+        "FirePotion",
+        "AttackPotion",
+        None,
+    ]
+    spec03 = train_mod.materialize_fixture(fx03, suite="loadout_v1")
+    assert "VAJRA" in spec03["relics"]
+
+    env = STS2CombatEnv()
+    env.reset(seed=40000, options=options_from_hold_fixture(fx01))
+    assert env.combat is not None
+    ids01 = {r.relic_id for r in env.combat.relics}
+    pots01 = [p.potion_id if p else None for p in env.combat.potions]
+    assert RelicId.SHURIKEN in ids01
+    assert "FirePotion" in pots01
+    env.close()
+
+    env = STS2CombatEnv()
+    env.reset(seed=41000, options=options_from_hold_fixture(fx02))
+    assert env.combat is not None
+    ids02 = {r.relic_id for r in env.combat.relics}
+    pots02 = [p.potion_id if p else None for p in env.combat.potions]
+    assert RelicId.BAG_OF_MARBLES in ids02
+    assert RelicId.SHURIKEN not in ids02
+    assert "ExplosiveAmpoule" in pots02
+    env.close()
+
+    env = STS2CombatEnv()
+    env.reset(seed=42000, options=options_from_hold_fixture(fx03))
+    assert env.combat is not None
+    ids03 = {r.relic_id for r in env.combat.relics}
+    pots03 = [p.potion_id if p else None for p in env.combat.potions]
+    assert RelicId.VAJRA in ids03
+    assert "StrengthPotion" in pots03
+    env.close()
+
+
+def test_materialize_keeps_relics_and_potions_env_applies():
+    from sts2_env.eval.combat_hold import HOLD_DEFAULT_RELICS, apply_hold_relics
+    from sts2_env.relics.base import RelicId
+
+    spec = train_mod.materialize_fixture(
+        {
+            "hp": 50,
+            "max_hp": 80,
+            "deck": ["STRIKE_IRONCLAD", "DEFEND_IRONCLAD", "BASH"],
+            "relics": ["BURNING_BLOOD", "Shuriken"],
+            "potions": ["FirePotion", {"id": "StrengthPotion"}],
+        },
+        suite="loadout_v1",
+    )
+    assert spec["relics"] == ["BURNING_BLOOD", "SHURIKEN"]
+    assert [p.potion_id for p in spec["potions"]] == ["FirePotion", "StrengthPotion"]
+    opts = train_mod.options_from_fixture(
+        {
+            "hp": 50,
+            "max_hp": 80,
+            "deck": ["STRIKE_IRONCLAD", "DEFEND_IRONCLAD", "BASH"],
+            "relics": ["BURNING_BLOOD", "SHURIKEN"],
+            "potions": ["FirePotion"],
+        },
+        suite="loadout_v1",
+    )
+    assert opts["relics"] == ["BURNING_BLOOD", "SHURIKEN"]
+    env = STS2CombatEnv(loadout_provider=lambda: spec)
+    env.reset(seed=7)
+    assert env.combat is not None
+    relic_ids = {r.relic_id for r in env.combat.relics}
+    assert RelicId.BURNING_BLOOD in relic_ids
+    assert RelicId.SHURIKEN in relic_ids
+    potion_ids = [p.potion_id for p in env.combat.potions if p is not None]
+    assert "FirePotion" in potion_ids
+    assert "StrengthPotion" in potion_ids
+    env.close()
+
+    env2 = STS2CombatEnv()
+    env2.reset(seed=8, options=opts)
+    assert env2.combat is not None
+    relic_ids2 = {r.relic_id for r in env2.combat.relics}
+    assert RelicId.BURNING_BLOOD in relic_ids2
+    assert RelicId.SHURIKEN in relic_ids2
+    env2.close()
+
+    omitted = train_mod.materialize_fixture(
+        {"hp": 50, "max_hp": 80, "deck": ["STRIKE_IRONCLAD", "BASH"]},
+        suite="loadout_v1",
+    )
+    assert "relics" not in omitted
+    assert apply_hold_relics(dict(omitted))["relics"] == list(HOLD_DEFAULT_RELICS)
+    locked_empty = {"hp": 50, "max_hp": 80, "deck": ["BASH"], "relics": []}
+    empty_spec = train_mod.materialize_fixture(locked_empty, suite="loadout_v1")
+    assert empty_spec["relics"] == []
+    assert apply_hold_relics(dict(empty_spec), fixture=locked_empty)["relics"] == []
+    with pytest.raises(SystemExit, match="unknown relic"):
+        train_mod.materialize_fixture(
+            {
+                "hp": 50,
+                "max_hp": 80,
+                "deck": ["BASH"],
+                "relics": ["NOT_A_RELIC"],
+            }
+        )
+
+
+def test_eval_combat_suite_cli_is_hang_hold():
+    import importlib.util
+    import sys
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "eval_combat_suite.py"
+    spec = importlib.util.spec_from_file_location("eval_combat_suite", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    args = mod.parse_args([])
+    assert args.suite == "loadout_v1"
+    assert args.n_eps == 20
+    assert args.combat_policy == "ppo"
+    assert args.workers == 1
+    args20 = mod.parse_args(["--suite", "loadout_v1", "--n-eps", "20"])
+    assert args20.n_eps == 20
+    args8 = mod.parse_args(["--workers", "8", "--combat-policy", "jev"])
+    assert args8.workers == 8
+    assert args8.combat_policy == "jev"
+    import inspect
+
+    src = inspect.getsource(mod.parse_args)
+    assert 'default="ppo"' in src
+    assert "experimental" in src
+    assert "failed stepwise HOLD" in src
+    assert "--bh-assist" in src
+    with pytest.raises(SystemExit, match="loadout_v1"):
+        mod.main(["--suite", "bare"])
 
 
 def test_jev_noncombat_script_surface():
@@ -133,4 +335,13 @@ def test_jev_noncombat_script_surface():
     assert mod.CHOICE_CONFIDENCE_MIN == 0.65
     assert mod.REST_CHOICE_MIN_CONFIDENCE == 0.50
     assert "Neow+early" in mod.NEOW_EARLY_CARD_INSTRUCTIONS
+    assert mod.NEOW_JEV_OFF_REASON == "neow_jev_off_random"
+    assert "jev_neow" in mod.decide_noncombat.__code__.co_varnames
+    assert "map_lowhp" in mod.decide_noncombat.__code__.co_varnames
+    assert mod.MAP_LOWHP_HARD_REASON == "map_lowhp_hard"
+    assert mod.MAP_LOWHP_SAFE_REASON == "map_lowhp_safe"
+    assert mod.MAP_LOWHP_RANDOM_REASON == "map_lowhp_random"
+    assert mod.MAP_LOWHP_ON is True
     assert mod.is_potion_or_relic_reward([{"action": "pick_potion"}])
+    assert mod.TYPESAFE_HTTP_USER_AGENT == "sts2-rl-agent-jev/1.0"
+    assert "Python-urllib" not in mod.TYPESAFE_HTTP_USER_AGENT

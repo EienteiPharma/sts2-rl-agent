@@ -12,7 +12,7 @@ A reinforcement learning agent for **Slay the Spire 2**, built on a high-perform
 |  | Core Engine    |  | Game Content   |  | Gym Environments          ||
 |  | combat.py      |  | 577 cards      |  | combat_env.py  (single)  ||
 |  | creature.py    |  | 260 powers     |  | run_env.py     (full run)||
-|  | hooks.py       |  | 121 monsters   |  | observation.py (131-dim) ||
+|  | hooks.py       |  | 121 monsters   |  | observation.py (181-dim) ||
 |  | damage.py      |  | 290 relics     |  | action_space.py(61/100)  ||
 |  | rng.py         |  | 63 potions     |  | reward.py                ||
 |  +-------+--------+  +-------+--------+  +-----------+--------------+|
@@ -177,15 +177,26 @@ python scripts/eval_act1_runenv.py --policy model --model path/to/run_model.zip
 # Surplus hung combat zip in combat (obs_v1=181); legal random outside (`--jev off`).
 python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev off --out /workspace/sts2-sim/evals/act1_runenv_hierarchical_s200000.json
 
-# Same combat zip; TypeSafe/Jev Choice for non-combat (`TYPESAFE_API_KEY`).
-# EVENT stays off (default) so MAP/REST/CARD tables stay comparable.
-python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on
+# Same combat zip; TypeSafe/Jev Choice for MAP/REST/CARD (`TYPESAFE_API_KEY`).
+# EVENT and Neow Jev stay off (hang: add --start-with-neow for random boon).
+python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on --start-with-neow
 
-# Optional EVENT (+ Neow) Choice; shop still random. See docs/JEV_NONCOMBAT_WIRE.md
+# Optional ordinary EVENT Choice; Neow still random unless --jev-neow on.
 python scripts/eval_act1_runenv.py --policy hierarchical --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip --jev on --jev-event on
 ```
 
 Combat obs is 181 (obs_v1, full `IntentType` one-hot). RunEnv obs is 201. `--policy hierarchical --model` is the combat zip; `--policy model --model` is the RunEnv zip. Never feed RunEnv obs into the combat model. Hierarchical + Jev is **not** an Act1-clear gate. See [docs/act1_runenv_eval_protocol.md](docs/act1_runenv_eval_protocol.md) and [docs/act1_content_map.md](docs/act1_content_map.md).
+
+### Evaluate loadout_v1 HOLD (locked combat suite)
+
+Hang table (2026-09-22 `bh_v1`, n_eps=20): **74.2 / 98.9 / Boss 49.4**. Dual gate is overall ≥70 / Boss ≥40 **on this protocol** (hang-era fixtures 01–03 with per-fixture relics/potions, enc 16–21). See [docs/HOLD_PROTOCOL.md](docs/HOLD_PROTOCOL.md).
+
+```bash
+PYTHONPATH=. python scripts/eval_combat_suite.py \
+  --suite loadout_v1 --n-eps 20 \
+  --model /workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip \
+  --out evals/obs_v1_bh_v1_loadout_v1_n20.summary.json
+```
 
 ### Connect to Real Game
 
@@ -211,8 +222,11 @@ sts2-rl-agent/
 |-- scripts/
 |   |-- benchmark.py               # Throughput benchmark
 |   |-- eval_act1_runenv.py        # Frozen Act1 RunEnv eval (random/model/hierarchical)
+|   |-- eval_combat_suite.py       # Hang HOLD: --suite loadout_v1 (relics/potions)
 |   |-- jev_noncombat.py           # CARD_REWARD Jev wiring (potion/relic skip, card_fit)
 |   |-- train_combat.py            # Combat-only training (`--loadout bare|neow_early|loadout_v1|mix_neow_v1`)
+|   |-- collect_runenv_combat.py   # Hang-protocol combat-only buffer (n_envs collectors)
+|   |-- train_combat_from_buffer.py  # Continue-from bh_v1 on collected segments
 |   |-- fixtures/neow_early/       # LOCKED Neow+early (`neow_early_*.json`)
 |   |-- fixtures/loadout_v1/       # LOCKED loadout_v1 mid-act decks
 |   +-- train_full_run.py          # Full-run training
@@ -277,7 +291,7 @@ sts2-rl-agent/
 |   |-- gym_env/                   # Gymnasium environments
 |   |   |-- combat_env.py          # Single-combat env (Discrete(61))
 |   |   |-- run_env.py             # Full-run env (Discrete(100))
-|   |   |-- observation.py         # State -> 131-dim float32 vector
+|   |   |-- observation.py         # State -> 181-dim float32 vector (obs_v1)
 |   |   |-- action_space.py        # Action encoding + masking
 |   |   +-- reward.py              # Reward shaping
 |   |
@@ -339,7 +353,7 @@ Following lessons from the STS1 RL community, this project uses a two-phase stra
 
 - **MaskablePPO** from sb3-contrib (Stable Baselines 3)
 - **Invalid action masking**: Each step, the environment provides a boolean mask indicating which actions are legal (playable cards, valid targets). Illegal actions are zeroed out before policy sampling.
-- **Observation**: 131-dimensional float32 vector encoding player state, hand cards, pile summaries, and enemy state
+- **Observation**: 181-dimensional float32 vector (`obs_v1`, full `IntentType` one-hot) encoding player state, hand cards, pile summaries, and enemy state. RunEnv adds 20 extras (201).
 - **Action space**: Discrete(61) for combat (end turn + 10 self-target + 50 targeted), Discrete(100) for full run
 
 ### Reward Design
@@ -364,6 +378,10 @@ Following lessons from the STS1 RL community, this project uses a two-phase stra
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guide, dev setup, adding content |
 | [docs/SIMULATOR_ARCHITECTURE.md](docs/SIMULATOR_ARCHITECTURE.md) | Python simulator internal architecture |
 | [docs/TRAINING_GUIDE.md](docs/TRAINING_GUIDE.md) | Comprehensive RL training guide |
+| [docs/HANG_PROTOCOL_2026-09-22.md](docs/HANG_PROTOCOL_2026-09-22.md) | Hang Act1 RunEnv flags/bars |
+| [docs/HOLD_PROTOCOL.md](docs/HOLD_PROTOCOL.md) | Locked loadout_v1 HOLD (relics/potions, hang table) |
+| [docs/BH_ASSIST_CONTRACT.md](docs/BH_ASSIST_CONTRACT.md) | Track 2 assist + jev-turn (Lab nail v3 + `d9d9fff`) |
+| [docs/COMBAT_JEV_HOLD_FAIL.md](docs/COMBAT_JEV_HOLD_FAIL.md) | Archived stepwise Combat-Jev HOLD collapses |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | TCP bridge communication protocol |
 | [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) | Current known issues and limitations |
 | [docs/MOD_BUILD_GUIDE.md](docs/MOD_BUILD_GUIDE.md) | How to build and install the bridge mod |
