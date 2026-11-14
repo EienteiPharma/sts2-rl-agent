@@ -1,0 +1,87 @@
+{
+  "locked": true,
+  "id": 46,
+  "label": "loadout_v1 mid-act combat deck (not Neow+early)",
+  "source": "loadout_v1 combat suite",
+  "max_hp": 80,
+  "snapshot_hp": 74,
+  "hp": 74,
+  "hp_synth": false,
+  "deck": [
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "BASH",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "HAVOC",
+      "upgraded": false,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "RAMPAGE",
+      "upgraded": false,
+      "rarity": "UNCOMMON"
+    },
+    {
+      "card_id": "UPPERCUT",
+      "upgraded": false,
+      "rarity": "UNCOMMON"
+    },
+    {
+      "card_id": "SHRUG_IT_OFF",
+      "upgraded": false,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "SECOND_WIND",
+      "upgraded": true,
+      "rarity": "UNCOMMON"
+    },
+    {
+      "card_id": "HEADBUTT",
+      "upgraded": false,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "ANGER",
+      "upgraded": true,
+      "rarity": "COMMON"
+    }
+  ]
+}

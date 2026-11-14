@@ -1,0 +1,82 @@
+{
+  "locked": true,
+  "id": 49,
+  "label": "loadout_v1 mid-act combat deck (not Neow+early)",
+  "source": "loadout_v1 combat suite",
+  "max_hp": 80,
+  "snapshot_hp": 54,
+  "hp": 54,
+  "hp_synth": false,
+  "deck": [
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "BASH",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "IRON_WAVE",
+      "upgraded": false,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "ARMAMENTS",
+      "upgraded": false,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "HEMOKINESIS",
+      "upgraded": false,
+      "rarity": "UNCOMMON"
+    },
+    {
+      "card_id": "INFERNAL_BLADE",
+      "upgraded": true,
+      "rarity": "UNCOMMON"
+    },
+    {
+      "card_id": "BODY_SLAM",
+      "upgraded": false,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "INFLAME",
+      "upgraded": false,
+      "rarity": "UNCOMMON"
+    }
+  ]
+}

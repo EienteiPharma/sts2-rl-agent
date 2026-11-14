@@ -56,7 +56,7 @@ run/                        Full-run state management (depends on all above)
 
 gym_env/                    Gymnasium environments (depends on run/, encounters/)
   combat_env.py             Single-combat env (Discrete(115), obs 131-dim)
-  run_env.py                Full-run env (Discrete(157), obs 151-dim)
+  run_env.py                Full-run env (Discrete(157), obs 201-dim)
   observation.py            CombatState -> 131-dim float32 vector
   action_space.py           Action encoding + masking
   reward.py                 Reward shaping
@@ -375,7 +375,7 @@ Card ID is normalized as `(card_index + 1) / (total_card_ids + 1)` to produce a 
 | | CombatEnv | RunEnv |
 |--|-----------|--------|
 | Scope | Single combat | Full multi-act run |
-| Obs size | 131 | 151 (131 combat + 20 run-level) |
+| Obs size | 131 (combat_env) / 181 (obs_v1) | 201 (181 combat obs_v1 + 20 run tail) |
 | Action space | Discrete(115) | Discrete(157) |
 | Phases | Combat only | Combat + map + card_reward + boss_relic + shop + rest + event + treasure |
 | Reward | +1 win / -1 loss | +1 run win / -1 death or timeout |

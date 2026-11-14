@@ -85,6 +85,15 @@ from sts2_env.run.shop import (
 DEFAULT_CHARACTER_ID = "Ironclad"
 NEOW_EVENT_ID = "Neow"
 
+
+def ensure_event_models_registered() -> None:
+    """Import event modules so ``get_event('Neow')`` is non-null.
+
+    Event classes register on import. Call this before ``get_event`` /
+    ``_enter_neow``; cwd does not matter.
+    """
+    import sts2_env.events  # noqa: F401
+
 CARD_REWARD_ACTION_PICK_CARD = "pick_card"
 CARD_REWARD_ACTION_REROLL = "reroll_card_reward"
 CARD_REWARD_ACTION_SKIP = "skip"
@@ -790,6 +799,7 @@ class RunManager:
             ]
 
     def _enter_neow(self) -> None:
+        ensure_event_models_registered()
         self._phase = self.PHASE_EVENT
         event = get_event(NEOW_EVENT_ID)
         self._event_model = event
@@ -1168,7 +1178,11 @@ class RunManager:
                 })
             return actions
         if not self._event_options:
-            return [{"action": "event_choice", "option_id": "leave", "label": "Leave"}]
+            if self._event_model is None:
+                return [{"action": "event_choice", "option_id": "leave", "label": "Leave"}]
+            # Reward / pending gap: model still lives, options not restored yet.
+            # Do not invent Leave (that would exit the event).
+            return []
         return [
             {
                 "action": "event_choice",

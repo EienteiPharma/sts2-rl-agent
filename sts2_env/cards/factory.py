@@ -197,7 +197,8 @@ def _camel_to_snake(name: str) -> str:
 
 @lru_cache(maxsize=1)
 def _reference_cards() -> dict[str, ReferenceCardDefinition]:
-    text = Path("docs/CARDS_REFERENCE.md").read_text()
+    # Repo/package root (parent of ``sts2_env/``), not process cwd.
+    text = (Path(__file__).resolve().parents[2] / "docs" / "CARDS_REFERENCE.md").read_text()
     entries = re.split(r"^### ", text, flags=re.MULTILINE)[1:]
     result: dict[str, ReferenceCardDefinition] = {}
     for entry in entries:

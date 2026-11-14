@@ -1,0 +1,87 @@
+{
+  "locked": true,
+  "id": 6,
+  "label": "loadout_v1 mid-act combat deck (not Neow+early)",
+  "source": "loadout_v1 combat suite",
+  "max_hp": 80,
+  "snapshot_hp": 56,
+  "hp": 56,
+  "hp_synth": false,
+  "deck": [
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "BASH",
+      "upgraded": false,
+      "rarity": "BASIC"
+    },
+    {
+      "card_id": "SECOND_WIND",
+      "upgraded": false,
+      "rarity": "UNCOMMON"
+    },
+    {
+      "card_id": "RAMPAGE",
+      "upgraded": false,
+      "rarity": "UNCOMMON"
+    },
+    {
+      "card_id": "ANGER",
+      "upgraded": false,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "STOMP",
+      "upgraded": false,
+      "rarity": "UNCOMMON"
+    },
+    {
+      "card_id": "PERFECTED_STRIKE",
+      "upgraded": false,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "BODY_SLAM",
+      "upgraded": false,
+      "rarity": "COMMON"
+    },
+    {
+      "card_id": "ARMAMENTS",
+      "upgraded": false,
+      "rarity": "COMMON"
+    }
+  ]
+}

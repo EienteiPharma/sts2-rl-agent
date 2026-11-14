@@ -1,0 +1,42 @@
+{
+  "id": "loadout_v1_02",
+  "character": "Ironclad",
+  "act": 1,
+  "stage": "mid_aoe",
+  "status": "LOCKED",
+  "hp": 60,
+  "max_hp": 80,
+  "deck": [
+    "STRIKE_IRONCLAD",
+    "STRIKE_IRONCLAD",
+    "DEFEND_IRONCLAD",
+    "DEFEND_IRONCLAD",
+    "DEFEND_IRONCLAD",
+    "BASH",
+    "THUNDERCLAP",
+    "THUNDERCLAP",
+    {
+      "id": "WHIRLWIND",
+      "upgraded": true
+    },
+    "SHOCKWAVE",
+    "BLOODLETTING",
+    "BATTLE_TRANCE",
+    "TWIN_STRIKE",
+    "CINDER"
+  ],
+  "relics": [
+    "BURNING_BLOOD",
+    "BAG_OF_MARBLES"
+  ],
+  "potions": [
+    "ExplosiveAmpoule",
+    "BlockPotion",
+    null
+  ],
+  "notes": "Anti-Kin: Thunderclap AoE×2 + Whirlwind+ + Shockwave (all Weak/Vuln). Bloodletting feeds X-cost. Whirlwind Uncommon smith OK.",
+  "wiki_refs": [
+    "local docs/CARDS_REFERENCE.md Whirlwind/Thunderclap/Shockwave",
+    "docs/act1_boss_mechanics_vs_loadout.md §The Kin"
+  ]
+}

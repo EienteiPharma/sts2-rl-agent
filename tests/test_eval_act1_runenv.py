@@ -1,0 +1,782 @@
+"""Tests for frozen Act1 RunEnv eval: obs_v1 sizes, CLI, hierarchical policy."""
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+from sts2_env.core.enums import IntentType
+from sts2_env.gym_env.observation import (
+    ENEMY_FEATURES,
+    INTENT_TYPES,
+    NUM_INTENT_TYPES,
+    OBS_SIZE,
+    encode_observation,
+)
+from sts2_env.gym_env.run_env import (
+    COMBAT_OBS_SIZE,
+    RUN_OBS_SIZE,
+    STS2RunEnv,
+    _COMBAT_SIZE,
+    _COMBAT_START,
+)
+from sts2_env.run.run_manager import RunManager
+
+_EVAL_PATH = Path(__file__).resolve().parents[1] / "scripts" / "eval_act1_runenv.py"
+
+
+def _load_eval_mod():
+    spec = importlib.util.spec_from_file_location("eval_act1_runenv", _EVAL_PATH)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+eval_mod = _load_eval_mod()
+
+
+class FakeSpace:
+    def __init__(self, dim: int):
+        self.shape = (dim,)
+
+
+class FakeCombatModel:
+    """Stand-in for MaskablePPO when the hung zip is not on the CI VM."""
+
+    def __init__(self):
+        self.observation_space = FakeSpace(OBS_SIZE)
+        self.seen_widths: list[int] = []
+        self.seen_masks: list[int] = []
+
+    def predict(self, obs, action_masks=None, deterministic=True):
+        arr = np.asarray(obs)
+        width = int(arr.shape[-1])
+        self.seen_widths.append(width)
+        assert width == OBS_SIZE, f"combat model got obs width {width}, expected {OBS_SIZE}"
+        assert width != RUN_OBS_SIZE, "combat model must not receive RunEnv obs"
+        mask = np.asarray(action_masks)
+        assert mask.shape[-1] == _COMBAT_SIZE
+        self.seen_masks.append(int(mask.shape[-1]))
+        valid = np.flatnonzero(mask == 1)
+        assert valid.size > 0
+        return int(valid[0]), None
+
+
+def test_obs_v1_full_intent_onehot_is_181():
+    assert INTENT_TYPES == list(IntentType)
+    assert NUM_INTENT_TYPES == len(list(IntentType))
+    assert IntentType.STUN in INTENT_TYPES
+    assert IntentType.STATUS_CARD in INTENT_TYPES
+    assert IntentType.SUMMON in INTENT_TYPES
+    assert OBS_SIZE == 4 + 6 + 50 + 6 + 5 * ENEMY_FEATURES
+    assert OBS_SIZE == 181
+    assert COMBAT_OBS_SIZE == OBS_SIZE
+    assert RUN_OBS_SIZE == OBS_SIZE + 20
+    assert RUN_OBS_SIZE == 201
+    assert RUN_OBS_SIZE != OBS_SIZE
+
+
+def test_encode_observation_width_matches_obs_v1():
+    env = STS2RunEnv(character_id="Ironclad", ascension_level=0, max_steps=80)
+    obs, info = env.reset(seed=42)
+    assert obs.shape == (RUN_OBS_SIZE,)
+    rng = np.random.RandomState(0)
+    for _ in range(80):
+        if info.get("phase") == RunManager.PHASE_COMBAT:
+            combat = env._mgr.get_combat_state()
+            assert combat is not None
+            combat_obs = encode_observation(combat)
+            assert combat_obs.shape == (OBS_SIZE,)
+            env.close()
+            return
+        mask = info["action_mask"]
+        valid = np.flatnonzero(mask == 1)
+        obs, _, terminated, truncated, info = env.step(int(rng.choice(valid)))
+        if terminated or truncated:
+            break
+    env.close()
+    pytest.skip("No combat phase reached")
+
+
+def test_cli_hierarchical_requires_combat_zip():
+    args = eval_mod.parse_args(["--policy", "hierarchical"])
+    with pytest.raises(SystemExit, match="--model"):
+        eval_mod.validate_policy_args(args)
+
+
+def test_cli_hierarchical_accepts_model_as_combat_zip():
+    args = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--model",
+            eval_mod.HUNG_COMBAT_ZIP,
+        ]
+    )
+    eval_mod.validate_policy_args(args)
+    assert args.combat_model == eval_mod.HUNG_COMBAT_ZIP
+    assert args.jev == "off"
+    assert eval_mod.OBS_SIZE == 181
+
+
+def test_cli_model_rejects_combat_model_flag():
+    args = eval_mod.parse_args(
+        ["--policy", "model", "--model", "run.zip", "--combat-model", "combat.zip"]
+    )
+    with pytest.raises(SystemExit, match="hierarchical"):
+        eval_mod.validate_policy_args(args)
+
+
+def test_cli_hierarchical_rejects_mismatched_model_paths():
+    args = eval_mod.parse_args(
+        ["--policy", "hierarchical", "--combat-model", "combat.zip", "--model", "other.zip"]
+    )
+    with pytest.raises(SystemExit, match="same combat"):
+        eval_mod.validate_policy_args(args)
+
+
+def test_refuse_combat_zip_on_runenv_model_path():
+    fake = SimpleNamespace(observation_space=FakeSpace(OBS_SIZE))
+    with pytest.raises(SystemExit, match="RUN_OBS_SIZE|expected"):
+        eval_mod.require_obs_dim(fake, RUN_OBS_SIZE, "RunEnv --model")
+
+
+def test_refuse_runenv_zip_as_combat_model():
+    fake = SimpleNamespace(observation_space=FakeSpace(RUN_OBS_SIZE))
+    with pytest.raises(SystemExit, match="expected"):
+        eval_mod.require_obs_dim(fake, OBS_SIZE, "hierarchical --combat-model")
+
+
+def test_accept_matching_obs_dims():
+    combat = SimpleNamespace(observation_space=FakeSpace(OBS_SIZE))
+    run = SimpleNamespace(observation_space=FakeSpace(RUN_OBS_SIZE))
+    assert eval_mod.require_obs_dim(combat, OBS_SIZE, "hierarchical --combat-model") == OBS_SIZE
+    assert eval_mod.require_obs_dim(run, RUN_OBS_SIZE, "RunEnv --model") == RUN_OBS_SIZE
+
+
+def test_hierarchical_maps_combat_index_into_run_layout():
+    env = STS2RunEnv(character_id="Ironclad", ascension_level=0, max_steps=120)
+    obs, info = env.reset(seed=42)
+    rng = np.random.RandomState(1)
+    model = FakeCombatModel()
+    widths: list[int] = []
+    saw_combat = False
+    for _ in range(120):
+        mask = info.get("action_mask")
+        action, shadow = eval_mod.choose_action(
+            "hierarchical",
+            env,
+            obs,
+            info,
+            mask,
+            rng,
+            model=None,
+            combat_model=model,
+            received_obs_widths=widths,
+        )
+        if info.get("phase") == RunManager.PHASE_COMBAT:
+            saw_combat = True
+            assert _COMBAT_START <= action < _COMBAT_START + _COMBAT_SIZE
+            assert shadow["shadow_status"] == eval_mod.JEV_SHADOW_SKIPPED
+            assert shadow["shadow_suggestion"] is None
+        else:
+            assert mask[action] == 1
+            assert shadow["shadow_status"] == eval_mod.JEV_SHADOW_STUB
+            assert shadow["shadow_suggestion"] is None
+        obs, _, terminated, truncated, info = env.step(action)
+        if terminated or truncated:
+            break
+    env.close()
+    if not saw_combat:
+        pytest.skip("No combat phase reached")
+    assert model.seen_widths
+    assert set(model.seen_widths) == {OBS_SIZE}
+    assert set(widths) == {OBS_SIZE}
+    assert RUN_OBS_SIZE not in model.seen_widths
+
+
+def test_missing_zip_errors_before_sb3():
+    with pytest.raises(SystemExit, match="not found"):
+        eval_mod.load_maskable_ppo("/tmp/definitely-missing-combat-ppo.zip")
+
+
+def test_write_report_summary_omits_rows(tmp_path):
+    rows = [
+        {
+            "seed": 200000,
+            "act1_clear": False,
+            "full_run_win": False,
+            "truncated": True,
+            "max_act": 0,
+            "floor": 3,
+            "hp": 40,
+            "max_hp": 80,
+            "gold": 99,
+            "steps": 10,
+            "reward": -1.0,
+        }
+    ]
+    report = eval_mod.build_report(
+        policy="hierarchical",
+        model_path="",
+        combat_model_path="/tmp/combat.zip",
+        rows=rows,
+        elapsed_s=1.2,
+    )
+    out = tmp_path / "act1_runenv.json"
+    summary_path = eval_mod.write_report(report, out)
+    assert out.is_file()
+    assert summary_path.name == "act1_runenv.summary.json"
+    slim = json.loads(summary_path.read_text())
+    assert "rows" not in slim
+    assert slim["policy"] == "hierarchical"
+    assert slim["combat_obs_size"] == OBS_SIZE
+    assert slim["run_obs_size"] == RUN_OBS_SIZE
+    assert slim["summary"]["n"] == 1
+    assert slim["summary"]["trunc_rate"] == 1.0
+    assert slim["jev_shadow"]["mode"] == "stub"
+    assert slim["start_with_neow"] is False
+
+
+def test_jev_shadow_does_not_change_noncombat_action():
+    env = STS2RunEnv(character_id="Ironclad", ascension_level=0, max_steps=20)
+    obs, info = env.reset(seed=7)
+    rng = np.random.RandomState(0)
+    mask = info["action_mask"]
+    if info.get("phase") == RunManager.PHASE_COMBAT:
+        env.close()
+        pytest.skip("seed opened in combat")
+    action, shadow = eval_mod.choose_hierarchical_action(
+        env, obs, mask, rng, FakeCombatModel()
+    )
+    env.close()
+    assert mask[action] == 1
+    assert shadow["shadow_status"] == eval_mod.JEV_SHADOW_STUB
+    assert shadow["shadow_suggestion"] is None
+
+
+def test_cli_jev_default_off_and_strategic_alias():
+    off = eval_mod.parse_args(["--policy", "hierarchical", "--combat-model", "c.zip"])
+    eval_mod.validate_policy_args(off)
+    assert off.jev == "off"
+    assert off.jev_event == "off"
+    assert off.jev_phases == "map,rest,card"
+    assert off.jev_neow == "off"
+    assert off.map_lowhp == "on"
+    assert off.map_lowhp_hard == "off"
+    assert off.map_lowhp_soft_b == "off"
+    assert off.combat_policy == "ppo"
+    assert off.n == eval_mod.SEED_COUNT
+    assert off.jev_flags.allows_event() is False
+    assert off.jev_flags.allows_neow() is False
+    assert off.jev_flags.map_lowhp is True
+    assert off.jev_flags.map_lowhp_hard is False
+    assert off.jev_flags.map_lowhp_soft_b is False
+    on = eval_mod.parse_args(
+        ["--policy", "hierarchical", "--combat-model", "c.zip", "--jev", "on"]
+    )
+    eval_mod.validate_policy_args(on)
+    assert on.jev == "on"
+    assert on.jev_event == "off"
+    assert on.map_lowhp == "on"
+    assert on.map_lowhp_hard == "off"
+    assert on.map_lowhp_soft_b == "off"
+    assert on.jev_flags.allows_event() is False
+    assert on.jev_flags.allows_neow() is False
+    assert on.jev_flags.map_lowhp is True
+    assert on.jev_flags.map_lowhp_hard is False
+    assert on.jev_flags.map_lowhp_soft_b is False
+    alias = eval_mod.parse_args(
+        ["--policy", "hierarchical", "--combat-model", "c.zip", "--strategic", "jev"]
+    )
+    eval_mod.validate_policy_args(alias)
+    assert alias.jev == "on"
+
+
+def test_cli_jev_event_on_and_phases():
+    args = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--jev",
+            "on",
+            "--jev-event",
+            "on",
+        ]
+    )
+    eval_mod.validate_policy_args(args)
+    assert args.jev_event == "on"
+    assert args.jev_flags.allows_event() is True
+    assert args.jev_flags.allows_neow() is False
+    via = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--jev",
+            "on",
+            "--jev-phases",
+            "map,rest,card,event",
+            "--jev-neow",
+            "off",
+        ]
+    )
+    eval_mod.validate_policy_args(via)
+    assert via.jev_flags.allows_event() is True
+    assert via.jev_flags.allows_neow() is False
+
+
+def test_cli_jev_neow_on_optional_ab():
+    args = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--jev",
+            "on",
+            "--jev-neow",
+            "on",
+            "--start-with-neow",
+        ]
+    )
+    eval_mod.validate_policy_args(args)
+    assert args.jev_event == "off"
+    assert args.jev_neow == "on"
+    assert args.start_with_neow is True
+    assert args.jev_flags.allows_event() is False
+    assert args.jev_flags.allows_neow() is True
+    args = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--jev",
+            "on",
+            "--jev-neow",
+            "off",
+            "--start-with-neow",
+        ]
+    )
+    eval_mod.validate_policy_args(args)
+    assert args.jev_event == "off"
+    assert args.jev_neow == "off"
+    assert args.start_with_neow is True
+    assert args.jev_flags.allows_event() is False
+    assert args.jev_flags.allows_neow() is False
+    report = eval_mod.build_report(
+        policy="hierarchical",
+        model_path="",
+        combat_model_path="/tmp/combat.zip",
+        rows=[
+            {
+                "seed": 200000,
+                "act1_clear": False,
+                "full_run_win": False,
+                "truncated": True,
+                "max_act": 0,
+                "floor": 1,
+                "hp": 40,
+                "max_hp": 80,
+                "gold": 99,
+                "steps": 1,
+                "reward": -1.0,
+            }
+        ],
+        elapsed_s=0.1,
+        jev="on",
+        jev_neow="off",
+        start_with_neow=True,
+    )
+    assert report["jev_neow"] == "off"
+    assert report["start_with_neow"] is True
+    random_ok = eval_mod.parse_args(["--policy", "random"])
+    eval_mod.validate_policy_args(random_ok)
+    assert random_ok.jev_neow == "off"
+
+
+def test_cli_map_lowhp_default_on_and_n_flag():
+    off = eval_mod.parse_args(["--policy", "hierarchical", "--combat-model", "c.zip"])
+    eval_mod.validate_policy_args(off)
+    assert off.map_lowhp == "on"
+    assert off.map_lowhp_hard == "off"
+    assert off.map_lowhp_soft_b == "off"
+    assert off.n == 50
+    assert off.jev_flags.map_lowhp is True
+    assert off.jev_flags.map_lowhp_hard is False
+    assert off.jev_flags.map_lowhp_soft_b is False
+    disabled = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--jev",
+            "on",
+            "--map-lowhp",
+            "off",
+            "--map-lowhp-hard",
+            "on",
+            "--map-lowhp-soft-b",
+            "on",
+            "--n",
+            "100",
+        ]
+    )
+    eval_mod.validate_policy_args(disabled)
+    assert disabled.map_lowhp == "off"
+    assert disabled.map_lowhp_hard == "on"
+    assert disabled.map_lowhp_soft_b == "on"
+    assert disabled.jev_flags.map_lowhp is False
+    assert disabled.jev_flags.map_lowhp_hard is True
+    assert disabled.jev_flags.map_lowhp_soft_b is True
+    assert disabled.n == 100
+    report = eval_mod.build_report(
+        policy="hierarchical",
+        model_path="",
+        combat_model_path="c.zip",
+        rows=[],
+        elapsed_s=0.1,
+        jev="on",
+        map_lowhp="on",
+        map_lowhp_hard="off",
+        map_lowhp_soft_b="off",
+        seed_count=100,
+    )
+    assert report["map_lowhp"] == "on"
+    assert report["map_lowhp_hard"] == "off"
+    assert report["map_lowhp_soft_b"] == "off"
+    assert report["seeds"]["count"] == 100
+    assert "map_lowhp" in report["jev_shadow"]["note"]
+    assert "map_lowhp_hard" in report["jev_shadow"]["note"]
+    assert report["summary"]["map_lowhp_hard_n"] == 0
+    assert report["summary"]["map_lowhp_hard_eps"] == 0
+    assert "map_lowhp_soft_b_n" in report["summary"]
+    assert "event_safe_fallback_n" in report["summary"]
+    assert "potion_or_relic_safe_n" in report["summary"]
+    bad = eval_mod.parse_args(
+        ["--policy", "hierarchical", "--combat-model", "c.zip", "--n", "0"]
+    )
+    with pytest.raises(SystemExit, match="--n"):
+        eval_mod.validate_policy_args(bad)
+
+
+def test_cli_start_with_neow_default_off():
+    off = eval_mod.parse_args(["--policy", "hierarchical", "--combat-model", "c.zip"])
+    eval_mod.validate_policy_args(off)
+    assert off.start_with_neow is False
+    on = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--start-with-neow",
+        ]
+    )
+    eval_mod.validate_policy_args(on)
+    assert on.start_with_neow is True
+    assert on.jev_neow == "off"
+    assert on.jev_flags.allows_neow() is False
+    report = eval_mod.build_report(
+        policy="hierarchical",
+        model_path="",
+        combat_model_path="/tmp/combat.zip",
+        rows=[
+            {
+                "seed": 200000,
+                "act1_clear": False,
+                "full_run_win": False,
+                "truncated": True,
+                "max_act": 0,
+                "floor": 1,
+                "hp": 40,
+                "max_hp": 80,
+                "gold": 99,
+                "steps": 1,
+                "reward": -1.0,
+            }
+        ],
+        elapsed_s=0.1,
+        start_with_neow=True,
+    )
+    assert report["start_with_neow"] is True
+
+
+def test_cli_jev_on_requires_hierarchical():
+    args = eval_mod.parse_args(["--policy", "random", "--jev", "on"])
+    with pytest.raises(SystemExit, match="hierarchical"):
+        eval_mod.validate_policy_args(args)
+
+
+def test_write_report_jev_on_fields(tmp_path):
+    rows = [
+        {
+            "seed": 200000,
+            "act1_clear": False,
+            "full_run_win": False,
+            "truncated": True,
+            "max_act": 0,
+            "floor": 6,
+            "hp": 40,
+            "max_hp": 80,
+            "gold": 99,
+            "steps": 10,
+            "reward": -1.0,
+            "shadow_suggestion": "map_0",
+            "shadow_status": "ok",
+            "shadow_confidence": 0.8,
+            "shadow_hp_pressure": 1.4,
+            "shadow_fallback_reason": None,
+        }
+    ]
+    report = eval_mod.build_report(
+        policy="hierarchical",
+        model_path="",
+        combat_model_path="/tmp/combat.zip",
+        rows=rows,
+        elapsed_s=1.2,
+        jev="on",
+    )
+    assert report["jev"] == "on"
+    assert report["jev_neow"] == "off"
+    assert report["jev_shadow"]["mode"] == "on"
+    out = tmp_path / "act1_runenv.json"
+    summary_path = eval_mod.write_report(report, out)
+    slim = json.loads(summary_path.read_text())
+    assert slim["jev"] == "on"
+    assert slim["combat_obs_size"] == OBS_SIZE
+    assert slim["start_with_neow"] is False
+
+
+class _BoomIfCalled:
+    def system_one(self, *args, **kwargs):
+        raise AssertionError("Jev must not run on combat steps")
+
+
+class _ErrorAdapter:
+    def __init__(self):
+        self.n = 0
+
+    def system_one(self, state, questions):
+        self.n += 1
+        from sts2_env.eval.jev import JevError
+
+        raise JevError("forced")
+
+
+def test_jev_on_never_enters_combat_and_still_acts():
+    env = STS2RunEnv(character_id="Ironclad", ascension_level=0, max_steps=120)
+    obs, info = env.reset(seed=42)
+    rng = np.random.RandomState(1)
+    model = FakeCombatModel()
+    adapter = _ErrorAdapter()
+    saw_combat = False
+    saw_noncombat_error = False
+    for _ in range(120):
+        mask = info.get("action_mask")
+        phase = info.get("phase")
+        action, shadow = eval_mod.choose_action(
+            "hierarchical",
+            env,
+            obs,
+            info,
+            mask,
+            rng,
+            model=None,
+            combat_model=model,
+            jev_enabled=True,
+            jev_adapter=adapter if phase != RunManager.PHASE_COMBAT else _BoomIfCalled(),
+        )
+        assert mask[action] == 1
+        if phase == RunManager.PHASE_COMBAT:
+            saw_combat = True
+            assert shadow["shadow_status"] == eval_mod.JEV_SHADOW_SKIPPED
+            assert _COMBAT_START <= action < _COMBAT_START + _COMBAT_SIZE
+        else:
+            assert shadow["shadow_status"] == "error"
+            saw_noncombat_error = True
+        obs, _, terminated, truncated, info = env.step(action)
+        if terminated or truncated:
+            break
+    env.close()
+    if not saw_combat:
+        pytest.skip("No combat phase reached")
+    assert saw_noncombat_error
+    assert model.seen_widths
+    assert set(model.seen_widths) == {OBS_SIZE}
+
+
+def test_act1_eval_layering_split_parity():
+    """Suite/runner/metrics split re-exports match the thin CLI and eval package."""
+    import sts2_env.eval as eval_pkg
+    import sts2_env.eval.act1_metrics as metrics_mod
+    import sts2_env.eval.act1_runner as runner_mod
+    import sts2_env.eval.act1_suite as suite_mod
+
+    assert suite_mod.SEED_START == 200000
+    assert suite_mod.SEED_COUNT == 50
+    assert suite_mod.SEEDS == list(range(200000, 200050))
+    assert suite_mod.PROTOCOL_ID == "act1_runenv_eval_protocol.md LOCKED 2026-09-22"
+    assert suite_mod.HUNG_COMBAT_ZIP == (
+        "/workspace/sts2-sim/output/combat_ppo_obs_v1_bh_v1/final_model.zip"
+    )
+    assert suite_mod.JEV_SHADOW_SKIPPED == "skipped"
+    assert suite_mod.JEV_SHADOW_STUB == "stub"
+    assert metrics_mod._summarize is metrics_mod.summarize_act1_rows
+
+    for name in suite_mod.__all__:
+        assert getattr(eval_mod, name) is getattr(suite_mod, name)
+        assert getattr(eval_pkg, name) is getattr(suite_mod, name)
+
+    for name in runner_mod.__all__:
+        assert getattr(eval_mod, name) is getattr(runner_mod, name)
+        assert getattr(eval_pkg, name) is getattr(runner_mod, name)
+
+    for name in metrics_mod.__all__:
+        assert getattr(eval_mod, name) is getattr(metrics_mod, name)
+        assert getattr(eval_pkg, name) is getattr(metrics_mod, name)
+
+    args = eval_mod.parse_args([])
+    assert args.policy == "random"
+    assert args.model == ""
+    assert args.combat_model == ""
+    assert args.jev == "off"
+    assert args.strategic is None
+    assert args.jev_event == "off"
+    assert args.jev_phases == "map,rest,card"
+    assert args.jev_neow == "off"
+    assert args.map_lowhp == "on"
+    assert args.map_lowhp_hard == "off"
+    assert args.map_lowhp_soft_b == "off"
+    assert args.combat_policy == "ppo"
+    assert args.n == suite_mod.SEED_COUNT
+    assert args.start_with_neow is False
+    assert args.out == "/workspace/sts2-sim/evals/act1_runenv_latest.json"
+    assert args.max_steps == 2000
+
+    empty = metrics_mod.summarize_act1_rows([])
+    assert empty["act1_clear_rate"] == 0.0
+    assert empty["n"] == 0
+    rows = [
+        {
+            "act1_clear": True,
+            "full_run_win": False,
+            "truncated": False,
+            "floor": 17,
+            "hp": 40,
+            "map_lowhp_hard_n": 0,
+            "map_lowhp_soft_b_n": 0,
+            "event_jev_used_n": 0,
+            "event_safe_fallback_n": 0,
+            "event_low_conf_random_n": 0,
+            "event_options_empty_n": 0,
+            "event_off_random_n": 0,
+            "potion_or_relic_safe_n": 0,
+            "potion_or_relic_random_n": 0,
+        }
+    ]
+    summary = metrics_mod.build_report(
+        policy="random",
+        model_path="",
+        combat_model_path="",
+        rows=rows,
+        elapsed_s=0.0,
+    )
+    assert summary["protocol"] == suite_mod.PROTOCOL_ID
+    assert summary["seeds"]["start"] == 200000
+    assert summary["summary"]["act1_clear_rate"] == 1.0
+    for key in (
+        "act1_clear_rate",
+        "full_run_win_rate",
+        "trunc_rate",
+        "map_lowhp_hard_n",
+        "map_lowhp_soft_b_n",
+        "event_safe_fallback_n",
+        "potion_or_relic_safe_n",
+        "combat_jev_calls",
+        "combat_jev_fail_open",
+    ):
+        assert key in summary["summary"]
+    assert summary["combat_policy"] == "ppo"
+    assert summary["combat_jev"]["jev_calls"] == 0
+    assert summary["combat_jev"]["jev_failopen"] == 0
+
+
+def test_cli_combat_policy_default_ppo_and_jev_requires_hierarchical():
+    off = eval_mod.parse_args(["--policy", "hierarchical", "--combat-model", "c.zip"])
+    eval_mod.validate_policy_args(off)
+    assert off.combat_policy == "ppo"
+    jev = eval_mod.parse_args(
+        [
+            "--policy",
+            "hierarchical",
+            "--combat-model",
+            "c.zip",
+            "--combat-policy",
+            "jev",
+        ]
+    )
+    eval_mod.validate_policy_args(jev)
+    assert jev.combat_policy == "jev"
+    assert jev.jev == "off"
+    import inspect
+
+    src = inspect.getsource(eval_mod.parse_args)
+    assert 'default="ppo"' in src
+    assert "experimental" in src or "jev-turn" in src
+    assert "jev-turn" in src
+    bad = eval_mod.parse_args(["--policy", "random", "--combat-policy", "jev"])
+    with pytest.raises(SystemExit, match="hierarchical"):
+        eval_mod.validate_policy_args(bad)
+
+
+def test_combat_policy_jev_stub_fail_opens_to_ppo():
+    from sts2_env.eval.combat_jev import CombatJevTelemetry, FAILOPEN_BAD_ID
+    from sts2_env.eval.jev_client import StubJevClient
+
+    env = STS2RunEnv(character_id="Ironclad", ascension_level=0, max_steps=120)
+    obs, info = env.reset(seed=42)
+    rng = np.random.RandomState(1)
+    model = FakeCombatModel()
+    tel = CombatJevTelemetry()
+    saw_combat = False
+    for _ in range(120):
+        mask = info.get("action_mask")
+        action, shadow = eval_mod.choose_action(
+            "hierarchical",
+            env,
+            obs,
+            info,
+            mask,
+            rng,
+            model=None,
+            combat_model=model,
+            combat_policy="jev",
+            combat_jev_adapter=StubJevClient(),
+            combat_jev_telemetry=tel,
+        )
+        if info.get("phase") == RunManager.PHASE_COMBAT:
+            saw_combat = True
+            assert _COMBAT_START <= action < _COMBAT_START + _COMBAT_SIZE
+            assert shadow.get("combat_jev_failopen") is True
+            assert shadow.get("jev_failopen_reason") == FAILOPEN_BAD_ID
+        obs, _, terminated, truncated, info = env.step(action)
+        if terminated or truncated:
+            break
+    env.close()
+    if not saw_combat:
+        pytest.skip("No combat phase reached")
+    assert tel.calls >= 1
+    assert tel.fail_open == tel.calls
+    assert tel.failopen_reason[FAILOPEN_BAD_ID] >= 1
+    assert set(model.seen_widths) == {OBS_SIZE}
